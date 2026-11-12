@@ -9,7 +9,14 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Serilog;
 
+// A Windows service starts in System32; make the install folder the working directory so relative paths (Seed/, logs/) resolve.
+if (Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService()) Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseWindowsService(o => o.ServiceName = "KtcPortal");
+// Machine-wide settings written by the Windows installer (kept outside the program folder so upgrades never overwrite them).
+builder.Configuration.AddJsonFile(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "KtcPortal", "appsettings.Production.json"), optional: true, reloadOnChange: false);
+builder.Configuration.AddEnvironmentVariables();
 builder.Host.UseSerilog((ctx, lc) =>
 {
     lc.ReadFrom.Configuration(ctx.Configuration).Enrich.FromLogContext().Enrich.WithProperty("App", "KtcMonitoringPortal");
@@ -53,7 +60,7 @@ builder.Services.AddHealthChecks().AddDbContextCheck<KtcDbContext>("database");
 
 var app = builder.Build();
 
-if (!app.Environment.IsDevelopment()) { app.UseExceptionHandler("/Home/Error"); app.UseHsts(); app.UseHttpsRedirection(); }
+if (!app.Environment.IsDevelopment()) { app.UseExceptionHandler("/Home/Error"); app.UseHsts(); if (app.Configuration.GetValue<bool>("Portal:RequireHttps")) app.UseHttpsRedirection(); }
 app.UseResponseCompression();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseSerilogRequestLogging(o => o.GetLevel = (c, _, ex) => ex != null || c.Response.StatusCode >= 500 ? Serilog.Events.LogEventLevel.Error : c.Request.Path.StartsWithSegments("/data") ? Serilog.Events.LogEventLevel.Debug : Serilog.Events.LogEventLevel.Information);

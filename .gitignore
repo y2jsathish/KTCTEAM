@@ -7,3 +7,5 @@ logs/
 appsettings.Production.json
 appsettings.*.local.json
 *.log
+installer/publish/
+installer/*.exe

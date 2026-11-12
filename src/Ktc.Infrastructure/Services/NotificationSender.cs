@@ -52,7 +52,7 @@ public class NotificationSender : INotificationSender
         msg.Body = b.ToMessageBody();
         using var client = new SmtpClient();
         await client.ConnectAsync(s.Host, s.Port, s.UseStartTls ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto, ct);
-        if (!string.IsNullOrWhiteSpace(s.Username)) await client.AuthenticateAsync(s.Username, s.Password, ct);
+        if (!string.IsNullOrWhiteSpace(s.Username)) await client.AuthenticateAsync(s.Username, s.Password ?? "", ct);
         await client.SendAsync(msg, ct);
         await client.DisconnectAsync(true, ct);
     }
