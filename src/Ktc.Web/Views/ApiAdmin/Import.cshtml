@@ -1,0 +1,5 @@
+@{ ViewData["Title"] = "Import Postman"; }
+<div class="page-h"><h4>Import Postman Collection</h4></div>
+<div class="cardx" style="max-width:720px"><p class="small text-muted">Upload a Postman v2.x collection. The portal detects authentication, monitoring, search and update APIs, creates module groups, navigation menus, default widgets and the API catalog. Re-importing is safe: existing endpoint enablement and mappings are preserved.</p>
+<form id="f"><input type="file" class="form-control mb-2" id="file" accept=".json" required/><button class="btn btn-primary btn-sm"><i class="bi bi-upload"></i> Import</button></form><div id="res" class="mt-3"></div></div>
+@section Scripts { <script src="~/js/pages/import.js" asp-append-version="true"></script> }

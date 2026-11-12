@@ -1,0 +1,10 @@
+@{ ViewData["Title"] = "Management Dashboard"; }
+<div class="page-h"><h4>Management Dashboard</h4><span class="sub">Availability, SLA and client performance</span></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="cardx"><h6>Availability % by client</h6><div class="chart-box"><canvas id="cAv"></canvas></div></div>
+  <div class="cardx"><h6>SLA % by client</h6><div class="chart-box"><canvas id="cSla"></canvas></div></div>
+</div>
+<div class="cardx mb-3"><h6>Client-wise performance</h6><table id="tbl" class="table table-sm w-100"><thead><tr><th>Client</th><th>ATMs</th><th>Online</th><th>Availability %</th><th>Open incidents</th><th>Open tickets</th><th>SLA %</th><th>Critical ATMs</th></tr></thead></table></div>
+<div class="cardx"><h6>Critical issues</h6><table id="tblCrit" class="table table-sm w-100"><thead><tr><th>Incident</th><th>ATM</th><th>Client</th><th>Sev</th><th>Opened</th><th>Description</th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/management.js" asp-append-version="true"></script> }

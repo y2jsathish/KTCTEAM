@@ -1,0 +1,5 @@
+@{ ViewData["Title"] = "API Health"; }
+<div class="page-h"><h4>KTC API Health</h4><span class="sub"><span class="health-dot green"></span> &lt; 2 s &nbsp;<span class="health-dot yellow"></span> 2–5 s &nbsp;<span class="health-dot red"></span> &gt; 5 s or &gt; 3 consecutive failures · alerts at success &lt; 95 %</span></div>
+<div class="kpis" id="kpis"></div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th></th><th>Endpoint</th><th>Method</th><th>Calls</th><th>Success %</th><th>Failures</th><th>Timeouts</th><th>Avg ms</th><th>P95 ms</th><th>Last ms</th><th>Consecutive fails</th><th>Last call</th><th>Last error</th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/apihealth.js" asp-append-version="true"></script> }

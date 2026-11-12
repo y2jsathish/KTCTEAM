@@ -1,0 +1,9 @@
+@model List<Ktc.Web.NavItem>
+@if (Model.Count > 0)
+{
+    <div class="nav-h">API Explorer (auto-generated)</div>
+    foreach (var m in Model)
+    {
+        <a href="/ApiAdmin/Screen/@Uri.EscapeDataString(m.Screen)"><i class="bi @m.Icon"></i> @m.Title</a>
+    }
+}

@@ -1,0 +1,10 @@
+@{ ViewData["Title"] = "ATM Monitoring"; }
+<div class="page-h"><h4>ATM Monitoring</h4><span class="sub" id="cnt"></span></div>
+<div class="cardx mb-3"><div class="row g-2">
+  <div class="col-6 col-md-3"><select id="fClient" class="form-select form-select-sm"><option value="">All clients</option></select></div>
+  <div class="col-6 col-md-3"><select id="fCity" class="form-select form-select-sm"><option value="">All cities</option></select></div>
+  <div class="col-6 col-md-3"><select id="fRegion" class="form-select form-select-sm"><option value="">All regions</option></select></div>
+  <div class="col-6 col-md-3"><select id="fStatus" class="form-select form-select-sm"><option value="">All statuses</option><option value="Healthy">Healthy</option><option value="Warning">Warning</option><option value="Critical">Critical</option></select></div>
+</div></div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>ATM ID</th><th>ATM name</th><th>Device status</th><th>Health</th><th>Last communication</th><th>Location</th><th>Client</th><th>ATM type</th><th>Availability</th><th>Open inc.</th><th>Open tkts</th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/atm.js" asp-append-version="true"></script> }

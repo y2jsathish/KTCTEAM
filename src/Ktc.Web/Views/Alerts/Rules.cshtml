@@ -1,0 +1,18 @@
+@model List<Ktc.Domain.Entities.AlertRule>
+@{ ViewData["Title"] = "Alert Rules"; }
+<div class="page-h"><h4>Alert Rules</h4><button id="test" class="btn btn-sm btn-outline-secondary ms-auto"><i class="bi bi-send"></i> Send test notification</button></div>
+<div class="cardx"><div class="table-responsive"><table class="table table-sm align-middle" id="rules"><thead><tr><th>Rule</th><th>Threshold</th><th>Window (min)</th><th>Cooldown (min)</th><th>Severity</th><th>Portal</th><th>Email</th><th>Teams</th><th>Recipients (; separated)</th><th>On</th><th></th></tr></thead><tbody>
+@foreach (var r in Model) {
+<tr data-id="@r.Id"><td>@r.Name<div class="small text-muted">@r.RuleType</div></td>
+<td><input class="form-control form-control-sm" style="width:80px" data-f="threshold" type="number" step="any" value="@r.Threshold"/></td>
+<td><input class="form-control form-control-sm" style="width:80px" data-f="window" type="number" value="@r.WindowMinutes"/></td>
+<td><input class="form-control form-control-sm" style="width:80px" data-f="cool" type="number" value="@r.CooldownMinutes"/></td>
+<td><select class="form-select form-select-sm" data-f="sev">@foreach (var s in Enum.GetValues<Severity>()) { <option value="@((int)s)" selected="@(s==r.Severity)">@s</option> }</select></td>
+<td><input type="checkbox" checked disabled/></td>
+<td><input type="checkbox" data-f="email" checked="@r.Channels.HasFlag(AlertChannels.Email)"/></td>
+<td><input type="checkbox" data-f="teams" checked="@r.Channels.HasFlag(AlertChannels.Teams)"/></td>
+<td><input class="form-control form-control-sm" data-f="rec" value="@r.Recipients"/></td>
+<td><input type="checkbox" data-f="on" checked="@r.Enabled"/></td>
+<td><button class="btn btn-sm btn-primary save">Save</button></td></tr> }
+</tbody></table></div></div>
+@section Scripts { <script src="~/js/pages/rules.js" asp-append-version="true"></script> }

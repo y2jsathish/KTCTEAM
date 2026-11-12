@@ -1,0 +1,5 @@
+@{ ViewData["Title"] = "Incident Command Center"; }
+<div class="page-h"><h4>Incident Command Center</h4><span class="sub">auto-refresh 30 s</span><input id="q" class="form-control form-control-sm ms-auto" style="max-width:260px" placeholder="Search incidents…" value="@ViewBag.Q"/></div>
+<div class="kpis" id="sevTiles"></div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>Incident</th><th>ATM</th><th>Client</th><th>Severity</th><th>Opened</th><th>SLA</th><th>Status</th><th>Assigned</th><th>Description</th></tr></thead></table></div>
+@section Scripts { <script>window.CAN_ACT=@(User.IsInRole("Admin")||User.IsInRole("Operator")?"true":"false");</script><script src="~/js/pages/incidents.js" asp-append-version="true"></script> }

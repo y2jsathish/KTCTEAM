@@ -1,0 +1,20 @@
+@{ ViewData["Title"] = "Transaction Dashboard"; }
+<div class="page-h"><h4>Transaction Dashboard</h4><span class="sub">real-time · auto-refresh 30 s</span></div>
+<div class="cardx mb-3"><form id="f" class="row g-2">
+  <div class="col-6 col-md-2"><input name="atmId" class="form-control form-control-sm" placeholder="ATM"/></div>
+  <div class="col-6 col-md-2"><select name="client" id="fClient" class="form-select form-select-sm"><option value="">All clients</option></select></div>
+  <div class="col-6 col-md-2"><select name="region" id="fRegion" class="form-select form-select-sm"><option value="">All regions</option></select></div>
+  <div class="col-6 col-md-2"><input name="from" type="datetime-local" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-2"><input name="to" type="datetime-local" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-1"><select name="status" class="form-select form-select-sm"><option value="">All</option><option>Success</option><option>Failed</option></select></div>
+  <div class="col-6 col-md-1"><button class="btn btn-sm btn-primary w-100">Go</button></div>
+  <input type="hidden" name="id" value="@ViewBag.Id"/>
+</form><div class="small text-muted mt-1">Default period: today (portal time zone). Max range 7 days.</div></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="cardx"><h6>Failures by category</h6><div class="chart-box sm"><canvas id="cCat"></canvas></div><div class="legend" id="lgCat"></div></div>
+  <div class="cardx"><h6>Failures by error code</h6><div class="chart-box sm"><canvas id="cErr"></canvas></div></div>
+  <div class="cardx"><h6>Top failing ATMs</h6><div class="chart-box sm"><canvas id="cAtm"></canvas></div></div>
+</div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>Transaction ID</th><th>Time</th><th>ATM</th><th>Client</th><th>Type</th><th>Status</th><th>Amount</th><th>Response (ms)</th><th>Error code</th><th>Category</th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/transactions.js" asp-append-version="true"></script> }

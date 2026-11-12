@@ -1,0 +1,5 @@
+(function(){const K=KTC;let dt;
+ async function load(){const r=await K.api('/data/alerts?days='+days.value);K.reload(dt,r.data);}
+ dt=K.table('#tbl',{data:[],order:[[0,'desc']],columns:[{data:'raisedUtc',render:(v,t)=>t==='display'?K.local(v):v},{data:'severity',render:K.sev},{data:'type'},{data:'title',render:(v,t,r)=>`<b>${K.esc(v)}</b><div class="small text-muted">${K.esc(r.message)}</div>`},{data:'notificationStatus',render:v=>K.esc(v||'Portal')},{data:'acknowledgedBy',render:(v,t,r)=>v?K.esc(v)+' <small class="text-muted">'+K.local(r.acknowledgedUtc)+'</small>':'<span class="sbadge warn">Open</span>'},{data:null,orderable:false,render:(v,t,r)=>window.CAN_ACT&&!r.acknowledgedBy?`<button class="btn btn-sm btn-outline-secondary ack" data-id="${r.id}">Acknowledge</button>`:''}]});
+ $('#tbl tbody').on('click','.ack',async function(){try{await K.api('/data/alerts/'+this.dataset.id+'/ack',{method:'POST'});await load();K.pills();}catch(e){K.toast(e.message,'error');}});
+ days.onchange=load;K.hooks.alert.push(load);load().catch(e=>K.toast(e.message,'error'));})();

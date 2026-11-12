@@ -1,0 +1,21 @@
+@model LoginViewModel
+@{ Layout = null; }
+<!DOCTYPE html><html lang="en" data-bs-theme="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>Sign in · KTC Monitoring Portal</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"/>
+<link rel="stylesheet" href="~/css/site.css"/></head>
+<body><div class="login-wrap"><form class="login-card" method="post" autocomplete="off">
+  <h4 class="mb-1"><i class="bi bi-activity text-primary"></i> KTC Monitoring Portal</h4>
+  <p class="text-muted small">Sign in with your KTC credentials</p>
+  @if (Model.MockMode) { <div class="alert alert-warning py-2 small">Demo mode: a built-in mock KTC server is active. Any username with any password (except <code>invalid</code>) signs in.</div> }
+  <div asp-validation-summary="ModelOnly" class="alert alert-danger py-2 small"></div>
+  <input type="hidden" asp-for="ReturnUrl"/>
+  <div class="mb-2"><label class="form-label small" asp-for="Username"></label><input class="form-control" asp-for="Username" autofocus placeholder="DOMAIN\\user"/><span class="text-danger small" asp-validation-for="Username"></span></div>
+  <div class="mb-2"><label class="form-label small" asp-for="Password"></label><input class="form-control" asp-for="Password" type="password" autocomplete="current-password"/></div>
+  <div class="row g-2 mb-3">
+    <div class="col-6"><label class="form-label small" asp-for="AuthMode">Auth mode</label>
+      <select class="form-select" asp-for="AuthMode" asp-items="@(Model.AuthModes.Select(a => new Microsoft.AspNetCore.Mvc.Rendering.SelectListItem(a, a)))"></select></div>
+    <div class="col-6"><label class="form-label small" asp-for="AppName">App name</label><input class="form-control" asp-for="AppName"/></div>
+  </div>
+  <button class="btn btn-primary w-100">Sign in</button>
+</form></div></body></html>

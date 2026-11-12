@@ -1,0 +1,7 @@
+(function(){const K=KTC;
+ async function load(){const s=await K.api('/data/summary');
+  document.getElementById('clientCards').innerHTML=s.clients.map(c=>`<div class="col-md-6 col-xl-4"><div class="cardx"><h5>${K.esc(c.name)}</h5>
+  <div class="row text-center g-2 mt-1"><div class="col-4"><div class="fs-4 fw-bold">${c.atms}</div><div class="small text-muted">ATMs</div></div><div class="col-4"><div class="fs-4 fw-bold">${c.availabilityPct.toFixed(2)}%</div><div class="small text-muted">Availability</div></div><div class="col-4"><div class="fs-4 fw-bold">${c.slaPct.toFixed(1)}%</div><div class="small text-muted">SLA</div></div>
+  <div class="col-4"><div class="fw-bold">${c.online}</div><div class="small text-muted">Online</div></div><div class="col-4"><div class="fw-bold">${c.openIncidents}</div><div class="small text-muted">Open incidents</div></div><div class="col-4"><div class="fw-bold">${c.openTickets}</div><div class="small text-muted">Open tickets</div></div></div>
+  <div class="mt-2 d-flex gap-2"><a class="btn btn-sm btn-outline-secondary" href="/Atm">ATMs</a><a class="btn btn-sm btn-outline-secondary" href="/Tickets?client=${encodeURIComponent(c.name)}">Tickets</a>${c.critical?`<span class="sbadge crit ms-auto">${c.critical} critical</span>`:'<span class="sbadge ok ms-auto">No critical ATMs</span>'}</div></div></div>`).join('');}
+ load().catch(e=>K.toast(e.message,'error'));setInterval(()=>load().catch(()=>{}),60000);})();

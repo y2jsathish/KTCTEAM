@@ -1,0 +1,18 @@
+@{ ViewData["Title"] = "EJ Search"; }
+<div class="page-h"><h4>EJ Search Portal</h4><span class="sub">Card numbers are masked in all results and exports; searches are audited with masked values</span></div>
+<form id="f" class="bigsearch"><div class="input-group input-group-lg"><input id="text" class="form-control" placeholder="Search journal text (e.g. TIMEOUT, RETRACT, DISPENSE)…"/><button class="btn btn-primary"><i class="bi bi-search"></i></button></div>
+ <div class="row g-2 mt-2">
+  <div class="col-6 col-md-3"><input id="atm" class="form-control form-control-sm" placeholder="ATM ID / name *" required/></div>
+  <div class="col-6 col-md-3"><input id="card" class="form-control form-control-sm" placeholder="Card number (6+ digits)" autocomplete="off"/></div>
+  <div class="col-6 col-md-2"><input id="seq" class="form-control form-control-sm" placeholder="Journal sequence"/></div>
+  <div class="col-6 col-md-2"><input id="from" type="datetime-local" class="form-control form-control-sm" title="From"/></div>
+  <div class="col-6 col-md-2"><input id="to" type="datetime-local" class="form-control form-control-sm" title="To"/></div>
+ </div></form>
+<div id="msg"></div>
+<div class="row g-3" id="results" hidden>
+  <div class="col-lg-4"><div class="cardx"><h6>Transactions (timeline)</h6><div id="txList" style="max-height:560px;overflow:auto"></div></div></div>
+  <div class="col-lg-8"><div class="cardx"><div class="d-flex align-items-center mb-2"><h6 class="m-0" id="rTitle">EJ entries</h6>
+    <div class="ms-auto btn-group btn-group-sm"><button class="btn btn-outline-secondary" data-x="xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</button><button class="btn btn-outline-secondary" data-x="csv"><i class="bi bi-filetype-csv"></i> CSV</button><button class="btn btn-outline-secondary" data-x="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF</button></div></div>
+    <ul class="tl mb-3" id="tl"></ul><div class="ej-term" id="term"></div></div></div>
+</div>
+@section Scripts { <script src="~/js/pages/ej.js" asp-append-version="true"></script> }

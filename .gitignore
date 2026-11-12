@@ -1,0 +1,9 @@
+bin/
+obj/
+logs/
+*.user
+.vs/
+.idea/
+appsettings.Production.json
+appsettings.*.local.json
+*.log

@@ -1,0 +1,18 @@
+@{ ViewData["Title"] = "ATM 360"; }
+<div class="page-h"><h4 id="title">ATM 360 View</h4><span id="hb"></span><span class="sub" id="sub"></span>
+  <button class="btn btn-sm btn-outline-warning ms-auto" id="fav"><i class="bi bi-star"></i> Favorite</button><a class="btn btn-sm btn-outline-secondary" href="/Atm"><i class="bi bi-arrow-left"></i> ATMs</a></div>
+<div id="warnings"></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="cardx"><h6>Device details</h6><div id="device"></div></div>
+  <div class="cardx"><h6>Availability (30 d) &amp; top unavailable reasons</h6><div class="chart-box sm"><canvas id="cReasons"></canvas></div></div>
+</div>
+<div class="grid2">
+  <div class="cardx"><h6>Open &amp; recent incidents</h6><table id="tInc" class="table table-sm w-100"><thead><tr><th>Incident</th><th>Sev</th><th>Opened</th><th>Status</th><th>Description</th></tr></thead></table></div>
+  <div class="cardx"><h6>Tickets</h6><table id="tTk" class="table table-sm w-100"><thead><tr><th>Ticket</th><th>Status</th><th>Sev</th><th>Created</th><th>SLA</th></tr></thead></table></div>
+</div>
+<div class="grid2">
+  <div class="cardx"><h6>Recent transactions (24 h)</h6><table id="tTx" class="table table-sm w-100"><thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Resp ms</th><th>Error</th></tr></thead></table></div>
+  <div class="cardx"><h6>Latest transaction timeline (EJ, PAN masked)</h6><ul class="tl" id="timeline"></ul><div class="ej-term mt-2" id="ejRaw"></div></div>
+</div>
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script> }

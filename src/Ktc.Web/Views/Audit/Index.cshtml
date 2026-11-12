@@ -1,0 +1,6 @@
+@{ ViewData["Title"] = "Audit Log"; }
+<div class="page-h"><h4>Audit Log</h4></div>
+<div class="cardx mb-3"><form id="f" class="row g-2"><div class="col-md-3"><select name="category" class="form-select form-select-sm"><option value="">All categories</option><option>Login</option><option>Search</option><option>TicketView</option><option>IncidentView</option><option>AtmView</option><option>Incident</option><option>Report</option><option>Alert</option><option>Admin</option></select></div>
+<div class="col-md-3"><input name="user" class="form-control form-control-sm" placeholder="User"/></div><div class="col-md-2"><input name="from" type="date" class="form-control form-control-sm"/></div><div class="col-md-2"><input name="to" type="date" class="form-control form-control-sm"/></div><div class="col-md-2"><button class="btn btn-sm btn-primary w-100">Filter</button></div></form></div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>Time</th><th>User</th><th>Category</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th><th>OK</th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/audit.js" asp-append-version="true"></script> }

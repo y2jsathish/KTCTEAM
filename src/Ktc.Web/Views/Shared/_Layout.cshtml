@@ -1,0 +1,89 @@
+@using System.Security.Claims
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Antiforgery
+@{
+    var token = Antiforgery.GetAndStoreTokens(Context).RequestToken;
+    var theme = User.FindFirstValue("theme") ?? "dark";
+    bool isOp = User.IsInRole("Admin") || User.IsInRole("Operator"), isAdmin = User.IsInRole("Admin");
+    string Active(string c) => string.Equals((string?)ViewContext.RouteData.Values["controller"], c, StringComparison.OrdinalIgnoreCase) ? "active" : "";
+}
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="@theme">
+<head>
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf" content="@token" />
+    <title>@(ViewData["Title"] ?? "NOC") · KTC Monitoring Portal</title>
+    <script>try{var t=localStorage.getItem('ktc-theme');if(t)document.documentElement.setAttribute('data-bs-theme',t);}catch(e){}</script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.8/css/dataTables.bootstrap5.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+<header class="noc-header">
+    <button class="btn btn-sm btn-outline-secondary d-lg-none" id="navToggle" aria-label="Menu"><i class="bi bi-list"></i></button>
+    <a class="brand" href="/"><i class="bi bi-activity"></i> KTC <span>Monitoring Portal</span></a>
+    <div class="gsearch position-relative">
+        <input id="gsearch" class="form-control form-control-sm" placeholder="Search ATM, ticket, incident, transaction…  ( / )" autocomplete="off" />
+        <div id="gsearchResults" class="gs-results d-none"></div>
+    </div>
+    <div class="hdr-pills d-none d-xl-flex">
+        <span class="pill" title="ATMs online"><i class="bi bi-hdd-network"></i> <b id="pOnline">–</b> online</span>
+        <span class="pill st-critical-t" title="Critical ATMs"><i class="bi bi-x-octagon"></i> <b id="pCrit">–</b> critical</span>
+        <span class="pill" title="SLA achieved"><i class="bi bi-stopwatch"></i> <b id="pSla">–</b>% SLA</span>
+    </div>
+    <div class="ms-auto d-flex align-items-center gap-2">
+        <a href="/Alerts" class="btn btn-sm btn-outline-secondary position-relative" title="Alert Center"><i class="bi bi-bell"></i><span id="alertBadge" class="badge bg-danger rounded-pill position-absolute top-0 start-100 translate-middle d-none">0</span></a>
+        <span class="conn" id="rtState" title="Real-time connection"><i class="bi bi-circle-fill"></i> <span>live</span></span>
+        <div class="session small text-end d-none d-md-block" id="sessionBox" data-session>
+            <div><i class="bi bi-person-circle"></i> <b>@User.Identity!.Name</b> <span class="badge text-bg-secondary">@User.FindFirstValue(ClaimTypes.Role)</span></div>
+            <div class="text-muted"><span id="sessStatus">Session</span> · token <span id="sessCountdown">--:--</span></div>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" id="themeToggle" title="Toggle dark mode"><i class="bi bi-moon-stars"></i></button>
+        <form method="post" asp-controller="Account" asp-action="Logout" class="m-0"><button class="btn btn-sm btn-outline-danger" title="Sign out"><i class="bi bi-box-arrow-right"></i></button></form>
+    </div>
+</header>
+
+<div class="noc-shell">
+    <nav class="noc-nav" id="nav">
+        <div class="nav-h">Operations</div>
+        <a class="@(Active("Home") == "active" && (string?)ViewContext.RouteData.Values["action"] == "Index" ? "active" : "")" href="/"><i class="bi bi-speedometer2"></i> Executive Dashboard</a>
+        <a class="@Active("Atm")" href="/Atm"><i class="bi bi-hdd-network"></i> ATM Monitoring</a>
+        <a class="@Active("Incidents")" href="/Incidents"><i class="bi bi-exclamation-triangle"></i> Incidents</a>
+        <a class="@Active("Tickets")" href="/Tickets"><i class="bi bi-ticket-detailed"></i> Tickets</a>
+        <a class="@Active("Transactions")" href="/Transactions"><i class="bi bi-credit-card-2-front"></i> Transactions</a>
+        <a class="@Active("Ej")" href="/Ej"><i class="bi bi-journal-text"></i> EJ Search</a>
+        <div class="nav-h">Insight</div>
+        <a href="/Home/Management"><i class="bi bi-graph-up-arrow"></i> Management</a>
+        <a href="/Home/Clients"><i class="bi bi-building"></i> Clients</a>
+        <a href="/Home/Rca"><i class="bi bi-bug"></i> Root Cause</a>
+        <a class="@Active("Alerts")" href="/Alerts"><i class="bi bi-bell"></i> Alert Center</a>
+        <a class="@Active("Reports")" href="/Reports"><i class="bi bi-file-earmark-bar-graph"></i> Reports</a>
+        <div class="nav-h">API Layer</div>
+        <a href="/ApiAdmin/Catalog"><i class="bi bi-diagram-3"></i> API Catalog</a>
+        <a href="/ApiAdmin/Health"><i class="bi bi-heart-pulse"></i> API Health</a>
+        @if (isAdmin) {
+            <a href="/ApiAdmin/Import"><i class="bi bi-upload"></i> Import Postman</a>
+            <a href="/Alerts/Rules"><i class="bi bi-sliders"></i> Alert Rules</a>
+            <a href="/Audit"><i class="bi bi-clipboard-check"></i> Audit Log</a>
+        }
+        @await Component.InvokeAsync("ApiNav")
+        <div class="nav-f small text-muted px-3 py-2" id="lastUpdated">&nbsp;</div>
+    </nav>
+    <main class="noc-main">@RenderBody()</main>
+    <aside class="noc-details" id="detailsPanel" aria-live="polite">
+        <div class="d-flex justify-content-between align-items-center mb-2"><h6 class="m-0" id="detailsTitle">Details</h6><button class="btn btn-sm btn-link" id="detailsClose" aria-label="Close"><i class="bi bi-x-lg"></i></button></div>
+        <div id="detailsBody" class="small"></div>
+    </aside>
+</div>
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.3/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.8/js/dataTables.bootstrap5.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+<script src="~/js/site.js" asp-append-version="true"></script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

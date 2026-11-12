@@ -1,0 +1,9 @@
+@{ ViewData["Title"] = "Root Cause Analytics"; }
+<div class="page-h"><h4>Root Cause Analytics</h4><span class="sub">Recurring failures (same ATM + fault, 3+ occurrences)</span>
+ <select id="days" class="form-select form-select-sm ms-auto w-auto"><option value="7">7 days</option><option value="14">14 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></div>
+<div class="grid2">
+  <div class="cardx"><h6>Top fault types</h6><div class="chart-box"><canvas id="cCodes"></canvas></div></div>
+  <div class="cardx"><h6>Most affected ATMs</h6><div class="chart-box"><canvas id="cAtms"></canvas></div></div>
+</div>
+<div class="cardx"><h6>Recurring failures</h6><table id="tbl" class="table table-sm w-100"><thead><tr><th>ATM</th><th>Client</th><th>Fault</th><th>Occurrences</th><th>Share of all incidents</th><th>Last seen</th><th></th></tr></thead></table></div>
+@section Scripts { <script src="~/js/pages/rca.js" asp-append-version="true"></script> }

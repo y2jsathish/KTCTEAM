@@ -1,0 +1,15 @@
+@{ ViewData["Title"] = "Executive Dashboard"; }
+<div class="page-h"><h4>Executive Dashboard</h4><span class="sub" id="gen">loading…</span><button class="btn btn-sm btn-outline-secondary ms-auto" id="refreshBtn"><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+<div id="warnings"></div>
+<div class="kpis" id="kpis"></div>
+<div class="grid2">
+  <div class="cardx"><h6>ATM availability</h6><div class="chart-box sm"><canvas id="cAvail"></canvas></div><div class="text-center fs-3 fw-bold" id="availTxt">–</div></div>
+  <div class="cardx"><h6>ATM health status</h6><div class="chart-box sm"><canvas id="cHealth"></canvas></div><div class="legend" id="lgHealth"></div></div>
+  <div class="cardx"><h6>Tickets by status</h6><div class="chart-box sm"><canvas id="cTkStatus"></canvas></div><div class="legend" id="lgTk"></div></div>
+  <div class="cardx"><h6>Open tickets by severity</h6><div class="chart-box sm"><canvas id="cTkSev"></canvas></div></div>
+  <div class="cardx"><h6>Incidents trend (new / hour, last 24 h)</h6><div class="chart-box"><canvas id="cIncTrend"></canvas></div></div>
+  <div class="cardx"><h6>Transaction volume today (per hour)</h6><div class="chart-box"><canvas id="cTxVol"></canvas></div></div>
+  <div class="cardx"><h6>Transaction failures today (per hour)</h6><div class="chart-box"><canvas id="cTxFail"></canvas></div></div>
+  <div class="cardx"><h6>Attention required — critical ATMs</h6><div id="critList" class="small" style="max-height:230px;overflow:auto"></div></div>
+</div>
+@section Scripts { <script src="~/js/pages/dashboard.js" asp-append-version="true"></script> }

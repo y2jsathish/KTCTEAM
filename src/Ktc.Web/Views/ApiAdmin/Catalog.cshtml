@@ -1,0 +1,14 @@
+@{ ViewData["Title"] = "API Catalog"; }
+<div class="page-h"><h4>API Catalog</h4><span class="sub">Auto-discovered from the imported Postman collection. Read-only endpoints are enabled; mutating &amp; credential endpoints stay disabled.</span></div>
+<div class="cardx mb-3"><div class="row g-2"><div class="col-md-4"><select id="mod" class="form-select form-select-sm"><option value="">All modules</option></select></div>
+<div class="col-md-8 small text-muted pt-1" id="modInfo"></div></div></div>
+<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>Module</th><th>Method</th><th>Endpoint</th><th>Kind</th><th>Screen / widget</th><th>Enabled</th><th></th></tr></thead></table></div>
+<div class="modal fade" id="execModal" tabindex="-1"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+ <div class="modal-header"><h6 class="modal-title" id="exTitle"></h6><button class="btn-close" data-bs-dismiss="modal"></button></div>
+ <div class="modal-body"><div id="exParams" class="row g-2 mb-2"></div><div id="exBodyWrap" class="mb-2" hidden><label class="form-label small">Request body (JSON)</label><textarea id="exBody" class="form-control form-control-sm font-monospace" rows="7"></textarea></div>
+  <div class="form-check form-switch mb-2"><input class="form-check-input" type="checkbox" id="exCache" checked/><label class="form-check-label small" for="exCache">Use cache</label></div>
+  <div id="exStatus" class="small mb-1"></div><pre class="json-out" id="exOut"></pre>
+  <details class="mt-2"><summary class="small">Mappings &amp; field → widget</summary><div id="exMaps" class="mt-2"></div></details></div>
+ <div class="modal-footer"><div class="btn-group btn-group-sm me-auto" id="exExports"><a class="btn btn-outline-secondary" id="exX">Excel</a><a class="btn btn-outline-secondary" id="exC">CSV</a><a class="btn btn-outline-secondary" id="exP">PDF</a></div>
+ <button class="btn btn-primary btn-sm" id="exRun"><i class="bi bi-play-fill"></i> Execute</button></div></div></div></div>
+@section Scripts { <script>window.IS_ADMIN=@(User.IsInRole("Admin")?"true":"false");window.CAN_EXEC=@(User.IsInRole("Admin")||User.IsInRole("Operator")?"true":"false");</script><script src="~/js/pages/catalog.js" asp-append-version="true"></script> }

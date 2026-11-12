@@ -1,0 +1,393 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Ktc.Application.Abstractions;
+using Ktc.Application.Logic;
+using Ktc.Application.Models;
+using Ktc.Application.Options;
+using Ktc.Domain.Enums;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace Ktc.Infrastructure.KtcApi;
+
+/// <summary>
+/// Maps KTC REST payloads to portal DTOs.
+/// KTC exposes no "Device" or "Incident" controllers: devices are <c>Client</c> records (+LastClientContact, OverallAvailability),
+/// incidents are <c>ActiveError/ActiveErrorExtra/HistoricalError</c>, and the "client" of the portal (bank) is <c>Business</c>.
+/// Field names are looked up tolerantly (see KtcJson) because the supplied collection has no response samples.
+/// </summary>
+public class KtcDataService : IKtcDataService
+{
+    private readonly IKtcApiClient _api;
+    private readonly KtcOptions _opt;
+    private readonly IMemoryCache _cache;
+    private readonly IHttpContextAccessor _http;
+    private readonly ILogger<KtcDataService> _log;
+
+    public KtcDataService(IKtcApiClient api, IOptions<KtcOptions> opt, IMemoryCache cache, IHttpContextAccessor http, ILogger<KtcDataService> log)
+    { _api = api; _opt = opt.Value; _cache = cache; _http = http; _log = log; }
+
+    private record ClientRec(string Id, string Name, string Alias, string Address, string Business, string Branch, string City, string Region, string HardwareType);
+
+    // Cache partition: user-specific unless the service account drives the data.
+    private string Scope => KtcTokenScope.IsServiceForced || !(_http.HttpContext?.User.Identity?.IsAuthenticated ?? false) ? "svc" : "u:" + _http.HttpContext!.User.Identity!.Name;
+
+    private sealed class Warn { private readonly List<string> _l = new(); public void Add(string s) { lock (_l) _l.Add(s); } public List<string> ToList() { lock (_l) return _l.ToList(); } }
+
+    private async Task<JsonElement?> Fetch(string url, Warn w, HttpMethod? m = null, object? body = null, bool idempotent = false, CancellationToken ct = default)
+    {
+        var r = await _api.SendAsync(m ?? HttpMethod.Get, url, body, new KtcCallOptions { Idempotent = idempotent }, ct);
+        if (!r.Success) { w.Add($"{(m ?? HttpMethod.Get).Method} {url.Split('?')[0]}: {r.Error}"); return null; }
+        return r.Json;
+    }
+
+    private Task<T> Cached<T>(string key, TimeSpan ttl, Func<Task<T>> factory) =>
+        _cache.GetOrCreateAsync($"{Scope}|{key}", e => { e.AbsoluteExpirationRelativeToNow = ttl; return factory(); })!;
+
+    // ---------------- reference data ----------------
+    private async Task<Dictionary<string, ClientRec>> LookupAsync(Warn w, CancellationToken ct)
+    {
+        return await Cached("lookup", TimeSpan.FromMinutes(5), async () =>
+        {
+            var tc = Fetch("api/v1/Client?includedeleted=false", w, ct: ct); var tb = Fetch("api/v1/Business?includeDefault=false", w, ct: ct);
+            var tr = Fetch("api/v1/Region?includeDefault=false", w, ct: ct); var tbr = Fetch("api/v1/Branch?includeDefault=false", w, ct: ct);
+            await Task.WhenAll(tc, tb, tr, tbr);
+            var biz = KtcJson.Items(tb.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "BusinessID"), e => KtcJson.Str(e, "Name", "BusinessName"));
+            var reg = KtcJson.Items(tr.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "RegionID"), e => KtcJson.Str(e, "Name", "RegionName"));
+            var br = KtcJson.Items(tbr.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "BranchID"), e => (Name: KtcJson.Str(e, "Name", "BranchName"), City: KtcJson.Str(e, "City", "Town")));
+            var map = new Dictionary<string, ClientRec>();
+            foreach (var e in KtcJson.Items(tc.Result))
+            {
+                var id = KtcJson.Str(e, "ID", "Id", "ClientID");
+                if (id.Length == 0 || KtcJson.Bool(e, false, "Deleted", "IsDeleted")) continue;
+                br.TryGetValue(KtcJson.Str(e, "BranchID", "BranchId"), out var b);
+                var rid = KtcJson.Str(e, "RegionID", "RegionId");
+                map[id] = new ClientRec(id, KtcJson.Str(e, "Name", "NodeName", "ClientName"), KtcJson.Str(e, "Alias", "DisplayName"), KtcJson.Str(e, "Address", "NetworkAddress"),
+                    biz.GetValueOrDefault(KtcJson.Str(e, "BusinessID", "BusinessId")) ?? "", b.Name ?? "", string.IsNullOrEmpty(b.City) ? (b.Name ?? "") : b.City,
+                    reg.GetValueOrDefault(rid) ?? "", KtcJson.Str(e, "HardwareTypeName", "HardwareType", "ModelName"));
+            }
+            return map;
+        });
+    }
+
+    // ---------------- ATMs ----------------
+    public async Task<(IReadOnlyList<AtmDto> Atms, List<string> Warnings)> GetAtmsAsync(CancellationToken ct = default)
+    {
+        var w = new Warn();
+        var tLookup = LookupAsync(w, ct);
+        var tContact = Fetch("api/v1/LastClientContact", w, ct: ct);
+        var tInc = GetIncidentsInternal(true, w, ct);
+        var tTk = TicketsCore(w, ct);
+        await Task.WhenAll(tLookup, tContact, tInc, tTk);
+
+        var contacts = new Dictionary<string, DateTime>();
+        foreach (var e in KtcJson.Items(tContact.Result))
+        {
+            var id = KtcJson.Str(e, "ClientID", "ID", "Id"); var d = KtcJson.Date(e, "LastContact", "LastClientContact", "LastContactTime", "Timestamp", "Time");
+            if (id.Length > 0 && d.HasValue) contacts[id] = d.Value;
+        }
+        var incByAtm = tInc.Result.Where(i => i.IsOpen).ToLookup(i => i.AtmId);
+        var tkByAtm = tTk.Result.Where(t => t.IsOpen).ToLookup(t => t.AtmId);
+        var avail = await AvailabilityBatchAsync(tLookup.Result.Keys, w, ct);
+        var now = DateTime.UtcNow;
+
+        var list = new List<AtmDto>(tLookup.Result.Count);
+        foreach (var c in tLookup.Result.Values)
+        {
+            var inc = incByAtm[c.Id].ToList();
+            DateTime? last = contacts.TryGetValue(c.Id, out var d) ? d : null;
+            bool commFault = inc.Any(i => Regex.IsMatch(i.Description, @"communication failure|link down|offline|unreachable device", RegexOptions.IgnoreCase) && !Regex.IsMatch(i.Description, "host", RegexOptions.IgnoreCase));
+            bool offline = commFault || !last.HasValue || (now - last.Value).TotalMinutes > _opt.OfflineMinutes;
+            bool host = inc.Any(i => i.HostRelated && Regex.IsMatch(i.Description, @"disconnect|unreachable|down|no response|timeout", RegexOptions.IgnoreCase));
+            var hr = AtmHealthCalculator.Evaluate(new HealthInput(last, offline, host,
+                inc.Count(i => i.Severity == Severity.P1), inc.Count(i => i.Severity == Severity.P2), inc.Count(i => i.Severity == Severity.P3), inc.Count(i => i.Severity == Severity.P4)), now, _opt.AtmOnlineMinutes);
+            list.Add(new AtmDto
+            {
+                Id = c.Id, Name = c.Name, Client = c.Business, Branch = c.Branch, City = c.City, Region = c.Region, AtmType = c.HardwareType,
+                Location = string.IsNullOrEmpty(c.Alias) ? c.Branch : c.Alias, LastCommunicationUtc = last,
+                Health = hr.Status, HealthScore = hr.Score, HealthReason = hr.Reason, Offline = offline, HostDisconnected = host,
+                DeviceStatus = offline ? "Offline" : host ? "Host Disconnected" : hr.Status == HealthStatus.Warning ? "Degraded" : hr.Status == HealthStatus.Critical ? "Faulted" : "Online",
+                AvailabilityPct = avail.TryGetValue(c.Id, out var a) ? a : null, OpenIncidents = inc.Count, OpenTickets = tkByAtm[c.Id].Count()
+            });
+        }
+        return (list.OrderBy(a => a.Name).ToList(), w.ToList());
+    }
+
+    public async Task<AtmDto?> GetAtmAsync(string id, CancellationToken ct = default)
+    {
+        var (atms, _) = await GetAtmsAsync(ct);
+        return atms.FirstOrDefault(a => a.Id == id) ?? atms.FirstOrDefault(a => a.Name.Equals(id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<Dictionary<string, double>> AvailabilityBatchAsync(IEnumerable<string> ids, Warn w, CancellationToken ct)
+    {
+        var res = new Dictionary<string, double>();
+        var missing = new List<string>();
+        foreach (var id in ids)
+        {
+            if (_cache.TryGetValue($"avail|{Scope}|{id}", out double v)) res[id] = v; else missing.Add(id);
+        }
+        var batch = missing.Take(_opt.AvailabilityWarmupPerCycle).ToList();      // warm the cache progressively; protects KTC from N calls per refresh
+        using var gate = new SemaphoreSlim(Math.Max(1, _opt.MaxParallelCalls));
+        var failures = 0;
+        await Task.WhenAll(batch.Select(async id =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                if (Volatile.Read(ref failures) > 5) return;               // KTC is unhealthy - stop hammering it
+                var a = await AvailabilityValueAsync(id, DateTime.UtcNow.AddDays(-_opt.AvailabilityLookbackDays), DateTime.UtcNow, ct);
+                if (a.HasValue) { lock (res) res[id] = a.Value; _cache.Set($"avail|{Scope}|{id}", a.Value, TimeSpan.FromMinutes(_opt.AvailabilityCacheMinutes)); }
+                else Interlocked.Increment(ref failures);
+            }
+            finally { gate.Release(); }
+        }));
+        if (failures > 0) w.Add($"Availability lookup failed for {failures} ATM(s); values shown as n/a.");
+        return res;
+    }
+
+    private async Task<double?> AvailabilityValueAsync(string id, DateTime from, DateTime to, CancellationToken ct)
+    {
+        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}&starttimeindex=0&endtimeindex=0", ct);
+        if (!r.Success || r.Json is not { } j) return null;
+        if (j.ValueKind == JsonValueKind.Number) return Norm(j.GetDouble());
+        foreach (var e in KtcJson.Items(j))
+        {
+            var d = KtcJson.Dbl(e, double.NaN, "AvailabilityPercent", "AvailabilityPercentage", "Availability", "OverallAvailability", "Percentage", "Percent");
+            if (!double.IsNaN(d)) return Norm(d);
+        }
+        return null;
+        static double Norm(double d) => Math.Round(Math.Clamp(d <= 1.0 && d > 0 ? d * 100 : d, 0, 100), 2);
+    }
+
+    public async Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        var tA = AvailabilityValueAsync(atmId, from, to, ct);
+        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}", ct);
+        await Task.WhenAll(tA, tR);
+        var reasons = new List<(string, double)>();
+        if (tR.Result.Success)
+            foreach (var e in KtcJson.Items(tR.Result.Json))
+                reasons.Add((KtcJson.Str(e, "Reason", "Name", "Description", "ReasonName"), KtcJson.Dbl(e, 0, "Hours", "Duration", "TotalHours", "Minutes") ));
+        return new AtmAvailability(tA.Result ?? double.NaN, reasons);
+    }
+
+    // ---------------- incidents ----------------
+    public async Task<IReadOnlyList<IncidentDto>> GetIncidentsAsync(bool openOnly, CancellationToken ct = default) => await GetIncidentsInternal(openOnly, new Warn(), ct);
+
+    private Task<List<IncidentDto>> GetIncidentsInternal(bool openOnly, Warn w, CancellationToken ct) =>
+        Cached("incidents:" + openOnly, TimeSpan.FromSeconds(20), async () =>
+        {
+            var lookup = await LookupAsync(w, ct);
+            var json = await Fetch("api/v1/ActiveErrorExtra?abovelevel=0", w, ct: ct);
+            return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null).Select(i => i!).ToList();
+        });
+
+    public async Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var q = $"start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}";
+        var json = await Fetch(string.IsNullOrEmpty(atmId) ? $"api/v1/HistoricalError?{q}" : $"api/v1/Client/{atmId}/HistoricalError?{q}", w, ct: ct);
+        return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null && i.OpenedUtc >= from && i.OpenedUtc <= to).Select(i => i!).ToList();
+    }
+
+    private IncidentDto? MapIncident(JsonElement e, Dictionary<string, ClientRec> lookup)
+    {
+        var id = KtcJson.Str(e, "ID", "Id", "ErrorID", "ActiveErrorID");
+        if (id.Length == 0) return null;
+        var atm = KtcJson.Str(e, "ClientID", "ClientId", "AtmID");
+        lookup.TryGetValue(atm, out var c);
+        var desc = KtcJson.Str(e, "ErrorCodeTypeName", "Description", "ErrorText", "Name", "Text", "ErrorDescription");
+        var level = KtcJson.Int(e, 3, "Level", "ErrorLevel", "Severity", "Priority");
+        var sev = _opt.SeverityMap.TryGetValue(level.ToString(), out var s) ? (Severity)Math.Clamp(s, 1, 4) : Severity.P3;
+        var opened = KtcJson.Date(e, "TimeAdded", "TimeCreated", "StartTime", "Added", "TimeStamp", "Time") ?? DateTime.UtcNow;
+        var closed = KtcJson.Date(e, "TimeClosed", "ClosedTime", "EndTime", "Closed");
+        var due = opened.AddHours(_opt.DefaultSlaHours.GetValueOrDefault(sev.ToString(), 24));
+        return new IncidentDto
+        {
+            Key = id, Number = "INC-" + id, AtmId = atm, AtmName = c?.Name ?? KtcJson.Str(e, "ClientName"), Client = c?.Business ?? "",
+            Severity = sev, OpenedUtc = opened, ClosedUtc = closed, SlaDueUtc = due, Sla = SlaCalculator.Evaluate(due, closed, DateTime.UtcNow, _opt.NearBreachMinutes),
+            Status = closed.HasValue ? "Closed" : "Open", ErrorCode = KtcJson.Str(e, "ErrorCodeTypeID", "ErrorCodeID", "ErrorCode", "Code"), Description = desc,
+            HostRelated = FailureClassifier.Classify(desc) == FailureClassifier.Host
+        };
+    }
+
+    // ---------------- tickets ----------------
+    private Task<List<TicketDto>> TicketsCore(Warn w, CancellationToken ct) =>
+        Cached("tickets", TimeSpan.FromSeconds(30), async () =>
+        {
+            var lookup = await LookupAsync(w, ct);
+            var body = new
+            {
+                BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
+                Start = DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), End = DateTime.UtcNow.AddMinutes(5), SLAFilterType = 0, SLAHours = 0,
+                OwnerName = (string?)null, ClientName = (string?)null, GroupID = _opt.TicketSearchGroupId, ExtraDataField = (string?)null, ExtraDataValue = (string?)null
+            };
+            var json = await Fetch("api/v1/Ticket/Search", w, HttpMethod.Post, body, true, ct);
+            return KtcJson.Items(json).Select(e => MapTicket(e, lookup)).Where(t => t != null).Select(t => t!).ToList();
+        });
+
+    public async Task<IReadOnlyList<TicketDto>> SearchTicketsAsync(TicketQuery q, CancellationToken ct = default)
+    {
+        var w = new Warn();
+        IEnumerable<TicketDto> all;
+        if (q.From.HasValue || q.To.HasValue)
+        {
+            var lookup = await LookupAsync(w, ct);
+            var body = new
+            {
+                BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
+                Start = q.From ?? DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), End = q.To ?? DateTime.UtcNow, SLAFilterType = 0, SLAHours = 0,
+                OwnerName = (string?)null, ClientName = (string?)null, GroupID = _opt.TicketSearchGroupId, ExtraDataField = (string?)null, ExtraDataValue = (string?)null
+            };
+            var json = await Fetch("api/v1/Ticket/Search", w, HttpMethod.Post, body, true, ct);
+            all = KtcJson.Items(json).Select(e => MapTicket(e, lookup)).Where(t => t != null).Select(t => t!).ToList();
+        }
+        else all = await TicketsCore(w, ct);
+
+        if (!string.IsNullOrWhiteSpace(q.AtmId)) all = all.Where(t => t.AtmId == q.AtmId || t.AtmName.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.TicketId)) all = all.Where(t => t.Id.Contains(q.TicketId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.Client)) all = all.Where(t => t.Client.Contains(q.Client, StringComparison.OrdinalIgnoreCase));
+        return all.OrderByDescending(t => t.CreatedUtc).ToList();
+    }
+
+    public async Task<TicketDto?> GetTicketAsync(string id, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var json = await Fetch($"api/v1/Ticket/{Uri.EscapeDataString(id)}", w, ct: ct);
+        return KtcJson.Items(json).Select(e => MapTicket(e, lookup)).FirstOrDefault();
+    }
+
+    private TicketDto? MapTicket(JsonElement e, Dictionary<string, ClientRec> lookup)
+    {
+        var id = KtcJson.Str(e, "ID", "Id", "TicketID");
+        if (id.Length == 0) return null;
+        var atm = KtcJson.Str(e, "ClientID", "ClientId"); lookup.TryGetValue(atm, out var c);
+        var created = KtcJson.Date(e, "TimeCreated", "CreationDate", "Created") ?? DateTime.UtcNow;
+        var updated = KtcJson.Date(e, "TimeUpdated", "Updated");
+        var closed = KtcJson.Date(e, "TimeClosed", "ClosedDate", "Closed");
+        var owned = KtcJson.Date(e, "TimeOwned"); var dispatched = KtcJson.Date(e, "TimeDispatched");
+        var owner = KtcJson.Str(e, "OwnerName", "Owner", "AssignedTo");
+        var sb = KtcJson.Int(e, -1, "StatusByte", "Status");
+        TicketStatus st;
+        if (sb >= 0 && _opt.TicketStatusMap.TryGetValue(sb.ToString(), out var mapped) && Enum.TryParse<TicketStatus>(mapped, true, out var ms)) st = ms;
+        else if (closed.HasValue) st = TicketStatus.Closed;
+        else if (dispatched.HasValue) st = TicketStatus.InProgress;
+        else if (owned.HasValue || owner.Length > 0) st = TicketStatus.Assigned;
+        else st = TicketStatus.Open;
+        var level = KtcJson.Int(e, 3, "Level", "Priority", "Severity", "ErrorLevel");
+        var sev = _opt.SeverityMap.TryGetValue(level.ToString(), out var s) ? (Severity)Math.Clamp(s, 1, 4) : Severity.P3;
+        var due = KtcJson.Date(e, "SLADueTime", "ExpectedEndTime", "SlaDue", "DueTime") ?? created.AddHours(_opt.DefaultSlaHours.GetValueOrDefault(sev.ToString(), 24));
+        DateTime? completed = st is TicketStatus.Closed or TicketStatus.Resolved ? (closed ?? updated ?? DateTime.UtcNow) : null;
+        var desc = KtcJson.Str(e, "Description", "Summary", "ErrorCodeTypeName", "TicketTypeName", "Title");
+        if (desc.Length == 0) desc = Regex.Replace(KtcJson.Str(e, "CommentsString"), "<[^>]+>", " ").Trim();
+        return new TicketDto
+        {
+            Id = id, AtmId = atm, AtmName = c?.Name ?? KtcJson.Str(e, "ClientName"), Client = c?.Business ?? "", Status = st, Severity = sev,
+            CreatedUtc = created, UpdatedUtc = updated, ClosedUtc = closed, Owner = owner.Length == 0 ? null : owner, Description = desc,
+            SlaDueUtc = due, Sla = SlaCalculator.Evaluate(due, completed, DateTime.UtcNow, _opt.NearBreachMinutes)
+        };
+    }
+
+    // ---------------- transactions ----------------
+    public async Task<IReadOnlyList<TransactionDto>> SearchTransactionsAsync(TransactionQuery q, CancellationToken ct = default)
+    {
+        var from = q.From ?? DateTime.UtcNow.Date; var to = q.To ?? DateTime.UtcNow;
+        var key = $"tx:{from:yyyyMMddHHmm}:{to:yyyyMMddHHmm}";
+        // Short cache: the portal polls this every 30 s from several widgets.
+        var all = await Cached(key, TimeSpan.FromSeconds(25), async () =>
+        {
+            var w = new Warn(); var lookup = await LookupAsync(w, ct);
+            var body = new { BusinessID = (int?)null, GroupID = _opt.TransactionSearchGroupId, Start = from, End = to, ClientName = (string?)null };
+            var json = await Fetch("api/v1/TransactionData/Search", w, HttpMethod.Post, body, true, ct);
+            var res = new List<TransactionDto>();
+            foreach (var e in KtcJson.Items(json))
+            {
+                if (KtcJson.TryProp(e, out var nested, "Transactions", "TransactionList") && nested.ValueKind == JsonValueKind.Array)
+                    foreach (var t in nested.EnumerateArray()) { var m = MapTx(t, lookup, e); if (m != null) res.Add(m); }
+                else { var m = MapTx(e, lookup, null); if (m != null) res.Add(m); }
+            }
+            return res;
+        });
+        IEnumerable<TransactionDto> r = all;
+        if (!string.IsNullOrWhiteSpace(q.AtmId)) r = r.Where(t => t.AtmId == q.AtmId || t.AtmName.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.Client)) r = r.Where(t => t.Client.Equals(q.Client, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.Region)) r = r.Where(t => t.Region.Equals(q.Region, StringComparison.OrdinalIgnoreCase));
+        if (q.Success.HasValue) r = r.Where(t => t.Success == q.Success.Value);
+        return r.OrderByDescending(t => t.TimeUtc).ToList();
+    }
+
+    public async Task<TransactionDto?> GetTransactionAsync(string id, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var json = await Fetch($"api/v1/TransactionData/{Uri.EscapeDataString(id)}", w, ct: ct);
+        return KtcJson.Items(json).Select(e => MapTx(e, lookup, null)).FirstOrDefault(t => t != null);
+    }
+
+    private static readonly Regex OkRx = new(@"success|approved|completed ok|\bok\b|completed$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent)
+    {
+        var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "UUID");
+        if (id.Length == 0) return null;
+        var atm = KtcJson.Str(e, "ClientID", "ClientId");
+        if (atm.Length == 0 && parent is { } p) atm = KtcJson.Str(p, "ClientID", "ClientId");
+        lookup.TryGetValue(atm, out var c);
+        var result = KtcJson.Str(e, "CompletionCodeName", "CompletionCode", "Result", "StatusName", "Status", "Completion");
+        var reason = KtcJson.Str(e, "ReasonName", "Reason", "ErrorText", "ErrorDescription");
+        var err = KtcJson.Str(e, "ErrorCode", "ReasonID", "ErrorID");
+        bool ok = result.Length > 0 ? OkRx.IsMatch(result) && !Regex.IsMatch(result, "fail|error|declin|timeout|retract|revers", RegexOptions.IgnoreCase)
+                                    : KtcJson.Int(e, 0, "CompletionCodeID", "CompletionID") == 0 && reason.Length == 0;
+        var start = KtcJson.Date(e, "StartTime", "TransactionStartTime", "TimeStamp", "Time", "TransactionTime") ?? DateTime.UtcNow;
+        var end = KtcJson.Date(e, "EndTime", "TransactionEndTime");
+        var amount = KtcJson.Dbl(e, double.NaN, "Amount", "TransactionAmount", "RequestedAmount");
+        return new TransactionDto
+        {
+            Id = id, AtmId = atm, AtmName = c?.Name ?? KtcJson.Str(e, "ClientName"), Client = c?.Business ?? "", Region = c?.Region ?? "",
+            Type = KtcJson.Str(e, "TransactionTypeName", "TransactionType", "Type", "TypeName"), Success = ok,
+            Amount = double.IsNaN(amount) ? null : (decimal)amount, Currency = KtcJson.Str(e, "Currency", "CurrencyCode"), TimeUtc = start,
+            ResponseMs = end.HasValue ? (int)Math.Max(0, (end.Value - start).TotalMilliseconds) : KtcJson.Int(e, 0, "ResponseTime", "ResponseMs"),
+            ErrorCode = ok ? "" : (err.Length > 0 ? err : result), FailureCategory = ok ? "" : FailureClassifier.Classify(result + " " + reason)
+        };
+    }
+
+    // ---------------- EJ ----------------
+    public async Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery q, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var id = lookup.ContainsKey(q.AtmId) ? q.AtmId : lookup.Values.FirstOrDefault(c => c.Name.Equals(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id;
+        if (id == null) return Array.Empty<EjEntryDto>();
+        var json = await Fetch($"api/v1/Client/{id}/EJRow", w, HttpMethod.Post, new { Value1 = q.From, Value2 = q.To, Value3 = _opt.EjFields }, true, ct);
+
+        var rows = new List<(string Seq, DateTime Time, string Text)>();
+        foreach (var e in KtcJson.Items(json))
+        {
+            var text = KtcJson.Str(e, "Text", "EJText", "Data", "Line", "Value", "Description");
+            if (text.Length == 0) text = string.Join(" | ", SchemaInferer.Leaves(e).Where(l => l.Value.Length > 0).Select(l => l.Value));
+            rows.Add((KtcJson.Str(e, "Sequence", "RowNumber", "EJID", "ID", "Id"), KtcJson.Date(e, "TimeStamp", "Time", "TransactionStartTime", "DateTime", "Date") ?? q.From, text));
+        }
+
+        // Filtering runs on RAW text (so a full PAN search works) - only masked text is ever returned.
+        IEnumerable<(string Seq, DateTime Time, string Text)> f = rows;
+        if (!string.IsNullOrWhiteSpace(q.Sequence)) f = f.Where(r => r.Seq.Contains(q.Sequence.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.Text)) f = f.Where(r => r.Text.Contains(q.Text.Trim(), StringComparison.OrdinalIgnoreCase));
+        var numbered = EjTimeline.Number(rows);                     // numbering uses all rows so transactions stay whole
+        if (!string.IsNullOrWhiteSpace(q.CardNumber))
+        {
+            var digits = PanMasker.Digits(q.CardNumber);
+            var rawTx = new HashSet<int>();
+            var sorted = rows.OrderBy(x => x.Time).ThenBy(x => x.Seq, StringComparer.Ordinal).ToList();
+            for (int i = 0; i < sorted.Count; i++) if (PanMasker.Digits(sorted[i].Text).Contains(digits)) rawTx.Add(numbered[i].TransactionNo);
+            numbered = numbered.Where(n => rawTx.Contains(n.TransactionNo)).ToList();
+        }
+        var keep = f.Select(r => (r.Seq, r.Time)).ToHashSet();
+        if (!string.IsNullOrWhiteSpace(q.Sequence) || !string.IsNullOrWhiteSpace(q.Text))
+        {
+            var txs = numbered.Where(n => keep.Contains((n.Sequence, n.TimeUtc))).Select(n => n.TransactionNo).ToHashSet();
+            numbered = numbered.Where(n => txs.Contains(n.TransactionNo)).ToList();
+        }
+        return numbered;
+    }
+}

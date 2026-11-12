@@ -1,0 +1,5 @@
+@{ ViewData["Title"] = "Search"; }
+<div class="page-h"><h4>Search everything</h4></div>
+<div class="bigsearch"><input id="q" class="form-control" value="@ViewBag.Q" placeholder="ATM, ticket, incident or transaction…"/></div>
+<div id="out"></div>
+@section Scripts { <script src="~/js/pages/search.js" asp-append-version="true"></script> }

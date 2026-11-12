@@ -1,0 +1,10 @@
+@model List<Ktc.Domain.Entities.ApiMapping>
+@{ ViewData["Title"] = (string)ViewBag.Name; }
+<div class="page-h"><h4>@ViewBag.Name</h4><span class="sub">Auto-generated from API mappings</span></div>
+<div class="row g-3" id="widgets">
+@foreach (var m in Model) {
+ <div class="col-lg-@(m.WidgetType == WidgetType.Table ? 12 : 4)"><div class="cardx" data-mid="@m.Id" data-widget="@m.WidgetType" data-refresh="@m.RefreshInterval" data-fields='@Html.Raw(System.Text.Json.JsonSerializer.Serialize(m.Fields.Select(f => new { path = f.FieldPath, label = f.Label, widget = f.WidgetType.ToString(), agg = f.Aggregation })))'>
+  <h6>@m.ApiEndpoint!.EndpointName <span class="text-muted">· @m.WidgetType</span></h6><div class="w-body small text-muted">loading…</div></div></div> }
+@if (!Model.Any()) { <div class="text-muted">No enabled mappings for this screen.</div> }
+</div>
+@section Scripts { <script>window.SCREEN=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string)ViewBag.Name));</script><script src="~/js/pages/screen.js" asp-append-version="true"></script> }
