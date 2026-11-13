@@ -19,7 +19,8 @@ public class DataController : ControllerBase
     private readonly IDashboardService _dash; private readonly IKtcDataService _data; private readonly IUnitOfWork _uow; private readonly IApiHealthTracker _health;
     private readonly IAlertEngine _alerts; private readonly IAuditService _audit;
 
-    public DataController(IDashboardService d, IKtcDataService k, IUnitOfWork u, IApiHealthTracker h, IAlertEngine a, IAuditService au) { _dash = d; _data = k; _uow = u; _health = h; _alerts = a; _audit = au; }
+    private readonly ILogger<DataController> _log;
+    public DataController(IDashboardService d, IKtcDataService k, IUnitOfWork u, IApiHealthTracker h, IAlertEngine a, IAuditService au, ILogger<DataController> log) { _dash = d; _data = k; _uow = u; _health = h; _alerts = a; _audit = au; _log = log; }
 
     // ---------- dashboard ----------
     [HttpGet("summary")]
@@ -145,6 +146,8 @@ public class DataController : ControllerBase
         if (!string.IsNullOrWhiteSpace(id)) all = all.Where(x => x.Id.Contains(id, StringComparison.OrdinalIgnoreCase)).ToList();
         var rows = ok.HasValue ? all.Where(x => x.Success == ok.Value).ToList() : all.ToList();
         var failed = all.Where(x => !x.Success).ToList();
+        _log.LogInformation("Transaction search atm={Atm} client={Client} region={Region} status={Status} id={Id} {From:u}..{To:u}: {Total} transactions, {Shown} shown",
+            atmId, client, region, status, id, f, t, all.Count, rows.Count);
         return Ok(new
         {
             data = rows.Take(2000).Select(x => new { x.Id, x.AtmId, x.AtmName, x.Client, x.Region, x.Type, x.Status, x.Amount, x.Currency, x.TimeUtc, x.ResponseMs, x.ErrorCode, x.FailureCategory }),
@@ -164,6 +167,8 @@ public class DataController : ControllerBase
         if (string.IsNullOrWhiteSpace(atmId)) return BadRequest(new { error = "ATM ID or name is required (EJ is retrieved per ATM)." });
         if (to < from || to - from > TimeSpan.FromDays(7)) return BadRequest(new { error = "Date range must be between 0 and 7 days." });
         var rows = await _data.SearchEjAsync(new EjQuery(atmId.Trim(), from.ToUniversalTime(), to.ToUniversalTime(), card, seq, text), ct);
+        _log.LogInformation("EJ search atm={Atm} {From:u}..{To:u} card={Card} seq={Seq} text={Text}: {Rows} EJ lines",
+            atmId, from.ToUniversalTime(), to.ToUniversalTime(), string.IsNullOrWhiteSpace(card) ? "-" : "(given)", seq, PanMasker.Mask(text), rows.Count);
         var tx = rows.GroupBy(r => r.TransactionNo).Select(g => new { no = g.Key, start = g.Min(x => x.TimeUtc), count = g.Count(), timeline = EjTimeline.Build(g) }).OrderBy(x => x.start).ToList();
         return Ok(new { entries = rows.Take(5000), truncated = rows.Count > 5000, transactions = tx.Take(200) });
     }
