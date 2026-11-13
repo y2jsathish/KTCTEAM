@@ -1,0 +1,16 @@
+@model string?
+@{ ViewData["Title"] = "KTC token check"; }
+<div class="container-fluid py-3" style="max-width:1100px">
+  <h4 class="mb-1"><i class="bi bi-shield-check"></i> KTC token check</h4>
+  <p class="text-muted small mb-3">
+    Logs in to KTC once with your own credentials, calls a few read-only routes with that exact token, then logs off.
+    The report shows status codes, header and field names, and the token's length and type. It never shows the token, your password or response data, so it is safe to copy and send.
+  </p>
+  <form method="post" class="mb-3"><button class="btn btn-primary"><i class="bi bi-play-fill"></i> Run check</button></form>
+  @if (Model != null)
+  {
+    <div class="d-flex justify-content-between align-items-center mb-1"><span class="small text-muted">Report</span>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="navigator.clipboard.writeText(document.getElementById('rep').innerText)"><i class="bi bi-clipboard"></i> Copy</button></div>
+    <pre id="rep" class="p-3 border rounded small" style="white-space:pre-wrap">@Model</pre>
+  }
+</div>

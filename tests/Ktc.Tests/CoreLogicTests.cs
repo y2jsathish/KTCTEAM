@@ -240,3 +240,63 @@ public class TokenRefreshTests
         Assert.Equal("tok1", http.Session.GetString(SessionKeys.Token));
     }
 }
+
+public class DeniedRouteTests
+{
+    private sealed class Always401 : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
+        { Interlocked.Increment(ref Calls); return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized) { ReasonPhrase = "Invalid token" }); }
+    }
+    private sealed class Tokens : Ktc.Application.Abstractions.IKtcTokenProvider
+    {
+        private int _n;
+        public Task<string?> GetTokenAsync(CancellationToken ct = default) => Task.FromResult<string?>("t" + _n);
+        public Task<string?> RefreshAsync(CancellationToken ct = default) => Task.FromResult<string?>("t" + Interlocked.Increment(ref _n));
+        public string Identity => "service account test";
+    }
+
+    [Fact]
+    public async Task Route_refused_with_fresh_token_is_paused_instead_of_hammered()
+    {
+        var h = new Always401();
+        Ktc.Application.Abstractions.IKtcApiClient api = new KtcApiClient(new HttpClient(h) { BaseAddress = new Uri("https://ktc.test/") }, new Tokens(),
+            new Microsoft.Extensions.Caching.Memory.MemoryCache(new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<KtcApiClient>.Instance);
+        var first = await api.GetAsync("api/v1/LastClientContact");
+        Assert.Equal(2, h.Calls);                     // original + one retry with a fresh token
+        Assert.Contains("service account test", first.Error);
+        var second = await api.GetAsync("api/v1/LastClientContact");
+        Assert.Equal(2, h.Calls);                     // paused: no further KTC calls
+        Assert.False(second.Success);
+    }
+}
+
+public class RedirectHandlerTests
+{
+    private sealed class RedirectOnce : HttpMessageHandler
+    {
+        public string? AuthOnSecond;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
+        {
+            if (r.RequestUri!.AbsolutePath.StartsWith("/old"))
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.TemporaryRedirect) { Headers = { Location = new Uri("https://ktc.test/new/api/v1/Region") } });
+            AuthOnSecond = r.Headers.Authorization?.ToString();
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+    }
+
+    [Fact]
+    public async Task Same_host_redirect_keeps_bearer_header()
+    {
+        var inner = new RedirectOnce();
+        var h = new KtcRedirectHandler(Microsoft.Extensions.Logging.Abstractions.NullLogger<KtcRedirectHandler>.Instance) { InnerHandler = inner };
+        using var http = new HttpClient(h);
+        using var req = new HttpRequestMessage(HttpMethod.Get, "https://ktc.test/old/api/v1/Region");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "abc");
+        var res = await http.SendAsync(req);
+        Assert.Equal(System.Net.HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Bearer abc", inner.AuthOnSecond);
+    }
+}

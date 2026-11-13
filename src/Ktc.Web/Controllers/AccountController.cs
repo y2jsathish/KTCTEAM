@@ -72,6 +72,23 @@ public class AccountController : Controller
         return RedirectToAction(nameof(Login));
     }
 
+    /// <summary>Step-by-step KTC login/token check for "401 Invalid token". Uses the signed-in user's own credentials.</summary>
+    [HttpGet("/diag/ktc-token")]
+    public IActionResult TokenCheck() => View("TokenCheck", (string?)null);
+
+    [HttpPost("/diag/ktc-token"), EnableRateLimiting("login")]
+    public async Task<IActionResult> TokenCheck([FromServices] KtcAuthDiagnostics diag, CancellationToken ct)
+    {
+        var cred = HttpContext.Session.GetString(SessionKeys.Cred);
+        if (cred == null) return View("TokenCheck", "Your saved KTC credentials are missing. Sign out and sign in again, then rerun the check.");
+        string[] p;
+        try { p = _dp.CreateProtector("Ktc.SessionCredentials").Unprotect(cred).Split('\n', 4); }
+        catch { return View("TokenCheck", "Your saved KTC credentials could not be read. Sign out and sign in again, then rerun the check."); }
+        var report = await diag.RunAllAsync(p[0], p[3], p[1].Length == 0 ? null : p[1], p[2], ct);
+        await _audit.LogAsync("Diagnostics", "KTC token check");
+        return View("TokenCheck", report);
+    }
+
     [HttpGet("/data/session")]
     public IActionResult SessionStatus()
     {

@@ -18,6 +18,8 @@ public static class KtcHttpRegistration
         services.AddTransient<ApiHealthHandler>();
         services.AddScoped<IKtcAuthService, KtcAuthService>();
         services.AddScoped<IKtcTokenProvider, KtcTokenProvider>();
+        services.AddTransient<KtcRedirectHandler>();
+        services.AddScoped<KtcAuthDiagnostics>();
 
         // Same pipeline for the auth client ("ktc") and the data client (typed IKtcApiClient).
         void Configure(IHttpClientBuilder b)
@@ -32,20 +34,31 @@ public static class KtcHttpRegistration
             b.AddPolicyHandler((sp, req) => RetryPolicy(opt, sp.GetRequiredService<ILoggerFactory>().CreateLogger("Ktc.Retry"), req));
             b.AddPolicyHandler(BreakerPolicy(opt));
             b.AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(opt.TimeoutSeconds), TimeoutStrategy.Optimistic));
-            b.ConfigurePrimaryHttpMessageHandler(() => opt.UseMock
-                ? new MockKtcHttpHandler()
-                : new SocketsHttpHandler
-                {
-                    PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-                    SslOptions = opt.AcceptAnyServerCertificate
-                        ? new System.Net.Security.SslClientAuthenticationOptions { RemoteCertificateValidationCallback = (_, _, _, _) => true }
-                        : new System.Net.Security.SslClientAuthenticationOptions()
-                });
+            b.AddHttpMessageHandler<KtcRedirectHandler>();     // innermost: follows same-host redirects without losing the Bearer header
+            b.ConfigurePrimaryHttpMessageHandler(() => Primary(opt));
         }
         Configure(services.AddHttpClient("ktc"));
         Configure(services.AddHttpClient<IKtcApiClient, KtcApiClient>());
+        // Token check page: no retries, breaker or redirect following, so it shows exactly what KTC answers.
+        services.AddHttpClient(KtcAuthDiagnostics.ClientName).ConfigureHttpClient(c =>
+        {
+            c.BaseAddress = new Uri(opt.BaseUrl.EndsWith('/') ? opt.BaseUrl : opt.BaseUrl + "/");
+            c.Timeout = TimeSpan.FromSeconds(Math.Max(15, opt.TimeoutSeconds));
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        }).ConfigurePrimaryHttpMessageHandler(() => Primary(opt));
         return services;
     }
+
+    private static HttpMessageHandler Primary(KtcOptions opt) => opt.UseMock
+        ? new MockKtcHttpHandler()
+        : new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            AllowAutoRedirect = false,     // see KtcRedirectHandler
+            SslOptions = opt.AcceptAnyServerCertificate
+                ? new System.Net.Security.SslClientAuthenticationOptions { RemoteCertificateValidationCallback = (_, _, _, _) => true }
+                : new System.Net.Security.SslClientAuthenticationOptions()
+        };
 
     private static IAsyncPolicy<HttpResponseMessage> RetryPolicy(KtcOptions opt, ILogger log, HttpRequestMessage req)
     {
