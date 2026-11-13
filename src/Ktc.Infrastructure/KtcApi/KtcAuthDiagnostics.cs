@@ -154,7 +154,7 @@ public class KtcAuthDiagnostics
                 L($"  {f,-22} {Uri.UnescapeDataString(u[(u.IndexOf('?') + 1)..])} -> {r.Status}{(r.Ok ? " OK" : " " + r.Message)}");
             }
         }
-        var probeFormats = new[] { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
+        var probeFormats = new[] { "yyyyMMddHHmmssfff", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
         foreach (var f in probeFormats)
         {
             var q = $"start={KtcDateFormats.Format(now.AddHours(-24), f, null)}&end={KtcDateFormats.Format(now, f, null)}";

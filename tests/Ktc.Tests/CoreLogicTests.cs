@@ -339,7 +339,7 @@ public class PermissionAndDefaultsTests
     public void HistoricalError_without_query_gets_last_24h()
     {
         var q = ApiCatalogRules.DefaultQuery("api/v1/HistoricalError", new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc));
-        Assert.Equal("start=2026-11-12T10:00:00&end=2026-11-13T10:00:00", Uri.UnescapeDataString(q!));
+        Assert.Equal("start=20261112100000000&end=20261113100000000", Uri.UnescapeDataString(q!));
         Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/HistoricalError?start=x", DateTime.UtcNow));
         Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/Region", DateTime.UtcNow));
     }
@@ -408,10 +408,12 @@ public class QueryDateTests
     private static readonly DateTime T = new(2026, 11, 13, 11, 48, 24, 366, DateTimeKind.Utc);
 
     [Fact]
-    public void Default_query_date_has_no_fraction_or_offset() =>
-        Assert.Equal("2026-11-13T11:48:24", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions().QueryDate(T)));
+    public void Default_query_date_is_ktc_compact_format() =>
+        Assert.Equal("20261113114824366", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions().QueryDate(T)));
 
     [Theory]
+    [InlineData("yyyyMMddHHmmssfff", null, "20261113114824366")]
+    [InlineData("yyyyMMddHHmmssfff", "Asia/Dubai", "20261113154824366")]
     [InlineData("yyyy-MM-dd HH:mm:ss", null, "2026-11-13 11:48:24")]
     [InlineData("MM/dd/yyyy HH:mm:ss", null, "11/13/2026 11:48:24")]
     [InlineData("yyyy-MM-ddTHH:mm:ss", "Asia/Dubai", "2026-11-13T15:48:24")]

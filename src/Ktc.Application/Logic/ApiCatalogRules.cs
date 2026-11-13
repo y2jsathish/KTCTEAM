@@ -46,7 +46,7 @@ public static class ApiCatalogRules
         var path = relativeUrl.TrimStart('/');
         if (path.Equals("api/v1/HistoricalError", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(path, @"^api/v1/Client/[^/]+/HistoricalError$", RegexOptions.IgnoreCase))
         {
-            fmt ??= d => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+            fmt ??= d => Uri.EscapeDataString(d.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture));
             return $"start={fmt(nowUtc.AddHours(-24))}&end={fmt(nowUtc)}";
         }
         return null;
