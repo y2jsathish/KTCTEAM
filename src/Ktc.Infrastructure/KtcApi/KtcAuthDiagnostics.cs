@@ -227,6 +227,33 @@ public class KtcAuthDiagnostics
                     L($"  row id-like values: {IdValues(r0)}");
                 }
             }
+
+        var tt = await GetJson(http, "api/v1/TransactionType", token, ct);
+        L(tt.Ok ? $"Transaction types (id: name): {string.Join("; ", KtcJson.Rows(tt.Json).Take(25).Select(r => (KtcJson.Str(r.Value, "ID", "Id", "TransactionTypeID") is { Length: > 0 } x ? x : r.Key) + ": " + KtcJson.Str(r.Value, "Name", "TypeName", "Description")).DefaultIfEmpty("none listed"))}"
+                : $"TransactionType: HTTP {tt.Status} {tt.Message}");
+        if (tt.Ok && KtcJson.Items(tt.Json).FirstOrDefault() is { ValueKind: JsonValueKind.Object } t0) L($"  TransactionType fields: {Fields(t0)}");
+
+        // EJ search: Client/{id}/EJRow takes {Value1: from, Value2: to, Value3: [EJ field names]}.
+        L("");
+        L("--- EJ (Client/{id}/EJRow) ---");
+        var ejf = await GetJson(http, "api/v1/EJField", token, ct);
+        var ejNames = KtcJson.Items(ejf.Json).Select(e => KtcJson.Str(e, "Name", "FieldName", "Description")).Where(n => n.Length > 0).Distinct().ToArray();
+        L(ejf.Ok ? $"EJ fields ({ejNames.Length}): {string.Join(", ", ejNames.Take(40))}" : $"EJField: HTTP {ejf.Status} {ejf.Message}");
+        if (ejf.Ok && KtcJson.Items(ejf.Json).FirstOrDefault() is { ValueKind: JsonValueKind.Object } f0) L($"  EJField record fields: {Fields(f0)}");
+        if (clientId != null)
+            foreach (var (label, span, names) in new[] { ("24h, all EJ fields", TimeSpan.FromHours(24), ejNames), ("24h, no fields", TimeSpan.FromHours(24), Array.Empty<string>()), ("7d, all EJ fields", TimeSpan.FromDays(7), ejNames) })
+            {
+                var ej = await PostJson(http, $"api/v1/Client/{clientId}/EJRow", token, new { Value1 = now - span, Value2 = now, Value3 = names }, ct);
+                var rows = KtcJson.Rows(ej.Json).ToList();
+                L($"POST Client/{clientId}/EJRow {label} -> {ej.Status}{(ej.Ok ? $" OK, body {ej.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + ej.Message)}");
+                if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.Object } er)
+                {
+                    L($"  row fields: {Fields(er.Value)}{(er.Key.Length > 0 ? $" (keyed by id, e.g. {er.Key})" : "")}");
+                    L($"  sample values (first row): {Samples(er.Value)}");
+                }
+                else if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.String } es)
+                    L($"  rows are strings, e.g. {CardMaskerSafe(Shorten(es.Value.GetString() ?? ""))}");
+            }
     }
 
     /// <summary>Short scalar values of a record for the report; card, track, account and secret-like fields are left out, and long digit runs are masked.</summary>
