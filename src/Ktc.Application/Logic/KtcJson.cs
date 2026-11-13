@@ -22,6 +22,50 @@ public static class KtcJson
         }
     }
 
+    /// <summary>
+    /// Reads "client id -> value" data that KTC returns in either of two shapes: an array of records ({ClientID, LastContact})
+    /// or one object keyed by client id ({"3": "2026-11-13T10:00:00", "4": ...}, as CurrentStatus/LastTimeInService does).
+    /// </summary>
+    public static IEnumerable<(string Id, JsonElement Value)> ById(JsonElement? root, params string[] idNames)
+    {
+        if (root is not { } r) yield break;
+        if (r.ValueKind == JsonValueKind.Object && IsIdMap(r))
+        {
+            foreach (var p in r.EnumerateObject()) yield return (p.Name, p.Value);
+            yield break;
+        }
+        foreach (var e in Items(r))
+        {
+            var id = Str(e, idNames);
+            if (id.Length > 0) yield return (id, e);
+        }
+    }
+
+    /// <summary>True for an object whose property names are all whole numbers (an id-keyed map rather than a record).</summary>
+    public static bool IsIdMap(JsonElement o)
+    {
+        var any = false;
+        foreach (var p in o.EnumerateObject()) { if (!long.TryParse(p.Name, out _)) return false; any = true; }
+        return any;
+    }
+
+    /// <summary>A date that is either the element itself (a string) or one of the named properties of it.</summary>
+    public static DateTime? DateValue(JsonElement e, params string[] names)
+    {
+        if (e.ValueKind == JsonValueKind.String && DateTime.TryParse(e.GetString(), CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d))
+            return d.Year <= 1901 ? null : d;
+        return Date(e, names);
+    }
+
+    /// <summary>Normalises an id: trims, and turns 3.0 / "003" style numbers into "3" so ids from different routes match.</summary>
+    public static string NormId(string id)
+    {
+        id = id.Trim();
+        if (decimal.TryParse(id, NumberStyles.Number, CultureInfo.InvariantCulture, out var n) && n == decimal.Truncate(n) && n >= 0) return ((long)n).ToString(CultureInfo.InvariantCulture);
+        return id;
+    }
+
     public static bool TryProp(JsonElement e, out JsonElement value, params string[] names)
     {
         value = default;

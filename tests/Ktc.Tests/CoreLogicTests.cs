@@ -378,3 +378,27 @@ public class BreakerTests
         Assert.Equal(6, h.Calls);   // no retries, and the breaker never opened
     }
 }
+
+public class ClientIdTests
+{
+    private static JsonElement J(string s) => JsonDocument.Parse(s).RootElement.Clone();
+
+    [Fact]
+    public void Reads_id_keyed_map()
+    {
+        var m = KtcJson.ById(J("{\"3\":\"2026-11-13T10:00:00\",\"4\":\"2026-11-13T09:00:00\"}"), "ClientID").ToList();
+        Assert.Equal(new[] { "3", "4" }, m.Select(x => x.Id));
+        Assert.Equal(new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc), KtcJson.DateValue(m[0].Value, "LastContact"));
+    }
+
+    [Fact]
+    public void Reads_record_array()
+    {
+        var m = KtcJson.ById(J("[{\"ClientID\":7,\"LastContact\":\"2026-11-13T10:00:00Z\"}]"), "ClientID").Single();
+        Assert.Equal("7", m.Id);
+        Assert.NotNull(KtcJson.DateValue(m.Value, "LastContact"));
+    }
+
+    [Theory, InlineData("3", "3"), InlineData("3.0", "3"), InlineData(" 003 ", "3"), InlineData("ATM-01", "ATM-01")]
+    public void Normalises_ids(string raw, string expected) => Assert.Equal(expected, KtcJson.NormId(raw));
+}

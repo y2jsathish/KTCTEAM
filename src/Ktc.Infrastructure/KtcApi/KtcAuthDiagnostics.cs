@@ -39,7 +39,7 @@ public class KtcAuthDiagnostics
             sb.AppendLine("                 WARNING: the service account is your own user, so its logins and yours can end each other's KTC session");
         sb.AppendLine();
         sb.AppendLine("=== As you (" + user + ") ===");
-        sb.Append(await RunAsync(user, pass, mode, app, ct));
+        sb.Append(await RunAsync(user, pass, mode, app, ct, probeFormats: true));
         if (_opt.ServiceAccount.Configured)
         {
             sb.AppendLine();
@@ -49,7 +49,7 @@ public class KtcAuthDiagnostics
         return sb.ToString();
     }
 
-    public async Task<string> RunAsync(string user, string pass, string? mode, string? app, CancellationToken ct)
+    public async Task<string> RunAsync(string user, string pass, string? mode, string? app, CancellationToken ct, bool probeFormats = false)
     {
         var sb = new StringBuilder();
         void L(string s) => sb.AppendLine(s);
@@ -89,7 +89,10 @@ public class KtcAuthDiagnostics
         await Probe(http, n++, "api/v1/LastClientContact", null, token, L, ct, "(token without the word Bearer)");
         await Probe(http, n++, "api/v1/LastClientContact", "none", token, L, ct, "(no Authorization header, for comparison)");
 
-        // 4. Clean up
+        // 4. Data shapes and request formats, to find what KTC accepts for the routes that answer 500
+        if (probeFormats) await FormatsAsync(http, token, L, ct);
+
+        // 5. Clean up
         using (var off = new HttpRequestMessage(HttpMethod.Post, "api/v1/Logoff") { Content = new StringContent("true", Encoding.UTF8, "application/json") })
         {
             off.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
@@ -99,6 +102,103 @@ public class KtcAuthDiagnostics
         }
         _log.LogInformation("KTC token check run for {User}", user);
         return sb.ToString();
+    }
+
+    private static async Task FormatsAsync(HttpClient http, string token, Action<string> L, CancellationToken ct)
+    {
+        L("");
+        L("--- Data shapes (field names; only id numbers are shown) ---");
+        var clients = await GetJson(http, "api/v1/Client?includedeleted=false", token, ct);
+        string? clientId = null;
+        if (clients.Ok && First(clients.Json) is { } c)
+        {
+            L($"Client record fields: {string.Join(", ", c.EnumerateObject().Select(p => p.Name + ":" + p.Value.ValueKind.ToString().ToLowerInvariant()))}");
+            L($"Client id-like values: {IdValues(c)}");
+            clientId = KtcJson.NormId(KtcJson.Str(c, "ClientID", "ClientId", "ID", "Id"));
+            L($"portal uses client id = {clientId}");
+        }
+        else L($"Client list: HTTP {clients.Status} {clients.Message}");
+
+        var contact = await GetJson(http, "api/v1/LastClientContact", token, ct);
+        if (contact.Ok && contact.Json is { } cj)
+        {
+            L($"LastClientContact shape: {Shorten(KtcAuthService.Describe(cj.GetRawText()))}");
+            if (First(cj) is { } f && f.ValueKind == JsonValueKind.Object) L($"LastClientContact first record id-like values: {IdValues(f)}");
+            var n = KtcJson.ById(cj, "ClientID", "ClientId", "ID", "Id").Count();
+            L($"LastClientContact entries the portal can read: {n}");
+        }
+        else L($"LastClientContact: HTTP {contact.Status} {contact.Message}");
+
+        var groups = await GetJson(http, "api/v1/Group", token, ct);
+        L(groups.Ok ? $"Groups (id: name): {string.Join("; ", KtcJson.Items(groups.Json).Where(g => KtcJson.Str(g, "ID", "Id", "GroupID").Length > 0).Take(15).Select(g => KtcJson.Str(g, "ID", "Id", "GroupID") + ": " + KtcJson.Str(g, "Name", "Description")).DefaultIfEmpty("none listed"))}"
+                    : $"Groups: HTTP {groups.Status} {groups.Message}");
+
+        L("");
+        L("--- Request formats (which variant KTC accepts) ---");
+        var now = DateTime.UtcNow;
+        string Z(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss") + "Z");
+        string Local(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss"));
+        string Day(DateTime d) => d.ToString("yyyy-MM-dd");
+        var gets = new List<string>
+        {
+            "api/v1/HistoricalError",
+            $"api/v1/HistoricalError?start={Z(now.AddHours(-1))}&end={Z(now)}",
+            $"api/v1/HistoricalError?start={Local(now.AddHours(-1))}&end={Local(now)}",
+            $"api/v1/HistoricalError?start={Day(now.AddDays(-1))}&end={Day(now.AddDays(1))}",
+        };
+        if (clientId != null)
+        {
+            gets.Add($"api/v1/Client/{clientId}/HistoricalError");
+            foreach (var (si, ei) in new[] { (0, 0), (0, 95), (0, 1439), (0, 23) })
+                gets.Add($"api/v1/Client/{clientId}/OverallAvailability?start={Z(now.AddDays(-7))}&end={Z(now)}&starttimeindex={si}&endtimeindex={ei}");
+            gets.Add($"api/v1/Client/{clientId}/OverallAvailability?start={Day(now.AddDays(-7))}&end={Day(now)}&starttimeindex=0&endtimeindex=0");
+            gets.Add($"api/v1/Client/{clientId}/Top5UnavailableReasons?start={Z(now.AddDays(-7))}&end={Z(now)}");
+        }
+        foreach (var g in gets)
+        {
+            var r = await GetJson(http, g, token, ct);
+            L($"GET  {Uri.UnescapeDataString(g)} -> {r.Status}{(r.Ok ? "" : " " + r.Message)}");
+        }
+        var groupIds = new List<int?> { null, 0, 1, 2 };
+        foreach (var gid in KtcJson.Items(groups.Json).Take(3).Select(g => KtcJson.Int(g, -1, "ID", "Id", "GroupID")).Where(x => x >= 0)) if (!groupIds.Contains(gid)) groupIds.Add(gid);
+        foreach (var gid in groupIds)
+        {
+            var t = await PostJson(http, "api/v1/Ticket/Search", token, new { BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
+                Start = now.AddDays(-7), End = now, SLAFilterType = 0, SLAHours = 0, OwnerName = (string?)null, ClientName = (string?)null, GroupID = gid, ExtraDataField = (string?)null, ExtraDataValue = (string?)null }, ct);
+            L($"POST Ticket/Search GroupID={gid?.ToString() ?? "null"} -> {t.Status}{(t.Ok ? $" ({KtcJson.Items(t.Json).Count()} rows)" : " " + t.Message)}");
+            var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = (int?)null, GroupID = gid, Start = now.AddHours(-1), End = now, ClientName = (string?)null }, ct);
+            L($"POST TransactionData/Search GroupID={gid?.ToString() ?? "null"} (last hour) -> {x.Status}{(x.Ok ? $" ({KtcJson.Items(x.Json).Count()} rows)" : " " + x.Message)}");
+        }
+    }
+
+    private static JsonElement? First(JsonElement? j) => KtcJson.Items(j).Select(e => (JsonElement?)e).FirstOrDefault();
+
+    private static string IdValues(JsonElement o) => string.Join(", ", o.EnumerateObject()
+        .Where(p => (p.Name.EndsWith("ID", StringComparison.Ordinal) || p.Name.EndsWith("Id", StringComparison.Ordinal)) && p.Value.ValueKind == JsonValueKind.Number)
+        .Select(p => p.Name + "=" + p.Value.GetRawText()));
+
+    private record JsonResult(bool Ok, int Status, JsonElement? Json, string Message);
+
+    private static Task<JsonResult> GetJson(HttpClient http, string url, string token, CancellationToken ct) => SendJson(http, new HttpRequestMessage(HttpMethod.Get, url), token, ct);
+    private static Task<JsonResult> PostJson(HttpClient http, string url, string token, object body, CancellationToken ct) =>
+        SendJson(http, new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") }, token, ct);
+
+    private static async Task<JsonResult> SendJson(HttpClient http, HttpRequestMessage req, string token, CancellationToken ct)
+    {
+        using (req)
+        {
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            var (res, info) = await Send(http, req, ct);
+            if (res == null) return new(false, 0, null, info);
+            using (res)
+            {
+                var raw = await res.Content.ReadAsStringAsync(ct);
+                JsonElement? el = null;
+                try { using var d = JsonDocument.Parse(raw); el = d.RootElement.Clone(); } catch (JsonException) { }
+                var msg = res.IsSuccessStatusCode ? "" : Shorten(KtcApiClient.KtcMessage(raw) ?? res.ReasonPhrase ?? "");
+                return new(res.IsSuccessStatusCode, (int)res.StatusCode, el, CardMaskerSafe(msg));
+            }
+        }
     }
 
     private static async Task Probe(HttpClient http, int n, string route, string? scheme, string token, Action<string> L, CancellationToken ct, string note = "")

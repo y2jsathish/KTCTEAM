@@ -42,7 +42,9 @@ public class AlertEngine : IAlertEngine
         switch (r.RuleType)
         {
             case AlertRuleType.AtmOffline:
-                foreach (var a in s.Atms.Where(a => a.Offline && (a.LastCommunicationUtc == null || (now - a.LastCommunicationUtc.Value).TotalMinutes >= r.Threshold)))
+                // Only alert on a known, old last-contact time. No contact time means the data source failed or did not match,
+                // not that the ATM is down (that produced a flood of false "ATM offline" alerts).
+                foreach (var a in s.Atms.Where(a => a.Offline && a.LastCommunicationUtc.HasValue && (now - a.LastCommunicationUtc.Value).TotalMinutes >= r.Threshold))
                     yield return new(a.Id, $"ATM offline: {a.Name}", $"{a.Name} ({a.Client}, {a.City}) has been offline since {(a.LastCommunicationUtc?.ToString("u") ?? "unknown")}. Open incidents: {a.OpenIncidents}.");
                 break;
             case AlertRuleType.HostDisconnect:
@@ -75,8 +77,11 @@ public class AlertEngine : IAlertEngine
                     yield return new($"{a.Method} {a.Endpoint}", $"KTC API slow ({a.AvgMs / 1000:0.0}s): {a.Method} {a.Endpoint}", $"Average of last calls {a.AvgMs} ms, p95 {a.P95Ms} ms (threshold {r.Threshold}s).");
                 break;
             case AlertRuleType.ApiConsecutiveFailures:
-                foreach (var a in _api.Snapshot().Where(a => a.ConsecutiveFailures > r.Threshold))
-                    yield return new($"{a.Method} {a.Endpoint}", $"KTC API failing ({a.ConsecutiveFailures} in a row): {a.Method} {a.Endpoint}", $"Last error: {a.LastError}");
+                // One grouped alert for the fleet instead of one P1 per route.
+                var failing = _api.Snapshot().Where(a => a.ConsecutiveFailures > r.Threshold).OrderByDescending(a => a.ConsecutiveFailures).ToList();
+                if (failing.Count > 0)
+                    yield return new("api-failing", $"KTC API failing on {failing.Count} route(s)",
+                        string.Join("\n", failing.Take(10).Select(a => $"{a.Method} {a.Endpoint}: {a.ConsecutiveFailures} in a row. Last error: {a.LastError}")) + (failing.Count > 10 ? $"\n…and {failing.Count - 10} more" : ""));
                 break;
         }
     }
