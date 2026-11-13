@@ -156,7 +156,7 @@ public class KtcDataService : IKtcDataService
 
     private async Task<double?> AvailabilityValueAsync(string id, DateTime from, DateTime to, CancellationToken ct)
     {
-        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}&starttimeindex=0&endtimeindex=0", ct);
+        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}&starttimeindex=0&endtimeindex=0", ct);
         if (!r.Success || r.Json is not { } j) return null;
         if (j.ValueKind == JsonValueKind.Number) return Norm(j.GetDouble());
         foreach (var e in KtcJson.Items(j))
@@ -171,7 +171,7 @@ public class KtcDataService : IKtcDataService
     public async Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default)
     {
         var tA = AvailabilityValueAsync(atmId, from, to, ct);
-        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}", ct);
+        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}", ct);
         await Task.WhenAll(tA, tR);
         var reasons = new List<(string, double)>();
         if (tR.Result.Success)
@@ -194,7 +194,7 @@ public class KtcDataService : IKtcDataService
     public async Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
-        var q = $"start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}";
+        var q = $"start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}";
         var json = await Fetch(string.IsNullOrEmpty(atmId) ? $"api/v1/HistoricalError?{q}" : $"api/v1/Client/{atmId}/HistoricalError?{q}", w, ct: ct);
         return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null && i.OpenedUtc >= from && i.OpenedUtc <= to).Select(i => i!).ToList();
     }

@@ -90,7 +90,7 @@ public class KtcAuthDiagnostics
         await Probe(http, n++, "api/v1/LastClientContact", "none", token, L, ct, "(no Authorization header, for comparison)");
 
         // 4. Data shapes and request formats, to find what KTC accepts for the routes that answer 500
-        if (probeFormats) await FormatsAsync(http, token, L, ct);
+        if (probeFormats) await FormatsAsync(http, token, L, _opt.QueryDate, ct);
 
         // 5. Clean up
         using (var off = new HttpRequestMessage(HttpMethod.Post, "api/v1/Logoff") { Content = new StringContent("true", Encoding.UTF8, "application/json") })
@@ -104,7 +104,7 @@ public class KtcAuthDiagnostics
         return sb.ToString();
     }
 
-    private static async Task FormatsAsync(HttpClient http, string token, Action<string> L, CancellationToken ct)
+    private static async Task FormatsAsync(HttpClient http, string token, Action<string> L, Func<DateTime, string> configured, CancellationToken ct)
     {
         L("");
         L("--- Data shapes (field names; only id numbers are shown) ---");
@@ -142,6 +142,7 @@ public class KtcAuthDiagnostics
         var gets = new List<string>
         {
             "api/v1/HistoricalError",
+            $"api/v1/HistoricalError?start={configured(now.AddHours(-1))}&end={configured(now)}",
             $"api/v1/HistoricalError?start={Z(now.AddHours(-1))}&end={Z(now)}",
             $"api/v1/HistoricalError?start={Local(now.AddHours(-1))}&end={Local(now)}",
             $"api/v1/HistoricalError?start={Day(now.AddDays(-1))}&end={Day(now.AddDays(1))}",

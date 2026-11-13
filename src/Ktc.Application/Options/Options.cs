@@ -33,6 +33,22 @@ public class KtcOptions
     public string[] EjFields { get; set; } = Array.Empty<string>();
     public int AvailabilityLookbackDays { get; set; } = 7;
     public int MaxParallelCalls { get; set; } = 8;
+    /// <summary>
+    /// Format of dates sent in KTC query strings (start/end). Default: whole seconds with no fraction or offset, e.g.
+    /// 2026-11-13T11:48:24. Use "o" for full ISO (2026-11-13T11:48:24.3662432Z) if your KTC server needs it.
+    /// </summary>
+    public string QueryDateFormat { get; set; } = "yyyy-MM-ddTHH:mm:ss";
+    /// <summary>Send query dates in this time zone instead of UTC (e.g. "Arabian Standard Time" or "Asia/Dubai") when KTC stores local times.</summary>
+    public string? QueryTimeZone { get; set; }
+
+    /// <summary>Formats a UTC time for a KTC query string, using QueryDateFormat and QueryTimeZone.</summary>
+    public string QueryDate(DateTime utc)
+    {
+        var t = DateTime.SpecifyKind(utc.Kind == DateTimeKind.Local ? utc.ToUniversalTime() : utc, DateTimeKind.Utc);
+        if (!string.IsNullOrWhiteSpace(QueryTimeZone))
+            try { t = TimeZoneInfo.ConvertTimeFromUtc(t, TimeZoneInfo.FindSystemTimeZoneById(QueryTimeZone)); } catch (TimeZoneNotFoundException) { } catch (InvalidTimeZoneException) { }
+        return Uri.EscapeDataString(t.ToString(string.IsNullOrWhiteSpace(QueryDateFormat) ? "yyyy-MM-ddTHH:mm:ss" : QueryDateFormat, System.Globalization.CultureInfo.InvariantCulture));
+    }
 }
 
 public class ServiceAccountOptions
