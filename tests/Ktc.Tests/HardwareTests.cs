@@ -72,6 +72,7 @@ public class HardwareNameTests
         var hw = await svc.GetHardwareAsync("19");
         Assert.NotNull(hw);
         var reader = hw!.Modules.Single(m => m.Name == "Card Reader");
+        Assert.Equal("7", reader.Id);   // the id deep links use: /Hardware?atmId=19&component=7
         Assert.Contains(reader.Properties, p => p.Name == "Device status" && p.Value == "Media jammed" && p.Status == "Fatal");
         Assert.Contains(reader.Properties, p => p.Name == "Cards retained" && p.Value == "3");
         Assert.Contains(hw.Modules.Single(m => m.Name == "Safe").Properties, p => p.Name == "Door closed" && p.Value == "Yes");

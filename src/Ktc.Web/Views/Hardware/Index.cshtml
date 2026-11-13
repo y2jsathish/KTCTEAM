@@ -11,4 +11,4 @@
 <div id="msg"></div>
 <div id="kpis" class="kpis"></div>
 <div id="modules" class="row g-3"></div>
-@section Scripts { <script src="~/js/pages/hardware.js" asp-append-version="true"></script> }
+@section Scripts { <script>window.HW_COMPONENT=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.Component));</script><script src="~/js/pages/hardware.js" asp-append-version="true"></script> }

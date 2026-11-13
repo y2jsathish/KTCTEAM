@@ -19,6 +19,6 @@ public class IncidentsController : Controller { [Audit("IncidentView", "Incident
 
 public class TicketsController : Controller { [Audit("TicketView", "Ticket workbench")] public IActionResult Index(string? ticketId, string? atmId) { ViewBag.TicketId = ticketId; ViewBag.AtmId = atmId; return View(); } }
 
-public class HardwareController : Controller { [Audit("HardwareView", "ATM hardware status")] public IActionResult Index(string? atmId) { ViewBag.AtmId = atmId; return View(); } }
+public class HardwareController : Controller { [Audit("HardwareView", "ATM hardware status")] public IActionResult Index(string? atmId, string? atm, string? component) { ViewBag.AtmId = string.IsNullOrWhiteSpace(atmId) ? atm : atmId; ViewBag.Component = component; return View(); } }
 
 public class TransactionsController : Controller { public IActionResult Index(string? id) { ViewBag.Id = id; return View(); } }

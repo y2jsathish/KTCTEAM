@@ -17,4 +17,9 @@
  }
  async function load(){try{render(await K.api('/data/atm/'+encodeURIComponent(id)));}catch(e){document.getElementById('warnings').innerHTML=`<div class="alert alert-danger">${K.esc(e.message)}</div>`;}}
  document.getElementById('fav').onclick=async()=>{const r=await K.api('/data/atm/'+encodeURIComponent(id)+'/favorite?name='+encodeURIComponent(d.atm.name),{method:'POST'});d.favorite=r.favorite;render(d);};
- load();setInterval(load,60000);K.hooks.dashboard.push(load);document.addEventListener('ktc-theme',()=>d&&render(d));})();
+ const hcls={OK:'ok',Warning:'warn',Fatal:'crit',Unknown:'unknown'};
+ async function loadHw(){const box=document.getElementById('hw'),all=document.getElementById('hwAll'),base='/Hardware?atmId='+encodeURIComponent(id);all.href=base;
+  try{const r=await K.api('/data/hardware?'+K.qs({atmId:id}));
+   box.innerHTML=r.modules.length?r.modules.map(m=>`<a class="hw-chip text-decoration-none" href="${base}&component=${encodeURIComponent(m.id)}" title="${K.esc(m.name)}: ${K.esc(m.status)} - click for details"><span class="sbadge ${hcls[m.status]||'unknown'}">${K.esc(m.status)}</span> ${K.esc(m.name)}</a>`).join(''):'<span class="text-muted small">KTC returned no component status for this ATM.</span>';
+  }catch(e){box.innerHTML=`<span class="text-muted small">Hardware status unavailable: ${K.esc(e.message)}</span>`;}}
+ load();loadHw();setInterval(load,60000);setInterval(loadHw,60000);K.hooks.dashboard.push(load);document.addEventListener('ktc-theme',()=>d&&render(d));})();
