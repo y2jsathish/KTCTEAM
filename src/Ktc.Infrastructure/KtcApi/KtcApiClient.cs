@@ -21,6 +21,7 @@ public static class KtcRequestKeys
 /// <summary>Reusable KTC service layer: token injection, 401 re-auth, retry/breaker/timeout (via the HttpClient pipeline), logging, caching.</summary>
 public class KtcApiClient : IKtcApiClient
 {
+    private static readonly TimeSpan DeniedFor = TimeSpan.FromMinutes(5);
     private readonly HttpClient _http;
     private readonly IKtcTokenProvider _tokens;
     private readonly IMemoryCache _cache;
@@ -35,6 +36,10 @@ public class KtcApiClient : IKtcApiClient
         var cacheKey = options.CacheFor.HasValue && method == HttpMethod.Get ? "ktc:" + relativeUrl : null;
         if (cacheKey != null && _cache.TryGetValue(cacheKey, out KtcResponse? cached) && cached != null) return cached;
 
+        // A route that KTC rejected for this account even with a freshly issued token is not retried on every refresh cycle.
+        var deniedKey = "ktc-denied:" + _tokens.Identity + ":" + method + " " + ApiHealthTracker.Normalize(relativeUrl);
+        if (!options.BypassAuth && options.Token == null && _cache.TryGetValue(deniedKey, out KtcResponse? denied) && denied != null) return denied;
+
         var token = options.Token;
         if (token == null && !options.BypassAuth)
         {
@@ -47,6 +52,14 @@ public class KtcApiClient : IKtcApiClient
         {
             var fresh = await _tokens.RefreshAsync(token, ct);
             if (fresh != null) resp = await ExecuteOnce(method, relativeUrl, body, options, fresh, ct);
+            if (resp.StatusCode == 401 && fresh != null)
+            {
+                _log.LogWarning("KTC {Method} {Url} still 401 with a fresh token for {Identity}: KTC is refusing this route for that account. Pausing it for {Minutes} min. Open /diag/ktc-token to compare accounts.",
+                    method, relativeUrl, _tokens.Identity, DeniedFor.TotalMinutes);
+                var msg = KtcResponse.Fail($"KTC refused {method} {relativeUrl.Split('?')[0]} for {_tokens.Identity} (HTTP 401 even after a fresh login). Paused for {DeniedFor.TotalMinutes:0} min.", 401, resp.ElapsedMs);
+                _cache.Set(deniedKey, msg, DeniedFor);
+                return msg;
+            }
         }
         if (cacheKey != null && resp.Success) _cache.Set(cacheKey, resp, options.CacheFor!.Value);
         return resp;
@@ -73,7 +86,7 @@ public class KtcApiClient : IKtcApiClient
                 try { using var d = JsonDocument.Parse(raw); el = d.RootElement.Clone(); } catch (JsonException) { /* plain text body */ }
             }
             var ok = res.IsSuccessStatusCode;
-            if (!ok) _log.LogWarning("KTC {Method} {Url} -> {Status} in {Ms}ms", method, url, (int)res.StatusCode, sw.ElapsedMilliseconds);
+            if (!ok) _log.LogWarning("KTC {Method} {Url} -> {Status} {Reason} in {Ms}ms as {Identity}", method, url, (int)res.StatusCode, res.ReasonPhrase, sw.ElapsedMilliseconds, _tokens.Identity);
             else _log.LogDebug("KTC {Method} {Url} -> {Status} in {Ms}ms", method, url, (int)res.StatusCode, sw.ElapsedMilliseconds);
             return new KtcResponse(ok, (int)res.StatusCode, el, raw, ok ? null : $"HTTP {(int)res.StatusCode} {res.ReasonPhrase}", sw.ElapsedMilliseconds);
         }

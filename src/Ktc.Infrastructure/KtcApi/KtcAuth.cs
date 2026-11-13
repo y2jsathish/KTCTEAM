@@ -228,6 +228,8 @@ public class KtcTokenProvider : IKtcTokenProvider
     private HttpContext? Http => KtcTokenScope.IsServiceForced ? null : _ctx.HttpContext;
     private bool Interactive => Http?.User?.Identity?.IsAuthenticated == true && Http.Session != null;
 
+    public string Identity => Interactive ? "user " + Http!.User.Identity!.Name : "service account" + (_opt.ServiceAccount.Configured ? " " + _opt.ServiceAccount.Username : " (not configured)");
+
     public Task<string?> GetTokenAsync(CancellationToken ct = default) => Interactive ? UserTokenAsync(false, null, ct) : ServiceTokenAsync(false, null, ct);
     public Task<string?> RefreshAsync(CancellationToken ct = default) => RefreshAsync(null, ct);
     public Task<string?> RefreshAsync(string? failedToken, CancellationToken ct = default) => Interactive ? UserTokenAsync(true, failedToken, ct) : ServiceTokenAsync(true, failedToken, ct);

@@ -44,6 +44,8 @@ public interface IKtcTokenProvider
     Task<string?> RefreshAsync(CancellationToken ct = default);
     /// <summary>Refresh after KTC rejected <paramref name="failedToken"/> with 401. Returns the current token without logging in again when another call already replaced it.</summary>
     Task<string?> RefreshAsync(string? failedToken, CancellationToken ct = default) => RefreshAsync(ct);
+    /// <summary>Who KTC calls run as right now ("user DOMAIN\\x" or "service account"), for logs and per-account caches.</summary>
+    string Identity => "default";
 }
 
 public interface IKtcAuthService
