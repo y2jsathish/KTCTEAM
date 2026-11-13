@@ -13,7 +13,7 @@
   if(!atm.value.trim()){m.innerHTML='<div class="alert alert-warning">ATM ID or name is required – the KTC EJ API is queried per ATM.</div>';return;}
   document.getElementById('results').hidden=true;m.innerHTML='<div class="text-muted text-center">Searching journal…</div>';
   try{data=await K.api('/data/ej?'+params());m.innerHTML=data.truncated?'<div class="alert alert-info py-2">Showing first 5000 entries – narrow the filters.</div>':'';
-   if(!data.entries.length){m.innerHTML+='<div class="alert alert-secondary">No journal entries match.</div>';return;}
+   if(!data.entries.length){m.innerHTML+=(card.value.trim()||seq.value.trim()||text.value.trim())?'<div class="alert alert-secondary">No journal entries match.</div>':'<div class="alert alert-secondary">KTC has no EJ data for this ATM in the selected range. Not every ATM uploads EJ; try a wider range (up to 7 days) or another ATM.</div>';return;}
    document.getElementById('results').hidden=false;
    document.getElementById('txList').innerHTML=data.transactions.map(t=>{const bad=t.timeline.some(s=>s.level==='danger');return `<div class="tx border rounded p-2 mb-2" style="cursor:pointer" data-no="${t.no}"><div class="d-flex justify-content-between"><b>#${t.no}</b><span class="sbadge ${bad?'crit':'ok'}">${bad?'Issue':'OK'}</span></div><div class="small text-muted">${K.local(t.start)} · ${t.count} lines</div></div>`;}).join('');
    document.querySelectorAll('#txList .tx').forEach(e=>e.onclick=()=>show(+e.dataset.no));show(data.transactions[0]?.no??null);
