@@ -61,7 +61,7 @@ public class KtcDataService : IKtcDataService
             var map = new Dictionary<string, ClientRec>();
             foreach (var e in KtcJson.Items(tc.Result))
             {
-                var id = KtcJson.Str(e, "ID", "Id", "ClientID");
+                var id = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "ID", "Id"));
                 if (id.Length == 0 || KtcJson.Bool(e, false, "Deleted", "IsDeleted")) continue;
                 br.TryGetValue(KtcJson.Str(e, "BranchID", "BranchId"), out var b);
                 var rid = KtcJson.Str(e, "RegionID", "RegionId");
@@ -84,12 +84,14 @@ public class KtcDataService : IKtcDataService
         await Task.WhenAll(tLookup, tContact, tInc, tTk);
 
         var contacts = new Dictionary<string, DateTime>();
-        var contactsKnown = tContact.Result != null;
-        foreach (var e in KtcJson.Items(tContact.Result))
+        foreach (var (rawId, v) in KtcJson.ById(tContact.Result, "ClientID", "ClientId", "ID", "Id"))
         {
-            var id = KtcJson.Str(e, "ClientID", "ID", "Id"); var d = KtcJson.Date(e, "LastContact", "LastClientContact", "LastContactTime", "Timestamp", "Time");
-            if (id.Length > 0 && d.HasValue) contacts[id] = d.Value;
+            var d = KtcJson.DateValue(v, "LastContact", "LastClientContact", "LastContactTime", "LastContactTimeStamp", "Timestamp", "TimeStamp", "Time", "DateTime");
+            if (d.HasValue) contacts[KtcJson.NormId(rawId)] = d.Value;
         }
+        // Only trust contact ages when the response could be matched to the client list; otherwise every ATM would look offline.
+        var contactsKnown = contacts.Count > 0 && tLookup.Result.Keys.Any(contacts.ContainsKey);
+        if (tContact.Result != null && !contactsKnown) w.Add("GET api/v1/LastClientContact: response could not be matched to the client list, so contact times are ignored (run /diag/ktc-token and send the report)");
         var incByAtm = tInc.Result.Where(i => i.IsOpen).ToLookup(i => i.AtmId);
         var tkByAtm = tTk.Result.Where(t => t.IsOpen).ToLookup(t => t.AtmId);
         var avail = await AvailabilityBatchAsync(tLookup.Result.Keys, w, ct);
@@ -154,7 +156,7 @@ public class KtcDataService : IKtcDataService
 
     private async Task<double?> AvailabilityValueAsync(string id, DateTime from, DateTime to, CancellationToken ct)
     {
-        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}&starttimeindex=0&endtimeindex=0", ct);
+        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}&starttimeindex=0&endtimeindex=0", ct);
         if (!r.Success || r.Json is not { } j) return null;
         if (j.ValueKind == JsonValueKind.Number) return Norm(j.GetDouble());
         foreach (var e in KtcJson.Items(j))
@@ -169,7 +171,7 @@ public class KtcDataService : IKtcDataService
     public async Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default)
     {
         var tA = AvailabilityValueAsync(atmId, from, to, ct);
-        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}", ct);
+        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}", ct);
         await Task.WhenAll(tA, tR);
         var reasons = new List<(string, double)>();
         if (tR.Result.Success)
@@ -192,7 +194,7 @@ public class KtcDataService : IKtcDataService
     public async Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
-        var q = $"start={Uri.EscapeDataString(from.ToString("o"))}&end={Uri.EscapeDataString(to.ToString("o"))}";
+        var q = $"start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}";
         var json = await Fetch(string.IsNullOrEmpty(atmId) ? $"api/v1/HistoricalError?{q}" : $"api/v1/Client/{atmId}/HistoricalError?{q}", w, ct: ct);
         return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null && i.OpenedUtc >= from && i.OpenedUtc <= to).Select(i => i!).ToList();
     }
@@ -201,7 +203,7 @@ public class KtcDataService : IKtcDataService
     {
         var id = KtcJson.Str(e, "ID", "Id", "ErrorID", "ActiveErrorID");
         if (id.Length == 0) return null;
-        var atm = KtcJson.Str(e, "ClientID", "ClientId", "AtmID");
+        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "AtmID"));
         lookup.TryGetValue(atm, out var c);
         var desc = KtcJson.Str(e, "ErrorCodeTypeName", "Description", "ErrorText", "Name", "Text", "ErrorDescription");
         var level = KtcJson.Int(e, 3, "Level", "ErrorLevel", "Severity", "Priority");
@@ -268,7 +270,7 @@ public class KtcDataService : IKtcDataService
     {
         var id = KtcJson.Str(e, "ID", "Id", "TicketID");
         if (id.Length == 0) return null;
-        var atm = KtcJson.Str(e, "ClientID", "ClientId"); lookup.TryGetValue(atm, out var c);
+        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId")); lookup.TryGetValue(atm, out var c);
         var created = KtcJson.Date(e, "TimeCreated", "CreationDate", "Created") ?? DateTime.UtcNow;
         var updated = KtcJson.Date(e, "TimeUpdated", "Updated");
         var closed = KtcJson.Date(e, "TimeClosed", "ClosedDate", "Closed");
@@ -335,8 +337,8 @@ public class KtcDataService : IKtcDataService
     {
         var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "UUID");
         if (id.Length == 0) return null;
-        var atm = KtcJson.Str(e, "ClientID", "ClientId");
-        if (atm.Length == 0 && parent is { } p) atm = KtcJson.Str(p, "ClientID", "ClientId");
+        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId"));
+        if (atm.Length == 0 && parent is { } p) atm = KtcJson.NormId(KtcJson.Str(p, "ClientID", "ClientId"));
         lookup.TryGetValue(atm, out var c);
         var result = KtcJson.Str(e, "CompletionCodeName", "CompletionCode", "Result", "StatusName", "Status", "Completion");
         var reason = KtcJson.Str(e, "ReasonName", "Reason", "ErrorText", "ErrorDescription");

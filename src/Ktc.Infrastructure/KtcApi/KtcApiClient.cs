@@ -24,6 +24,8 @@ public class KtcApiClient : IKtcApiClient
     private static readonly TimeSpan DeniedFor = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ForbiddenFor = TimeSpan.FromMinutes(15);
 
+    private static string Trunc(string s, int n) => s.Length > n ? s[..n] + "…" : s;
+
     /// <summary>KTC errors come back as {"Message":"..."}; returns that text, trimmed.</summary>
     public static string? KtcMessage(string? raw)
     {
@@ -110,9 +112,11 @@ public class KtcApiClient : IKtcApiClient
                 try { using var d = JsonDocument.Parse(raw); el = d.RootElement.Clone(); } catch (JsonException) { /* plain text body */ }
             }
             var ok = res.IsSuccessStatusCode;
-            if (!ok) _log.LogWarning("KTC {Method} {Url} -> {Status} {Reason} in {Ms}ms as {Identity}", method, url, (int)res.StatusCode, res.ReasonPhrase, sw.ElapsedMilliseconds, _tokens.Identity);
+            var why = ok ? null : KtcMessage(raw);
+            if (!ok) _log.LogWarning("KTC {Method} {Url} -> {Status} {Reason} in {Ms}ms as {Identity}: {Why}{Body}", method, url, (int)res.StatusCode, res.ReasonPhrase, sw.ElapsedMilliseconds, _tokens.Identity,
+                why ?? "(empty body)", body != null && (int)res.StatusCode >= 500 ? " | request body: " + Trunc(body is string bs ? bs : JsonSerializer.Serialize(body), 400) : "");
             else _log.LogDebug("KTC {Method} {Url} -> {Status} in {Ms}ms", method, url, (int)res.StatusCode, sw.ElapsedMilliseconds);
-            return new KtcResponse(ok, (int)res.StatusCode, el, raw, ok ? null : $"HTTP {(int)res.StatusCode} {res.ReasonPhrase}", sw.ElapsedMilliseconds);
+            return new KtcResponse(ok, (int)res.StatusCode, el, raw, ok ? null : $"HTTP {(int)res.StatusCode} {res.ReasonPhrase}{(why is { Length: > 0 } ? ": " + Trunc(why, 160) : "")}", sw.ElapsedMilliseconds);
         }
         catch (BrokenCircuitException)
         {

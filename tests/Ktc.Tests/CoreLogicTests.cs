@@ -339,7 +339,7 @@ public class PermissionAndDefaultsTests
     public void HistoricalError_without_query_gets_last_24h()
     {
         var q = ApiCatalogRules.DefaultQuery("api/v1/HistoricalError", new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc));
-        Assert.StartsWith("start=2026-11-12T10", Uri.UnescapeDataString(q!));
+        Assert.Equal("start=2026-11-12T10:00:00&end=2026-11-13T10:00:00", Uri.UnescapeDataString(q!));
         Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/HistoricalError?start=x", DateTime.UtcNow));
         Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/Region", DateTime.UtcNow));
     }
@@ -376,5 +376,44 @@ public class BreakerTests
             Assert.Equal(500, r.StatusCode);
         }
         Assert.Equal(6, h.Calls);   // no retries, and the breaker never opened
+    }
+}
+
+public class ClientIdTests
+{
+    private static JsonElement J(string s) => JsonDocument.Parse(s).RootElement.Clone();
+
+    [Fact]
+    public void Reads_id_keyed_map()
+    {
+        var m = KtcJson.ById(J("{\"3\":\"2026-11-13T10:00:00\",\"4\":\"2026-11-13T09:00:00\"}"), "ClientID").ToList();
+        Assert.Equal(new[] { "3", "4" }, m.Select(x => x.Id));
+        Assert.Equal(new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc), KtcJson.DateValue(m[0].Value, "LastContact"));
+    }
+
+    [Fact]
+    public void Reads_record_array()
+    {
+        var m = KtcJson.ById(J("[{\"ClientID\":7,\"LastContact\":\"2026-11-13T10:00:00Z\"}]"), "ClientID").Single();
+        Assert.Equal("7", m.Id);
+        Assert.NotNull(KtcJson.DateValue(m.Value, "LastContact"));
+    }
+
+    [Theory, InlineData("3", "3"), InlineData("3.0", "3"), InlineData(" 003 ", "3"), InlineData("ATM-01", "ATM-01")]
+    public void Normalises_ids(string raw, string expected) => Assert.Equal(expected, KtcJson.NormId(raw));
+}
+
+public class QueryDateTests
+{
+    [Fact]
+    public void Default_query_date_has_no_fraction_or_offset() =>
+        Assert.Equal("2026-11-13T11:48:24", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions().QueryDate(new DateTime(2026, 11, 13, 11, 48, 24, 366, DateTimeKind.Utc))));
+
+    [Fact]
+    public void Query_date_can_use_iso_and_local_time()
+    {
+        var o = new Ktc.Application.Options.KtcOptions { QueryDateFormat = "yyyy-MM-ddTHH:mm:ss", QueryTimeZone = "Asia/Dubai" };
+        Assert.Equal("2026-11-13T15:48:24", Uri.UnescapeDataString(o.QueryDate(new DateTime(2026, 11, 13, 11, 48, 24, DateTimeKind.Utc))));
+        Assert.EndsWith("Z", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions { QueryDateFormat = "o" }.QueryDate(DateTime.UtcNow)));
     }
 }
