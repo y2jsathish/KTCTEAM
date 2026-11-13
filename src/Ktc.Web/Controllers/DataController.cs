@@ -148,10 +148,19 @@ public class DataController : ControllerBase
         var failed = all.Where(x => !x.Success).ToList();
         _log.LogInformation("Transaction search atm={Atm} client={Client} region={Region} status={Status} id={Id} {From:u}..{To:u}: {Total} transactions, {Shown} shown",
             atmId, client, region, status, id, f, t, all.Count, rows.Count);
+        string? hint = null;
+        if (all.Count == 0 && !string.IsNullOrWhiteSpace(atmId))
+        {
+            // Say whether the ATM simply had no transactions, and which ATMs did.
+            var any = await _data.SearchTransactionsAsync(new TransactionQuery(null, null, null, f, t, null), ct);
+            var top = any.GroupBy(x => x.AtmName.Length > 0 ? x.AtmName : x.AtmId).OrderByDescending(g => g.Count()).Take(8).Select(g => $"{g.Key} ({g.Count()})").ToList();
+            hint = any.Count == 0 ? "KTC returned no transactions at all for this period."
+                 : $"No transactions for ATM \"{atmId.Trim()}\" in this period. {any.Count} transactions came from: {string.Join(", ", top)}.";
+        }
         return Ok(new
         {
             data = rows.Take(2000).Select(x => new { x.Id, x.AtmId, x.AtmName, x.Client, x.Region, x.Type, x.Status, x.Amount, x.Currency, x.TimeUtc, x.ResponseMs, x.ErrorCode, x.FailureCategory }),
-            total = all.Count, successful = all.Count - failed.Count, failed = failed.Count, truncated = rows.Count > 2000,
+            hint, total = all.Count, successful = all.Count - failed.Count, failed = failed.Count, truncated = rows.Count > 2000,
             avgResponseMs = all.Count == 0 ? 0 : (int)all.Average(x => x.ResponseMs),
             byCategory = failed.GroupBy(x => x.FailureCategory.Length == 0 ? "Other" : x.FailureCategory).ToDictionary(g => g.Key, g => g.Count()),
             byError = failed.GroupBy(x => x.ErrorCode).OrderByDescending(g => g.Count()).Take(10).Select(g => new { error = g.Key, count = g.Count() }),

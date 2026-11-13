@@ -226,6 +226,23 @@ public class KtcDataService : IKtcDataService
         });
     }
 
+    /// <summary>
+    /// KTC client ids an ATM search text refers to: the id itself, or any ATM whose name, alias, address or branch contains the
+    /// text (case-insensitive). Transactions and EJ carry only the client id, so names must be resolved through the client list.
+    /// </summary>
+    private static HashSet<string> MatchAtms(Dictionary<string, ClientRec> lookup, string text)
+    {
+        var t = text.Trim(); var norm = KtcJson.NormId(t);
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (lookup.ContainsKey(norm) || long.TryParse(norm, out _)) ids.Add(norm);
+        foreach (var c in lookup.Values.Where(c => Exact(c, t))) ids.Add(c.Id);
+        foreach (var c in lookup.Values)
+            if (new[] { c.Name, c.Alias, c.Address, c.Branch }.Any(v => v.Length > 0 && v.Contains(t, StringComparison.OrdinalIgnoreCase))) ids.Add(c.Id);
+        return ids;
+    }
+    private static bool Exact(ClientRec c, string t) =>
+        c.Name.Equals(t, StringComparison.OrdinalIgnoreCase) || c.Alias.Equals(t, StringComparison.OrdinalIgnoreCase);
+
     // ---------------- ATMs ----------------
     public async Task<(IReadOnlyList<AtmDto> Atms, List<string> Warnings)> GetAtmsAsync(CancellationToken ct = default)
     {
@@ -409,7 +426,12 @@ public class KtcDataService : IKtcDataService
         }
         else all = await TicketsCore(w, ct);
 
-        if (!string.IsNullOrWhiteSpace(q.AtmId)) all = all.Where(t => t.AtmId == q.AtmId || t.AtmName.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.AtmId))
+        {
+            var ids = MatchAtms(await LookupAsync(new Warn(), ct), q.AtmId);
+            var text = q.AtmId.Trim();
+            all = all.Where(t => ids.Contains(t.AtmId) || t.AtmName.Contains(text, StringComparison.OrdinalIgnoreCase));
+        }
         if (!string.IsNullOrWhiteSpace(q.TicketId)) all = all.Where(t => t.Id.Contains(q.TicketId, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(q.Client)) all = all.Where(t => t.Client.Contains(q.Client, StringComparison.OrdinalIgnoreCase));
         return all.OrderByDescending(t => t.CreatedUtc).ToList();
@@ -480,7 +502,12 @@ public class KtcDataService : IKtcDataService
             return res;
         });
         IEnumerable<TransactionDto> r = all;
-        if (!string.IsNullOrWhiteSpace(q.AtmId)) r = r.Where(t => t.AtmId == q.AtmId || t.AtmName.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(q.AtmId))
+        {
+            var ids = MatchAtms(await LookupAsync(new Warn(), ct), q.AtmId);
+            var text = q.AtmId.Trim();
+            r = r.Where(t => ids.Contains(t.AtmId) || t.AtmName.Contains(text, StringComparison.OrdinalIgnoreCase));
+        }
         if (!string.IsNullOrWhiteSpace(q.Client)) r = r.Where(t => t.Client.Equals(q.Client, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(q.Region)) r = r.Where(t => t.Region.Equals(q.Region, StringComparison.OrdinalIgnoreCase));
         if (q.Success.HasValue) r = r.Where(t => t.Success == q.Success.Value);
@@ -592,10 +619,12 @@ public class KtcDataService : IKtcDataService
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
         var norm = KtcJson.NormId(q.AtmId);
+        var matches = MatchAtms(lookup, q.AtmId);
         var id = lookup.ContainsKey(norm) ? norm
-               : lookup.Values.FirstOrDefault(c => c.Name.Equals(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id
-               ?? lookup.Values.FirstOrDefault(c => c.Name.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id
+               : lookup.Values.FirstOrDefault(c => Exact(c, q.AtmId.Trim()))?.Id
+               ?? matches.FirstOrDefault()
                ?? (long.TryParse(norm, out _) ? norm : null);
+        if (matches.Count > 1 && !lookup.ContainsKey(norm)) _log.LogInformation("EJ search: '{Atm}' matches {Count} ATMs; using {Id}", q.AtmId, matches.Count, id);
         if (id == null) { _log.LogInformation("EJ search: no ATM matches '{Atm}'", q.AtmId); return Array.Empty<EjEntryDto>(); }
 
         // KTC docs: EJRow body is {Value1: start, Value2: end, Value3: [app names to EXCLUDE]}, dates as ISO (yyyyMMddHHmmssfff fails here).
