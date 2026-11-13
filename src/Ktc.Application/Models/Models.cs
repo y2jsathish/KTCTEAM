@@ -162,3 +162,10 @@ public record ApiExecutionResult(bool Success, int StatusCode, string? Error, st
 
 public record ImportedEndpoint(string Module, string Name, string Method, string RelativeUrl, string? RequestBody, string? Description);
 public record ImportSummary(int Modules, int Endpoints, int Added, int Updated, int Enabled, int DisabledMutating, int SensitiveBlocked, int Widgets);
+
+// ---- Hardware status (per ATM component) ----
+public record HardwareProperty(string Name, string Value, string Status, DateTime? UpdatedUtc);
+
+public record HardwareModule(string Id, string Name, string Status, DateTime? UpdatedUtc, IReadOnlyList<HardwareProperty> Properties, IReadOnlyList<string> Errors);
+
+public record AtmHardware(string AtmId, string AtmName, string Status, DateTime? UpdatedUtc, IReadOnlyList<HardwareModule> Modules, IReadOnlyList<string> Warnings);

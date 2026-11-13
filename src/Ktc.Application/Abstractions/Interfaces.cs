@@ -69,6 +69,8 @@ public interface IKtcDataService
     Task<TransactionDto?> GetTransactionAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery query, CancellationToken ct = default);
     Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default);
+    /// <summary>Current status of each hardware component (card reader, dispenser, printers, ...) of one ATM.</summary>
+    Task<AtmHardware?> GetHardwareAsync(string atmId, CancellationToken ct = default);
 }
 
 // ---- Services ----

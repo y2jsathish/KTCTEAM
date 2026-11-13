@@ -341,6 +341,120 @@ public class KtcDataService : IKtcDataService
         static double Norm(double d) => Math.Round(Math.Clamp(d <= 1.0 && d > 0 ? d * 100 : d, 0, 100), 2);
     }
 
+    // ---------------- hardware ----------------
+    /// <summary>
+    /// Per-component status of one ATM. KTC keeps the current value of every component property in
+    /// GET Client/{id}/CurrentStatus (records like {CompId, PropId, VID, ManualValue, NumericValue, UseNumeric, Timestamp});
+    /// component and property names come from ComponentList / PropertyList, and open errors are pinned to the component they mention.
+    /// </summary>
+    public async Task<AtmHardware?> GetHardwareAsync(string atmId, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+        lookup.TryGetValue(id, out var atm);
+
+        var tStatus = Fetch($"api/v1/Client/{id}/CurrentStatus", w, ct: ct);
+        var tComp = ComponentNamesAsync(w, ct); var tProp = PropertyNamesAsync(w, ct);
+        var tInc = GetIncidentsInternal(true, w, ct);
+        await Task.WhenAll(tStatus, tComp, tProp, tInc);
+        var comps = tComp.Result; var props = tProp.Result;
+
+        var byComp = new Dictionary<string, List<HardwareProperty>>();
+        var compTime = new Dictionary<string, DateTime?>();
+        foreach (var (key, e) in KtcJson.Rows(tStatus.Result))
+        {
+            if (e.ValueKind != JsonValueKind.Object) continue;
+            var cid = KtcJson.NormId(KtcJson.Str(e, "CompId", "ComponentID", "ComponentId", "CompID"));
+            var compName = KtcJson.Str(e, "ComponentName", "Component") is { Length: > 0 } cn ? cn : comps.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
+            var pid = KtcJson.NormId(KtcJson.Str(e, "PropId", "PropertyID", "PropertyId", "PropID"));
+            var pinfo = props.GetValueOrDefault(pid);
+            var propName = KtcJson.Str(e, "PropertyName", "Property") is { Length: > 0 } pn ? pn : pinfo?.Name ?? (pid.Length > 0 ? "Property " + pid : key);
+            var value = HardwareValue(e, pinfo);
+            var when = KtcJson.Date(e, "Timestamp", "TimeStamp", "LastUpdated", "Time");
+            var status = HardwareStatusRules.Classify(value);
+            if (status == HardwareStatusRules.Unknown && HardwareStatusRules.Classify(propName) is var byName && byName != HardwareStatusRules.Unknown
+                && KtcJson.Bool(e, false, "UseNumeric") && KtcJson.Dbl(e, 0, "NumericValue") is var nv)
+                status = nv == 0 ? HardwareStatusRules.Ok : byName;   // e.g. "Fatal error count" = 0 is healthy
+            var list = byComp.TryGetValue(compName, out var l) ? l : byComp[compName] = new List<HardwareProperty>();
+            list.Add(new HardwareProperty(propName, value, status, when));
+            if (when > (compTime.GetValueOrDefault(compName) ?? DateTime.MinValue)) compTime[compName] = when;
+        }
+
+        // Open errors of this ATM, pinned to the component whose name (or a known keyword) the error text mentions.
+        var errors = tInc.Result.Where(i => i.AtmId == id).ToList();
+        var errByModule = new Dictionary<string, List<(string Text, string Status)>>();
+        foreach (var i in errors)
+        {
+            var text = i.Description.Length > 0 ? i.Description : i.ErrorCode;
+            var module = byComp.Keys.FirstOrDefault(m => HardwareStatusRules.Mentions(text, m)) ?? HardwareStatusRules.ModuleFor(text) ?? "Other active errors";
+            (errByModule.TryGetValue(module, out var el) ? el : errByModule[module] = new()).Add(($"{text} (since {i.OpenedUtc:yyyy-MM-dd HH:mm} UTC)", HardwareStatusRules.FromSeverity((int)i.Severity)));
+        }
+
+        var modules = byComp.Keys.Union(errByModule.Keys).Select(m =>
+        {
+            var ps = byComp.GetValueOrDefault(m) ?? new List<HardwareProperty>();
+            var es = errByModule.GetValueOrDefault(m) ?? new();
+            var st = HardwareStatusRules.Worst(ps.Select(p => p.Status).Concat(es.Select(x => x.Status)));
+            return new HardwareModule(m, m, st, compTime.GetValueOrDefault(m), ps.OrderByDescending(p => HardwareStatusRules.Rank(p.Status)).ThenBy(p => p.Name).ToList(), es.Select(x => x.Text).ToList());
+        }).OrderByDescending(m => HardwareStatusRules.Rank(m.Status)).ThenBy(m => m.Name).ToList();
+
+        var warnings = w.ToList();
+        if (modules.Count == 0 && tStatus.Result != null) warnings.Add("KTC returned no component status for this ATM.");
+        return new AtmHardware(id, atm?.Name ?? id, HardwareStatusRules.Worst(modules.Select(m => m.Status)), compTime.Values.Where(v => v.HasValue).DefaultIfEmpty().Max(), modules, warnings);
+    }
+
+    private sealed record PropInfo(string Name, Dictionary<string, string> Values);
+
+    /// <summary>The readable value of a CurrentStatus record: ManualValue, NumericValue (when UseNumeric), or the VID looked up in the property's value list.</summary>
+    private static string HardwareValue(JsonElement e, PropInfo? p)
+    {
+        var named = KtcJson.Str(e, "ValueName", "StatusName", "Value", "StringValue", "Text");
+        if (named.Length > 0) return named;
+        var manual = KtcJson.Str(e, "ManualValue");
+        if (KtcJson.Bool(e, false, "UseNumeric")) return KtcJson.Str(e, "NumericValue");
+        if (manual.Length > 0) return manual;
+        var vid = KtcJson.NormId(KtcJson.Str(e, "VID", "ValueID", "ValueId"));
+        if (vid.Length > 0 && p != null && p.Values.TryGetValue(vid, out var vn)) return vn;
+        var num = KtcJson.Str(e, "NumericValue");
+        return vid.Length > 0 && vid != "-1" ? "Value " + vid : num;
+    }
+
+    /// <summary>KTC component id -> name (GET ComponentList).</summary>
+    private Task<Dictionary<string, string>> ComponentNamesAsync(Warn w, CancellationToken ct) =>
+        Cached("hw-components", TimeSpan.FromMinutes(30), async () =>
+        {
+            var json = await Fetch("api/v1/ComponentList?name=", w, ct: ct);
+            return KtcJson.Rows(json).Select(r => (Id: KtcJson.NormId(KtcJson.Str(r.Value, "ID", "Id", "ComponentID") is { Length: > 0 } x ? x : r.Key), Name: KtcJson.Str(r.Value, "Name", "DisplayName", "Description", "ComponentName")))
+                .Where(x => x.Id.Length > 0 && x.Name.Length > 0).GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First().Name);
+        });
+
+    /// <summary>KTC property id -> name and, when KTC lists them, value id -> value name (GET PropertyList).</summary>
+    private Task<Dictionary<string, PropInfo>> PropertyNamesAsync(Warn w, CancellationToken ct) =>
+        Cached("hw-properties", TimeSpan.FromMinutes(30), async () =>
+        {
+            var json = await Fetch("api/v1/PropertyList?name=", w, ct: ct);
+            var map = new Dictionary<string, PropInfo>();
+            foreach (var (k, e) in KtcJson.Rows(json))
+            {
+                var id = KtcJson.NormId(KtcJson.Str(e, "ID", "Id", "PropertyID") is { Length: > 0 } x ? x : k);
+                var name = KtcJson.Str(e, "Name", "DisplayName", "Description", "PropertyName");
+                if (id.Length == 0 || name.Length == 0) continue;
+                var values = new Dictionary<string, string>();
+                foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object))
+                    foreach (var (vk, v) in KtcJson.Rows(p.Value))
+                    {
+                        var vid = KtcJson.NormId(KtcJson.Str(v, "ID", "Id", "VID", "ValueID") is { Length: > 0 } y ? y : vk);
+                        var vn = v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : KtcJson.Str(v, "Name", "Value", "DisplayName", "Description");
+                        if (vid.Length > 0 && vn.Length > 0) values.TryAdd(vid, vn);
+                    }
+                map.TryAdd(id, new PropInfo(name, values));
+            }
+            return map;
+        });
+
     public async Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default)
     {
         var tA = AvailabilityValueAsync(atmId, from, to, ct);

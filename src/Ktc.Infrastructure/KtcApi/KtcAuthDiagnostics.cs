@@ -281,6 +281,44 @@ public class KtcAuthDiagnostics
         }
         if (ejClients.FirstOrDefault() is { } c30)
             await Ej($"api/v1/Client/{c30}/EJRow", "30d", new { Value1 = now.AddDays(-30), Value2 = now, Value3 = Array.Empty<string>() });
+
+        // Hardware Status tab: per-component current values.
+        L("");
+        L("--- Hardware (Client/{id}/CurrentStatus, ComponentList, PropertyList) ---");
+        async Task Shape(string route, int samples = 3)
+        {
+            var x = await GetJson(http, route, token, ct);
+            var rows = KtcJson.Rows(x.Json).ToList();
+            L($"GET {route[7..]} -> {x.Status}{(x.Ok ? $" OK, body {x.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + x.Message)}");
+            if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.Object } r0)
+            {
+                L($"  row fields: {Fields(r0.Value)}{(r0.Key.Length > 0 ? $" (keyed, e.g. {r0.Key})" : "")}");
+                foreach (var r in rows.Take(samples)) L($"  sample: {(r.Key.Length > 0 ? r.Key + ": " : "")}{Samples(r.Value)}");
+            }
+            else if (x.Ok && x.Json is { ValueKind: JsonValueKind.Object } o) L($"  fields: {Fields(o)}");
+        }
+        var hwClient = ejClients.FirstOrDefault() ?? clientId;
+        if (hwClient != null)
+        {
+            await Shape($"api/v1/Client/{hwClient}/CurrentStatus", 8);
+            await Shape($"api/v1/Client/{hwClient}/CurrentCashUnitStatus");
+        }
+        await Shape("api/v1/ComponentList?name=", 15);
+        await Shape("api/v1/PropertyList?name=", 15);
+        await Shape("api/v1/ErrorCodeType", 3);
+        foreach (var page in new[] { "GET-api-v1-Client-id-CurrentStatus", "GET-api-v1-ComponentList_name", "GET-api-v1-PropertyList_name" })
+        {
+            var (res, info) = await Send(http, new HttpRequestMessage(HttpMethod.Get, "Documentation/Api/" + page), ct);
+            if (res == null) { L($"{page}: {info}"); continue; }
+            using (res)
+            {
+                var html = await res.Content.ReadAsStringAsync(ct);
+                var text = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(System.Text.RegularExpressions.Regex.Replace(html, "<(script|style)[^>]*>.*?</\\1>", " ", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase), "<[^>]+>", " "));
+                text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
+                var i = text.IndexOf("Request Information", StringComparison.OrdinalIgnoreCase);
+                L($"{page}: HTTP {(int)res.StatusCode}{(res.IsSuccessStatusCode && i >= 0 ? " | " + text[i..Math.Min(text.Length, i + 1500)] : "")}");
+            }
+        }
     }
 
     /// <summary>Short scalar values of a record for the report; card, track, account and secret-like fields are left out, and long digit runs are masked.</summary>
