@@ -52,6 +52,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if (Is(path, "api/v1/Client", m == "GET")) return Ok(Enumerable.Range(0, AtmCount).Select(i => ClientJson(i)));
         if (Is(path, "api/v1/Business")) return Ok(Banks.Select((b, i) => new { ID = i + 1, Name = b }));
         if (Is(path, "api/v1/Region")) return Ok(Places.Select(p => p.Region).Distinct().Select((x, i) => new { ID = i + 1, Name = x }));
+        if (Is(path, "api/v1/Group")) return Ok(new[] { new { ID = 1, Name = "Unknown Clients" }, new { ID = 2, Name = "All Clients" } });
         if (Is(path, "api/v1/Branch")) return Ok(Places.Select((p, i) => new { ID = i + 1, Name = p.City + " Branch", City = p.City, RegionID = Array.IndexOf(Places.Select(z => z.Region).Distinct().ToArray(), p.Region) + 1 }));
         if (Is(path, "api/v1/LastClientContact")) return Ok(Enumerable.Range(0, AtmCount).Select(i => new { ClientID = Id(i), LastContact = LastContact(i, now) }));
         if (Is(path, "api/v1/ActiveErrorExtra") || Is(path, "api/v1/ActiveError")) return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => OpenIncidents(i, now)));

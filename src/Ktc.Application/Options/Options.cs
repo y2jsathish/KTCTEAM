@@ -19,7 +19,8 @@ public class KtcOptions
     public int AtmOnlineMinutes { get; set; } = 10;
     public int OfflineMinutes { get; set; } = 60;
     public int TicketSearchGroupId { get; set; } = 2;
-    public int TransactionSearchGroupId { get; set; } = 1;
+    /// <summary>KTC group searched for transactions. 0 = the "All Clients" group, looked up by name (group 1 is "Unknown Clients").</summary>
+    public int TransactionSearchGroupId { get; set; } = 0;
     public int TicketLookbackDays { get; set; } = 30;
     public int AvailabilityCacheMinutes { get; set; } = 15;
     public int AvailabilityWarmupPerCycle { get; set; } = 150;
