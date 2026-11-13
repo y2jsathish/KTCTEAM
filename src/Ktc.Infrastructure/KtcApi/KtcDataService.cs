@@ -365,6 +365,7 @@ public class KtcDataService : IKtcDataService
 
         var byComp = new Dictionary<string, List<HardwareProperty>>();
         var compTime = new Dictionary<string, DateTime?>();
+        var compIdByName = new Dictionary<string, string>();
         foreach (var (key, e) in rows)
         {
             var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields));
@@ -378,6 +379,7 @@ public class KtcDataService : IKtcDataService
             if (status == HardwareStatusRules.Unknown && HardwareStatusRules.Classify(propName) is var byName && byName != HardwareStatusRules.Unknown
                 && KtcJson.Bool(e, false, "UseNumeric") && KtcJson.Dbl(e, 0, "NumericValue") is var nv)
                 status = nv == 0 ? HardwareStatusRules.Ok : byName;   // e.g. "Fatal error count" = 0 is healthy
+            if (cid.Length > 0) compIdByName.TryAdd(compName, cid);
             var list = byComp.TryGetValue(compName, out var l) ? l : byComp[compName] = new List<HardwareProperty>();
             list.Add(new HardwareProperty(propName, value, status, when));
             if (when > (compTime.GetValueOrDefault(compName) ?? DateTime.MinValue)) compTime[compName] = when;
@@ -398,7 +400,7 @@ public class KtcDataService : IKtcDataService
             var ps = byComp.GetValueOrDefault(m) ?? new List<HardwareProperty>();
             var es = errByModule.GetValueOrDefault(m) ?? new();
             var st = HardwareStatusRules.Worst(ps.Select(p => p.Status).Concat(es.Select(x => x.Status)));
-            return new HardwareModule(m, m, st, compTime.GetValueOrDefault(m), ps.OrderByDescending(p => HardwareStatusRules.Rank(p.Status)).ThenBy(p => p.Name).ToList(), es.Select(x => x.Text).ToList());
+            return new HardwareModule(compIdByName.GetValueOrDefault(m) ?? m, m, st, compTime.GetValueOrDefault(m), ps.OrderByDescending(p => HardwareStatusRules.Rank(p.Status)).ThenBy(p => p.Name).ToList(), es.Select(x => x.Text).ToList());
         }).OrderByDescending(m => HardwareStatusRules.Rank(m.Status)).ThenBy(m => m.Name).ToList();
 
         var warnings = w.ToList();
