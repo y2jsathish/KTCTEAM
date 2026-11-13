@@ -168,6 +168,17 @@ public class DataController : ControllerBase
         });
     }
 
+    // ---------- hardware ----------
+    [HttpGet("hardware")]
+    public async Task<IActionResult> Hardware(string atmId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(atmId)) return BadRequest(new { error = "Select an ATM." });
+        var hw = await _data.GetHardwareAsync(atmId.Trim(), ct);
+        if (hw == null) return NotFound(new { error = $"No ATM matches \"{atmId.Trim()}\"." });
+        _log.LogInformation("Hardware status atm={Atm} -> {Id}: {Modules} components, overall {Status}", atmId, hw.AtmId, hw.Modules.Count, hw.Status);
+        return Ok(hw);
+    }
+
     // ---------- EJ ----------
     [HttpGet("ej")]
     [Audit("Search", "EJ search")]

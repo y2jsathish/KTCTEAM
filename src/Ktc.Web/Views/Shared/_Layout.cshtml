@@ -49,6 +49,7 @@
         <div class="nav-h">Operations</div>
         <a class="@(Active("Home") == "active" && (string?)ViewContext.RouteData.Values["action"] == "Index" ? "active" : "")" href="/"><i class="bi bi-speedometer2"></i> Executive Dashboard</a>
         <a class="@Active("Atm")" href="/Atm"><i class="bi bi-hdd-network"></i> ATM Monitoring</a>
+        <a class="@Active("Hardware")" href="/Hardware"><i class="bi bi-cpu"></i> Hardware Status</a>
         <a class="@Active("Incidents")" href="/Incidents"><i class="bi bi-exclamation-triangle"></i> Incidents</a>
         <a class="@Active("Tickets")" href="/Tickets"><i class="bi bi-ticket-detailed"></i> Tickets</a>
         <a class="@Active("Transactions")" href="/Transactions"><i class="bi bi-credit-card-2-front"></i> Transactions</a>

@@ -1,0 +1,14 @@
+@{ ViewData["Title"] = "Hardware Status"; }
+<div class="page-h"><h4>ATM Hardware Status</h4><span class="sub">Current status of each component, from KTC's live component properties and open errors</span></div>
+<form id="f" class="row g-2 align-items-end mb-3">
+  <div class="col-12 col-md-5"><label class="form-label small mb-1" for="atm">ATM</label>
+    <input id="atm" class="form-control" list="atmList" placeholder="Type an ATM ID or name" autocomplete="off" value="@ViewBag.AtmId" required/>
+    <datalist id="atmList"></datalist></div>
+  <div class="col-auto"><button class="btn btn-primary"><i class="bi bi-search"></i> Show</button></div>
+  <div class="col-auto"><button type="button" id="refresh" class="btn btn-outline-secondary" disabled><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div class="col-auto ms-auto small text-muted" id="updated"></div>
+</form>
+<div id="msg"></div>
+<div id="kpis" class="kpis"></div>
+<div id="modules" class="row g-3"></div>
+@section Scripts { <script src="~/js/pages/hardware.js" asp-append-version="true"></script> }
