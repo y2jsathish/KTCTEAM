@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using System.Text.Json;
 using Ktc.Application.Logic;
 using Ktc.Domain.Enums;
@@ -177,4 +178,65 @@ public class KtcJsonTests
         Assert.Null(KtcJson.Date(d.RootElement, "TimeClosed"));       // SQL/.NET default date = not set
     }
     [Fact] public void Items_unwraps_envelopes() { using var d = JsonDocument.Parse("{\"items\":[{\"a\":1},{\"a\":2}]}"); Assert.Equal(2, KtcJson.Items(d.RootElement).Count()); }
+}
+
+public class LoginTokenCleanupTests
+{
+    private static KtcAuthService Svc() => new(null!, Microsoft.Extensions.Options.Options.Create(new Ktc.Application.Options.KtcOptions { DefaultTokenLifetimeMinutes = 20 }), Microsoft.Extensions.Logging.Abstractions.NullLogger<KtcAuthService>.Instance);
+    [Fact] public void Strips_bearer_prefix() => Assert.Equal("abc", Svc().ParseToken("{\"Token\":\"Bearer abc\"}").Token);
+    [Fact] public void Strips_whitespace_and_quotes_from_plain_text() => Assert.Equal("abc", Svc().ParseToken("  'abc'\r\n").Token);
+    [Fact] public void Finds_token_inside_wrapper_object() => Assert.Equal("tok", Svc().ParseToken("{\"Success\":true,\"Data\":{\"access_token\":\"tok\"}}").Token);
+    [Fact] public void Prefers_access_token_over_ktc_access_token() => Assert.Equal("a", Svc().ParseToken("{\"ktc_access_token\":\"k\",\"access_token\":\"a\"}").Token);
+    [Fact] public void Falls_back_to_ktc_access_token() => Assert.Equal("k", Svc().ParseToken("{\"ktc_access_token\":\"k\"}").Token);
+    [Fact] public void Past_body_expiry_falls_back_to_default_lifetime()
+    {
+        var r = Svc().ParseToken("{\"Token\":\"t\",\"Expires\":\"" + DateTime.UtcNow.AddHours(-3).ToString("s") + "\"}");
+        Assert.True(r.ExpiresUtc > DateTime.UtcNow.AddMinutes(19));
+    }
+    [Fact] public void Describe_never_includes_values() => Assert.DoesNotContain("secret", KtcAuthService.Describe("{\"Token\":\"secret\",\"Data\":{\"x\":1}}"));
+}
+
+public class TokenRefreshTests
+{
+    private sealed class MemSession : Microsoft.AspNetCore.Http.ISession
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte[]> _d = new();
+        public bool IsAvailable => true; public string Id => "s"; public IEnumerable<string> Keys => _d.Keys;
+        public void Clear() => _d.Clear(); public Task CommitAsync(CancellationToken c = default) => Task.CompletedTask; public Task LoadAsync(CancellationToken c = default) => Task.CompletedTask;
+        public void Remove(string k) => _d.TryRemove(k, out _); public void Set(string k, byte[] v) => _d[k] = v;
+        public bool TryGetValue(string k, out byte[] v) => _d.TryGetValue(k, out v!);
+    }
+
+    private sealed class FakeAuth : Ktc.Application.Abstractions.IKtcAuthService
+    {
+        public int Logins; public string? LastReloginBearer;
+        private Ktc.Application.Models.KtcLoginResult Next() { var n = Interlocked.Increment(ref Logins); return new(true, "tok" + n, DateTime.UtcNow.AddMinutes(20), null); }
+        public Task<Ktc.Application.Models.KtcLoginResult> LoginAsync(string u, string p, string? m, string? a = null, CancellationToken ct = default) => Task.FromResult(Next());
+        public Task<Ktc.Application.Models.KtcLoginResult> ReLoginAsync(string u, string p, string? m, string? a = null, CancellationToken ct = default) => Task.FromResult(Next());
+        public async Task<Ktc.Application.Models.KtcLoginResult> ReLoginAsync(string u, string p, string? m, string? a, string? bearer, CancellationToken ct = default) { LastReloginBearer = bearer; await Task.Delay(20, ct); return Next(); }
+        public Task LogoffAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Parallel_401s_trigger_one_relogin_and_share_the_new_token()
+    {
+        var user = "u" + Guid.NewGuid().ToString("N");
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        http.User = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity(new[] { new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Name, user) }, "test"));
+        http.Features.Set<Microsoft.AspNetCore.Http.Features.ISessionFeature>(new Microsoft.AspNetCore.Http.Features.DefaultSessionFeature { Session = new MemSession() });
+        var dp = new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider();
+        http.Session.SetString(SessionKeys.Cred, KtcTokenProvider.ProtectCredentials(dp, user, "pw", "DOMAIN", "KTC_UI"));
+        KtcTokenProvider.Remember(http, user, "tok0", DateTime.UtcNow.AddMinutes(20));
+
+        var auth = new FakeAuth();
+        var p = new KtcTokenProvider(new Microsoft.AspNetCore.Http.HttpContextAccessor { HttpContext = http }, auth,
+            Microsoft.Extensions.Options.Options.Create(new Ktc.Application.Options.KtcOptions()), dp);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => p.RefreshAsync("tok0")));
+        Assert.Equal(1, auth.Logins);
+        Assert.All(results, t => Assert.Equal("tok1", t));
+        Assert.Equal("tok0", auth.LastReloginBearer);
+        Assert.Equal("tok1", await p.GetTokenAsync());
+        Assert.Equal("tok1", http.Session.GetString(SessionKeys.Token));
+    }
 }

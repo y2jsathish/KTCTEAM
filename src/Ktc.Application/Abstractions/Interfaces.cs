@@ -40,14 +40,18 @@ public interface IKtcTokenProvider
 {
     /// <summary>Token for the current user (interactive) or service account (background). Null if unauthenticated.</summary>
     Task<string?> GetTokenAsync(CancellationToken ct = default);
-    /// <summary>Force a refresh (ReLogin) after a 401.</summary>
+    /// <summary>Force a refresh (Relogin).</summary>
     Task<string?> RefreshAsync(CancellationToken ct = default);
+    /// <summary>Refresh after KTC rejected <paramref name="failedToken"/> with 401. Returns the current token without logging in again when another call already replaced it.</summary>
+    Task<string?> RefreshAsync(string? failedToken, CancellationToken ct = default) => RefreshAsync(ct);
 }
 
 public interface IKtcAuthService
 {
     Task<KtcLoginResult> LoginAsync(string username, string password, string? authMode, string? appName = null, CancellationToken ct = default);
     Task<KtcLoginResult> ReLoginAsync(string username, string password, string? authMode, string? appName = null, CancellationToken ct = default);
+    /// <summary>Relogin with the current token sent as Bearer, as KTC expects for refreshing an existing session.</summary>
+    Task<KtcLoginResult> ReLoginAsync(string username, string password, string? authMode, string? appName, string? currentToken, CancellationToken ct = default) => ReLoginAsync(username, password, authMode, appName, ct);
     Task LogoffAsync(string token, CancellationToken ct = default);
 }
 
