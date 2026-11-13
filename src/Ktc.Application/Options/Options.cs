@@ -7,7 +7,8 @@ public class KtcOptions
     public bool UseMock { get; set; }
     public string AppName { get; set; } = "KTC_UI";
     public string DefaultAuthMode { get; set; } = "DOMAIN";
-    public string[] AuthModes { get; set; } = { "DOMAIN" };
+    /// <summary>Choices in the login page's Auth mode list. Set Ktc:AuthModes to replace them; the default auth mode is always offered.</summary>
+    public string[] AuthModes { get; set; } = { "DOMAIN", "INTERNAL" };
     public int DefaultTokenLifetimeMinutes { get; set; } = 20;
     public int TimeoutSeconds { get; set; } = 15;
     public int RetryCount { get; set; } = 3;
