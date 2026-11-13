@@ -179,6 +179,20 @@ public class KtcDataService : IKtcDataService
         return rows;
     }
 
+    /// <summary>The id of KTC's "All Clients" group (2 on standard installs), so searches cover every ATM.</summary>
+    private Task<int> AllClientsGroupIdAsync(Warn w, CancellationToken ct) =>
+        Cached("group-all", TimeSpan.FromMinutes(30), async () =>
+        {
+            var json = await Fetch("api/v1/Group", w, ct: ct);
+            foreach (var g in KtcJson.Items(json))
+                if (Regex.IsMatch(KtcJson.Str(g, "Name", "GroupName"), @"^\s*all\s*clients\s*$", RegexOptions.IgnoreCase))
+                {
+                    var id = KtcJson.Int(g, -1, "ID", "Id", "GroupID");
+                    if (id > 0) return id;
+                }
+            return 2;
+        });
+
     private Task<T> Cached<T>(string key, TimeSpan ttl, Func<Task<T>> factory) =>
         _cache.GetOrCreateAsync($"{Scope}|{key}", e => { e.AbsoluteExpirationRelativeToNow = ttl; return factory(); })!;
 
@@ -444,7 +458,11 @@ public class KtcDataService : IKtcDataService
         var all = await Cached(key, TimeSpan.FromSeconds(25), async () =>
         {
             var w = new Warn(); var lookup = await LookupAsync(w, ct);
-            var rowsAll = await SearchPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = _opt.TransactionSearchGroupId, Start = from, End = to, ClientName = (string?)null }, w, ct);
+            var gid = _opt.TransactionSearchGroupId > 0 ? _opt.TransactionSearchGroupId : await AllClientsGroupIdAsync(w, ct);
+            var rowsAll = await SearchPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = gid, Start = from, End = to, ClientName = (string?)null }, w, ct);
+            var errs = w.ToList();
+            if (errs.Count > 0) _log.LogWarning("Transaction search {From:u}..{To:u} (group {Group}) had KTC errors: {Errors}", from, to, gid, string.Join("; ", errs.Take(3)));
+            else _log.LogDebug("Transaction search {From:u}..{To:u} (group {Group}) returned {Rows} KTC rows", from, to, gid, rowsAll.Count);
             var res = new List<TransactionDto>();
             foreach (var e in rowsAll)
             {
@@ -472,10 +490,16 @@ public class KtcDataService : IKtcDataService
     private static readonly Regex OkRx = new(@"success|approved|completed ok|\bok\b|completed$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent)
     {
-        var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "UUID");
-        if (id.Length == 0) return null;
-        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId"));
-        if (atm.Length == 0 && parent is { } p) atm = KtcJson.NormId(KtcJson.Str(p, "ClientID", "ClientId"));
+        var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "TransactionId", "TransactionDataID", "TransactionDataId", "UUID", "GUID");
+        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "CID"));
+        if (atm.Length == 0 && parent is { } p) atm = KtcJson.NormId(KtcJson.Str(p, "ClientID", "ClientId", "CID"));
+        if (id.Length == 0)
+        {
+            // Rows without an id field still count: key them by ATM + start time so the grid and totals show them.
+            var when = KtcJson.Str(e, "StartTime", "TransactionStartTime", "TimeStamp", "Time", "TransactionTime");
+            if (when.Length == 0) return null;
+            id = (atm.Length > 0 ? atm + "-" : "") + when;
+        }
         lookup.TryGetValue(atm, out var c);
         var result = KtcJson.Str(e, "CompletionCodeName", "CompletionCode", "Result", "StatusName", "Status", "Completion");
         var reason = KtcJson.Str(e, "ReasonName", "Reason", "ErrorText", "ErrorDescription");

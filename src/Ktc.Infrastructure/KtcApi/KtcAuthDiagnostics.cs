@@ -198,10 +198,35 @@ public class KtcAuthDiagnostics
                 var t = await PostJson(http, "api/v1/Ticket/Search", token, new { BusinessID = b, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
                     Start = now.AddDays(-7), End = now, SLAFilterType = 0, SLAHours = 0, OwnerName = (string?)null, ClientName = (string?)null, GroupID = gid, ExtraDataField = (string?)null, ExtraDataValue = (string?)null }, ct);
                 L($"POST Ticket/Search BusinessID={b} GroupID={gid?.ToString() ?? "null"} -> {t.Status}{(t.Ok ? $" OK ({KtcJson.Items(t.Json).Count()} rows)" : " " + t.Message)}");
-                var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = b, GroupID = gid ?? 1, Start = now.AddHours(-1), End = now, ClientName = (string?)null }, ct);
-                L($"POST TransactionData/Search BusinessID={b} GroupID={gid ?? 1} (last hour) -> {x.Status}{(x.Ok ? $" OK ({KtcJson.Items(x.Json).Count()} rows)" : " " + x.Message)}");
+            }
+
+        // Transactions page: group 1 is "Unknown Clients", so compare it with "All Clients" over wider windows and show the row shape.
+        var allGroup = KtcJson.Items(groups.Json).Where(g => System.Text.RegularExpressions.Regex.IsMatch(KtcJson.Str(g, "Name", "GroupName"), @"^\s*all\s*clients\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            .Select(g => KtcJson.Int(g, -1, "ID", "Id", "GroupID")).FirstOrDefault(i => i > 0);
+        if (allGroup <= 0) allGroup = 2;
+        L("");
+        L($"--- Transactions (TransactionData/Search; portal uses GroupID={allGroup} \"All Clients\") ---");
+        var shown = false;
+        foreach (var b in bizTry)
+            foreach (var (gid, span, label) in new[] { (allGroup, TimeSpan.FromHours(1), "1h"), (allGroup, TimeSpan.FromHours(24), "24h"), (allGroup, TimeSpan.FromDays(7), "7d"), (1, TimeSpan.FromHours(24), "24h") })
+            {
+                var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = b, GroupID = gid, Start = now - span, End = now, ClientName = (string?)null }, ct);
+                var rows = KtcJson.Items(x.Json).ToList();
+                L($"POST TransactionData/Search BusinessID={b} GroupID={gid} last {label} -> {x.Status}{(x.Ok ? $" OK, body {x.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + x.Message)}");
+                if (x.Ok && x.Json is { ValueKind: JsonValueKind.Object } top && rows.Count <= 1)
+                    L($"  top-level fields: {Fields(top)}");
+                if (!shown && rows.FirstOrDefault() is { ValueKind: JsonValueKind.Object } r0)
+                {
+                    shown = true;
+                    L($"  row fields: {Fields(r0)}");
+                    foreach (var pr in r0.EnumerateObject().Where(pr => pr.Value.ValueKind == JsonValueKind.Array && pr.Value.GetArrayLength() > 0))
+                        if (pr.Value[0] is { ValueKind: JsonValueKind.Object } n0) L($"  {pr.Name}[] ({pr.Value.GetArrayLength()}) fields: {Fields(n0)}");
+                    L($"  row id-like values: {IdValues(r0)}");
+                }
             }
     }
+
+    private static string Fields(JsonElement o) => string.Join(", ", o.EnumerateObject().Take(60).Select(p => p.Name + ":" + p.Value.ValueKind.ToString().ToLowerInvariant()));
 
     private static JsonElement? First(JsonElement? j) => KtcJson.Items(j).Select(e => (JsonElement?)e).FirstOrDefault();
 
