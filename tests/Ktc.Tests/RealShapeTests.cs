@@ -65,6 +65,10 @@ public class RealShapeTests
         Assert.Single(byAtm);
         var byId = await svc.SearchTransactionsAsync(new TransactionQuery(AtmId: "19", From: new DateTime(2026, 11, 13, 0, 0, 0, DateTimeKind.Utc), To: new DateTime(2026, 11, 13, 12, 0, 0, DateTimeKind.Utc)));
         Assert.Single(byId);
+        var partial = await svc.SearchTransactionsAsync(new TransactionQuery(AtmId: " nineteen ", From: new DateTime(2026, 11, 13, 0, 0, 0, DateTimeKind.Utc), To: new DateTime(2026, 11, 13, 12, 0, 0, DateTimeKind.Utc)));
+        Assert.Single(partial);
+        var none = await svc.SearchTransactionsAsync(new TransactionQuery(AtmId: "ADB05414", From: new DateTime(2026, 11, 13, 0, 0, 0, DateTimeKind.Utc), To: new DateTime(2026, 11, 13, 12, 0, 0, DateTimeKind.Utc)));
+        Assert.Empty(none);
     }
 
     [Fact]
