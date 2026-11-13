@@ -61,6 +61,9 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/OverallAvailability")).Success) return Ok(new { AvailabilityPercent = Availability(Idx(r), now) });
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Top5UnavailableReasons")).Success)
             return Ok(Codes.Take(5).Select((c, k) => new { Reason = c.Name, Hours = Math.Round(Hash(Idx(r), k, 7) % 900 / 100.0 + 0.5, 1) }).OrderByDescending(x => x.Hours));
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
+        if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
+        if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)")).Success && m == "GET") return Ok(ClientJson(Idx(r)));
         if (Is(path, "api/v1/Ticket/Search") && m == "POST") return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => Tickets(i, now)));
@@ -77,6 +80,29 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     private static int Id(int i) => 1000 + i;
     private static string AtmName(int i) => $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}";
     private static int Idx(Match m) => Math.Clamp(int.Parse(m.Groups[1].Value) - 1000, 0, AtmCount - 1);
+    // Hardware: KTC CurrentStatus records {CompId, PropId, VID, ManualValue, NumericValue, UseNumeric, Timestamp}.
+    private static readonly (string Name, string[] Good, string[] Bad)[] HwComponents =
+    {
+        ("Card Reader", new[] { "Online" }, new[] { "MediaJammed", "Offline" }),
+        ("Cash Dispenser", new[] { "Online" }, new[] { "Cassette low", "Hardware error" }),
+        ("Receipt Printer", new[] { "Online" }, new[] { "Paper low", "Paper out" }),
+        ("Journal Printer", new[] { "Online" }, new[] { "Paper low" }),
+        ("PIN Pad", new[] { "Online" }, new[] { "Offline" }),
+        ("Sensors", new[] { "OK" }, new[] { "Safe door open" }),
+    };
+    private static readonly string[] HwProps = { "Device status", "Fatal error count", "Firmware version" };
+    private static IEnumerable<object> HardwareStatus(int i, DateTime now)
+    {
+        for (int k = 0; k < HwComponents.Length; k++)
+        {
+            var c = HwComponents[k]; int h = Hash(i, k, 91); bool bad = Chronic.Contains(i) ? h % 100 < 45 : h % 100 < 10;
+            var t = now.AddMinutes(-(h % 240));
+            yield return new { CID = Id(i), CompId = k + 1, PropId = 1, VID = -1, ManualValue = bad ? c.Bad[h % c.Bad.Length] : c.Good[0], NumericValue = 0, UseNumeric = false, Timestamp = t };
+            yield return new { CID = Id(i), CompId = k + 1, PropId = 2, VID = -1, ManualValue = "", NumericValue = bad ? 1 + h % 3 : 0, UseNumeric = true, Timestamp = t };
+            yield return new { CID = Id(i), CompId = k + 1, PropId = 3, VID = -1, ManualValue = $"v{1 + h % 4}.{h % 10}", NumericValue = 0, UseNumeric = false, Timestamp = t.AddDays(-3) };
+        }
+    }
+
     private static int Hash(int a, int b = 0, int c = 0) { unchecked { var h = 17; h = h * 31 + a; h = h * 31 + b; h = h * 31 + c; h ^= h >> 15; h *= 0x2c1b3c6d; h ^= h >> 12; return Math.Abs(h); } }
     private static object ClientJson(int i) => new
     {
