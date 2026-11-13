@@ -4,7 +4,7 @@ using Ktc.Application.Options;
 namespace Ktc.Infrastructure.KtcApi;
 
 /// <summary>
-/// KTC parses query-string dates with its own server-side rules: on the reference server even "2026-11-06" and ISO strings
+/// KTC expects query-string dates as yyyyMMddHHmmssfff (e.g. 20261113120000000). Other formats such as "2026-11-06" or ISO strings
 /// fail with "FormatException: String was not recognized as a valid DateTime". The portal starts with Ktc:QueryDateFormat and,
 /// when KTC rejects a date, tries the other common formats once and keeps the first one KTC accepts for the rest of the run.
 /// </summary>
@@ -12,7 +12,7 @@ public static class KtcDateFormats
 {
     public static readonly string[] Candidates =
     {
-        "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "M/d/yyyy h:mm:ss tt",
+        "yyyyMMddHHmmssfff", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "M/d/yyyy h:mm:ss tt",
         "yyyyMMddHHmmss", "yyyyMMdd", "MM/dd/yyyy", "dd/MM/yyyy", "dd-MMM-yyyy HH:mm:ss", "o", "ticks", "unix", "unixms"
     };
 

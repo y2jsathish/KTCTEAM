@@ -154,7 +154,7 @@ public class KtcAuthDiagnostics
                 L($"  {f,-22} {Uri.UnescapeDataString(u[(u.IndexOf('?') + 1)..])} -> {r.Status}{(r.Ok ? " OK" : " " + r.Message)}");
             }
         }
-        var probeFormats = new[] { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
+        var probeFormats = new[] { "yyyyMMddHHmmssfff", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
         foreach (var f in probeFormats)
         {
             var q = $"start={KtcDateFormats.Format(now.AddHours(-24), f, null)}&end={KtcDateFormats.Format(now, f, null)}";
@@ -166,6 +166,24 @@ public class KtcAuthDiagnostics
                 L($"GET  Client/{clientId}/HistoricalError ({f}) -> {rc.Status}{(rc.Ok ? $" OK ({KtcJson.Items(rc.Json).Count()} rows)" : " " + rc.Message)}");
             }
         }
+        L("");
+        L("--- KTC's own documentation for the failing routes (parameters section) ---");
+        foreach (var page in new[] { "GET-api-v1-Client-id-OverallAvailability_start_end_starttimeindex_endtimeindex", "GET-api-v1-Client-id-Top5UnavailableReasons_start_end", "GET-api-v1-HistoricalError", "GET-api-v1-Client-id-HistoricalError" })
+        {
+            var (res, info) = await Send(http, new HttpRequestMessage(HttpMethod.Get, "Documentation/Api/" + page), ct);
+            if (res == null) { L($"{page}: {info}"); continue; }
+            using (res)
+            {
+                var html = await res.Content.ReadAsStringAsync(ct);
+                var text = System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(System.Text.RegularExpressions.Regex.Replace(html, "<(script|style)[^>]*>.*?</\\1>", " ", System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase), "<[^>]+>", " "));
+                text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
+                var i = text.IndexOf("Request Information", StringComparison.OrdinalIgnoreCase);
+                if (i < 0) i = text.IndexOf("URI Parameters", StringComparison.OrdinalIgnoreCase);
+                L($"{page}: HTTP {(int)res.StatusCode}{(res.IsSuccessStatusCode ? " | " + (i >= 0 ? text[i..Math.Min(text.Length, i + 700)] : text[..Math.Min(400, text.Length)]) : "")}");
+            }
+        }
+        L("");
+
         var bizTry = bizIds.Take(2).Select(i => (int?)i).ToList();
         if (bizTry.Count == 0) bizTry.Add(0);
         foreach (var b in bizTry)
