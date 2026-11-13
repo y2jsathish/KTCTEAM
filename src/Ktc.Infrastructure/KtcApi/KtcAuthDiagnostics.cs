@@ -285,7 +285,7 @@ public class KtcAuthDiagnostics
         // Hardware Status tab: per-component current values.
         L("");
         L("--- Hardware (Client/{id}/CurrentStatus, ComponentList, PropertyList) ---");
-        async Task Shape(string route, int samples = 3)
+        async Task<List<(string Key, JsonElement Value)>> Shape(string route, int samples = 3, bool names = false)
         {
             var x = await GetJson(http, route, token, ct);
             var rows = KtcJson.Rows(x.Json).ToList();
@@ -293,20 +293,54 @@ public class KtcAuthDiagnostics
             if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.Object } r0)
             {
                 L($"  row fields: {Fields(r0.Value)}{(r0.Key.Length > 0 ? $" (keyed, e.g. {r0.Key})" : "")}");
-                foreach (var r in rows.Take(samples)) L($"  sample: {(r.Key.Length > 0 ? r.Key + ": " : "")}{Samples(r.Value)}");
+                foreach (var r in rows.Take(samples)) L($"  sample: {(r.Key.Length > 0 ? r.Key + ": " : "")}{Samples(r.Value, names)}");
             }
-            else if (x.Ok && x.Json is { ValueKind: JsonValueKind.Object } o) L($"  fields: {Fields(o)}");
+            else if (x.Ok && x.Json is { ValueKind: JsonValueKind.Object } o) L($"  fields: {Fields(o)}{(names ? " | " + Samples(o, true) : "")}");
+            else if (x.Ok && x.Json is { ValueKind: JsonValueKind.Array } a && a.GetArrayLength() > 0) L($"  first: {CardMaskerSafe(Shorten(a[0].GetRawText()))}");
+            return rows;
         }
         var hwClient = ejClients.FirstOrDefault() ?? clientId;
         if (hwClient != null)
         {
-            await Shape($"api/v1/Client/{hwClient}/CurrentStatus", 8);
+            var cs = await Shape($"api/v1/Client/{hwClient}/CurrentStatus", 12, names: true);
+            string Ids(params string[] f) => string.Join(",", cs.Select(r => KtcJson.NormId(KtcJson.Str(r.Value, f))).Where(v => v.Length > 0).Distinct().Take(60));
+            var compIds = Ids("CompId", "ComponentID", "ComponentId"); var propIds = Ids("PropId", "PropertyID", "PropertyId"); var vids = Ids("VID", "ValueID", "ValueId");
+            L($"  component ids: {compIds}");
+            L($"  property ids: {propIds}");
+            L($"  value ids (VID): {vids}");
             await Shape($"api/v1/Client/{hwClient}/CurrentCashUnitStatus");
+            var c1 = compIds.Split(',')[0]; var p1 = propIds.Split(',')[0]; var v1 = vids.Split(',')[0];
+            if (c1.Length > 0)
+            {
+                await Shape($"api/v1/ComponentList/{c1}", 3, true);
+                await Shape($"api/v1/PropertyList/UsedByComponent?componentid={c1}", 10, true);
+                await Shape($"api/v1/Client/{hwClient}/CurrentStatus?componentID={c1}&propertyCategory=0", 3, true);
+            }
+            if (p1.Length > 0) await Shape($"api/v1/PropertyList/{p1}", 3, true);
+            if (v1.Length > 0) await Shape($"api/v1/ValueList/{v1}", 3, true);
         }
-        await Shape("api/v1/ComponentList?name=", 15);
-        await Shape("api/v1/PropertyList?name=", 15);
+        foreach (var route in new[] { "api/v1/ComponentList", "api/v1/ComponentList?name=", "api/v1/ComponentList?name=%25", "api/v1/PropertyList", "api/v1/PropertyList?name=", "api/v1/PropertyList?name=%25" })
+            await Shape(route, 15, true);
+        await Shape("api/v1/ValueList", 15, true);
+        await Shape("api/v1/HardwareType", 5, true);
         await Shape("api/v1/ErrorCodeType", 3);
-        foreach (var page in new[] { "GET-api-v1-Client-id-CurrentStatus", "GET-api-v1-ComponentList_name", "GET-api-v1-PropertyList_name" })
+
+        // Every documented route about components, properties, values or hardware.
+        foreach (var index in new[] { "Documentation", "Documentation/Index", "Help" })
+        {
+            var (ires, iinfo) = await Send(http, new HttpRequestMessage(HttpMethod.Get, index), ct);
+            if (ires == null) { L($"docs index {index}: {iinfo}"); continue; }
+            using (ires)
+            {
+                var html = await ires.Content.ReadAsStringAsync(ct);
+                var links = System.Text.RegularExpressions.Regex.Matches(html, "Api/((?:GET|POST|PUT)-[^\"'<>]+)").Select(m => System.Net.WebUtility.HtmlDecode(m.Groups[1].Value))
+                    .Where(l => System.Text.RegularExpressions.Regex.IsMatch(l, "Component|Propert|ValueList|Hardware|CurrentStatus|DeviceAttribute", System.Text.RegularExpressions.RegexOptions.IgnoreCase)).Distinct().ToList();
+                L($"docs index {index}: HTTP {(int)ires.StatusCode}, {links.Count} hardware routes: {string.Join(" ", links.Take(60))}");
+                if (links.Count > 0) break;
+            }
+        }
+        foreach (var page in new[] { "GET-api-v1-Client-id-CurrentStatus", "GET-api-v1-ComponentList_name", "GET-api-v1-ComponentList-id", "GET-api-v1-PropertyList_name", "GET-api-v1-PropertyList-id",
+                     "GET-api-v1-PropertyList-UsedByComponent_componentid", "GET-api-v1-ValueList", "GET-api-v1-ValueList-id" })
         {
             var (res, info) = await Send(http, new HttpRequestMessage(HttpMethod.Get, "Documentation/Api/" + page), ct);
             if (res == null) { L($"{page}: {info}"); continue; }
@@ -322,8 +356,8 @@ public class KtcAuthDiagnostics
     }
 
     /// <summary>Short scalar values of a record for the report; card, track, account and secret-like fields are left out, and long digit runs are masked.</summary>
-    private static string Samples(JsonElement o) => string.Join(", ", o.EnumerateObject()
-        .Where(p => !System.Text.RegularExpressions.Regex.IsMatch(p.Name, "card|pan|track|account|pass|pin|secret|token|hash|salt|cvv|name|address", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+    private static string Samples(JsonElement o, bool names = false) => string.Join(", ", o.EnumerateObject()
+        .Where(p => !System.Text.RegularExpressions.Regex.IsMatch(p.Name, names ? "card|pan\\b|track|account|pass|pin\\b|secret|token|hash|salt|cvv|address" : "card|pan|track|account|pass|pin|secret|token|hash|salt|cvv|name|address", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
         .Where(p => p.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null || (p.Value.ValueKind == JsonValueKind.String && (p.Value.GetString()?.Length ?? 0) <= 40))
         .Take(40).Select(p => p.Name + "=" + CardMaskerSafe(p.Value.ValueKind == JsonValueKind.String ? "\"" + p.Value.GetString() + "\"" : p.Value.GetRawText())));
 
