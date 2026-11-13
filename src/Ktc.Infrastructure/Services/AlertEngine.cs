@@ -69,8 +69,11 @@ public class AlertEngine : IAlertEngine
                     yield return new("tk" + t.Id, $"SLA breach within {Math.Max(1, (int)(t.SlaDueUtc - now).TotalMinutes)} min: ticket {t.Id}", $"{t.AtmName} ({t.Client}) - {t.Description}. Due {t.SlaDueUtc:u}.");
                 break;
             case AlertRuleType.ApiSuccessRateLow:
-                foreach (var a in _api.Snapshot().Where(a => a.Calls >= 5 && a.SuccessRatePct < r.Threshold))
-                    yield return new($"{a.Method} {a.Endpoint}", $"KTC API success rate {a.SuccessRatePct}%: {a.Method} {a.Endpoint}", $"{a.Failures} failures in last {a.Calls} calls. Last error: {a.LastError}");
+                // Grouped, and only routes called in the last 15 min (a route the portal paused is not re-alerted every cycle).
+                var low = _api.Snapshot().Where(a => a.Calls >= 5 && a.SuccessRatePct < r.Threshold && a.LastCallUtc > now.AddMinutes(-15)).ToList();
+                if (low.Count > 0)
+                    yield return new("api-success", $"KTC API success rate low on {low.Count} route(s)",
+                        string.Join("\n", low.Take(10).Select(a => $"{a.Method} {a.Endpoint}: {a.SuccessRatePct}% ({a.Failures}/{a.Calls} failed). Last error: {a.LastError}")));
                 break;
             case AlertRuleType.ApiResponseSlow:
                 foreach (var a in _api.Snapshot().Where(a => a.Calls >= 3 && a.AvgMs > r.Threshold * 1000))
@@ -78,7 +81,7 @@ public class AlertEngine : IAlertEngine
                 break;
             case AlertRuleType.ApiConsecutiveFailures:
                 // One grouped alert for the fleet instead of one P1 per route.
-                var failing = _api.Snapshot().Where(a => a.ConsecutiveFailures > r.Threshold).OrderByDescending(a => a.ConsecutiveFailures).ToList();
+                var failing = _api.Snapshot().Where(a => a.ConsecutiveFailures > r.Threshold && a.LastCallUtc > now.AddMinutes(-15)).OrderByDescending(a => a.ConsecutiveFailures).ToList();
                 if (failing.Count > 0)
                     yield return new("api-failing", $"KTC API failing on {failing.Count} route(s)",
                         string.Join("\n", failing.Take(10).Select(a => $"{a.Method} {a.Endpoint}: {a.ConsecutiveFailures} in a row. Last error: {a.LastError}")) + (failing.Count > 10 ? $"\n…and {failing.Count - 10} more" : ""));

@@ -50,6 +50,32 @@ public class KtcDataService : IKtcDataService
     /// </summary>
     private async Task<KtcResponse> GetWithDatesAsync(Func<Func<DateTime, string>, string> url, CancellationToken ct)
     {
+        // A route that fails on the KTC server for every request (a server-side error, not our parameters) is paused so
+        // per-ATM widgets do not send hundreds of failing calls and trip API alerts each refresh.
+        var routeKey = ApiHealthTracker.Normalize(url(_ => "x").Split('?')[0]);
+        if (BrokenRoutes.TryGetValue(routeKey, out var paused) && paused.Until > DateTime.UtcNow) return paused.Response;
+        var res = await GetWithDatesCoreAsync(url, ct);
+        if (res.StatusCode >= 500 && res.StatusCode != 503 && res.StatusCode != 504)
+        {
+            var n = BrokenCounts.AddOrUpdate(routeKey, 1, (_, c) => c + 1);
+            if (n >= 3)
+            {
+                var msg = KtcResponse.Fail($"KTC server error on {routeKey} ({res.Error}). Paused for {BrokenFor.TotalMinutes:0} min; this is a KTC-side problem, not the request.", res.StatusCode, res.ElapsedMs);
+                BrokenRoutes[routeKey] = (DateTime.UtcNow + BrokenFor, msg);
+                BrokenCounts.TryRemove(routeKey, out _);
+                _log.LogWarning("KTC {Route} keeps failing on the server ({Error}); pausing it for {Minutes} min", routeKey, res.Error, BrokenFor.TotalMinutes);
+                return msg;
+            }
+        }
+        else if (res.Success) BrokenCounts.TryRemove(routeKey, out _);
+        return res;
+    }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Until, KtcResponse Response)> BrokenRoutes = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> BrokenCounts = new();
+    private static readonly TimeSpan BrokenFor = TimeSpan.FromMinutes(30);
+
+    private async Task<KtcResponse> GetWithDatesCoreAsync(Func<Func<DateTime, string>, string> url, CancellationToken ct)
+    {
         string F(DateTime d, string f) => KtcDateFormats.Format(d, f, _opt.QueryTimeZone);
         var current = KtcDateFormats.Current(_opt);
         var r = await _api.GetAsync(url(d => F(d, current)), ct);
@@ -101,7 +127,8 @@ public class KtcDataService : IKtcDataService
     private async Task<List<JsonElement>> SearchPerBusinessAsync(string route, Func<int?, object> body, Warn w, CancellationToken ct)
     {
         var ids = await BusinessIdsAsync(w, ct);
-        var targets = ids.Count == 0 ? new List<int?> { null } : ids.Select(i => (int?)i).ToList();
+        // KTC lists no business ids on some servers; BusinessID 0 (the default business) is then what it accepts.
+        var targets = ids.Count == 0 ? new List<int?> { 0 } : ids.Select(i => (int?)i).ToList();
         var rows = new List<JsonElement>();
         using var gate = new SemaphoreSlim(Math.Max(1, _opt.MaxParallelCalls));
         await Task.WhenAll(targets.Select(async b =>
@@ -218,14 +245,16 @@ public class KtcDataService : IKtcDataService
             await gate.WaitAsync(ct);
             try
             {
-                if (Volatile.Read(ref failures) > 5) return;               // KTC is unhealthy - stop hammering it
+                if (Volatile.Read(ref failures) > 2) return;               // KTC is unhealthy - stop hammering it
                 var a = await AvailabilityValueAsync(id, DateTime.UtcNow.AddDays(-_opt.AvailabilityLookbackDays), DateTime.UtcNow, ct);
                 if (a.HasValue) { lock (res) res[id] = a.Value; _cache.Set($"avail|{Scope}|{id}", a.Value, TimeSpan.FromMinutes(_opt.AvailabilityCacheMinutes)); }
                 else Interlocked.Increment(ref failures);
             }
             finally { gate.Release(); }
         }));
-        if (failures > 0) w.Add($"Availability lookup failed for {failures} ATM(s); values shown as n/a.");
+        if (failures > 0) w.Add(BrokenRoutes.Keys.Any(k => k.Contains("OverallAvailability"))
+            ? "Availability is not available: the KTC server fails on Client/{id}/OverallAvailability (server-side error). Values shown as n/a."
+            : $"Availability lookup failed for {failures} ATM(s); values shown as n/a.");
         return res;
     }
 
