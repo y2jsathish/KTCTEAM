@@ -23,6 +23,7 @@ public static class DependencyInjection
         // token provider, dashboard and jobs must read the very same values: before, they could disagree (pipeline live while
         // IOptions said UseMock=true), and the background jobs then sent the literal "mock-token" to the real KTC server.
         var ktc = cfg.GetSection(KtcOptions.Section).Get<KtcOptions>() ?? new KtcOptions();
+        ktc.QueryDateFormatter = d => Ktc.Infrastructure.KtcApi.KtcDateFormats.Format(d, Ktc.Infrastructure.KtcApi.KtcDateFormats.Current(ktc), ktc.QueryTimeZone);
         s.AddSingleton<IOptions<KtcOptions>>(Options.Create(ktc));
 
         var provider = cfg["Database:Provider"] ?? "SqlServer";

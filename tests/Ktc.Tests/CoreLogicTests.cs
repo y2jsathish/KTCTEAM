@@ -405,15 +405,32 @@ public class ClientIdTests
 
 public class QueryDateTests
 {
-    [Fact]
-    public void Default_query_date_has_no_fraction_or_offset() =>
-        Assert.Equal("2026-11-13T11:48:24", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions().QueryDate(new DateTime(2026, 11, 13, 11, 48, 24, 366, DateTimeKind.Utc))));
+    private static readonly DateTime T = new(2026, 11, 13, 11, 48, 24, 366, DateTimeKind.Utc);
 
     [Fact]
-    public void Query_date_can_use_iso_and_local_time()
+    public void Default_query_date_has_no_fraction_or_offset() =>
+        Assert.Equal("2026-11-13T11:48:24", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions().QueryDate(T)));
+
+    [Theory]
+    [InlineData("yyyy-MM-dd HH:mm:ss", null, "2026-11-13 11:48:24")]
+    [InlineData("MM/dd/yyyy HH:mm:ss", null, "11/13/2026 11:48:24")]
+    [InlineData("yyyy-MM-ddTHH:mm:ss", "Asia/Dubai", "2026-11-13T15:48:24")]
+    [InlineData("unix", null, "1794570504")]
+    public void Formats_candidates(string f, string? tz, string expected) => Assert.Equal(expected, Uri.UnescapeDataString(KtcDateFormats.Format(T, f, tz)));
+
+    [Fact]
+    public void Recognises_ktc_date_error() =>
+        Assert.True(KtcDateFormats.IsDateError(new Ktc.Application.Models.KtcResponse(false, 500, null, "{\"Message\":\"FormatException: String was not recognized as a valid DateTime.\"}", "HTTP 500", 1)));
+}
+
+public class LastContactShapeTests
+{
+    [Fact]
+    public void Reads_CID_and_unknown_date_field()
     {
-        var o = new Ktc.Application.Options.KtcOptions { QueryDateFormat = "yyyy-MM-ddTHH:mm:ss", QueryTimeZone = "Asia/Dubai" };
-        Assert.Equal("2026-11-13T15:48:24", Uri.UnescapeDataString(o.QueryDate(new DateTime(2026, 11, 13, 11, 48, 24, DateTimeKind.Utc))));
-        Assert.EndsWith("Z", Uri.UnescapeDataString(new Ktc.Application.Options.KtcOptions { QueryDateFormat = "o" }.QueryDate(DateTime.UtcNow)));
+        var j = JsonDocument.Parse("[{\"CID\":3,\"CompId\":1,\"PropId\":0,\"VID\":-1,\"Value\":\"2026-11-13T11:40:00\"}]").RootElement.Clone();
+        var (id, v) = KtcJson.ById(j, "ClientID", "ClientId", "CID", "ID", "Id").Single();
+        Assert.Equal("3", id);
+        Assert.Equal(new DateTime(2026, 11, 13, 11, 40, 0, DateTimeKind.Utc), KtcJson.AnyDate(v));
     }
 }

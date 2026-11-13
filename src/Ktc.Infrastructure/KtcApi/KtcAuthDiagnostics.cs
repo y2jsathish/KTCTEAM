@@ -123,9 +123,13 @@ public class KtcAuthDiagnostics
         if (contact.Ok && contact.Json is { } cj)
         {
             L($"LastClientContact shape: {Shorten(KtcAuthService.Describe(cj.GetRawText()))}");
-            if (First(cj) is { } f && f.ValueKind == JsonValueKind.Object) L($"LastClientContact first record id-like values: {IdValues(f)}");
-            var n = KtcJson.ById(cj, "ClientID", "ClientId", "ID", "Id").Count();
-            L($"LastClientContact entries the portal can read: {n}");
+            if (First(cj) is { } f && f.ValueKind == JsonValueKind.Object)
+            {
+                L($"LastClientContact record fields: {string.Join(", ", f.EnumerateObject().Select(p => p.Name + ":" + p.Value.ValueKind.ToString().ToLowerInvariant()))}");
+                L($"LastClientContact first record id-like values: {IdValues(f)}");
+            }
+            var n = KtcJson.ById(cj, "ClientID", "ClientId", "CID", "ID", "Id").Count(x => KtcJson.DateValue(x.Value, "LastContact", "LastClientContact", "LastContactTime", "Timestamp", "TimeStamp", "Time", "LCT") != null || KtcJson.AnyDate(x.Value) != null);
+            L($"LastClientContact entries with a client id and a date the portal can read: {n}");
         }
         else L($"LastClientContact: HTTP {contact.Status} {contact.Message}");
 
@@ -133,43 +137,46 @@ public class KtcAuthDiagnostics
         L(groups.Ok ? $"Groups (id: name): {string.Join("; ", KtcJson.Items(groups.Json).Where(g => KtcJson.Str(g, "ID", "Id", "GroupID").Length > 0).Take(15).Select(g => KtcJson.Str(g, "ID", "Id", "GroupID") + ": " + KtcJson.Str(g, "Name", "Description")).DefaultIfEmpty("none listed"))}"
                     : $"Groups: HTTP {groups.Status} {groups.Message}");
 
+        var biz = await GetJson(http, "api/v1/Business?includeDefault=false", token, ct);
+        var bizIds = KtcJson.Items(biz.Json).Select(e => KtcJson.Int(e, -1, "ID", "Id", "BusinessID")).Where(i => i >= 0).Distinct().ToList();
+        L(biz.Ok ? $"Business ids: {(bizIds.Count == 0 ? "none" : string.Join(", ", bizIds.Take(20)))}" : $"Business: HTTP {biz.Status} {biz.Message}");
+
         L("");
         L("--- Request formats (which variant KTC accepts) ---");
         var now = DateTime.UtcNow;
-        string Z(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss") + "Z");
-        string Local(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss"));
-        string Day(DateTime d) => d.ToString("yyyy-MM-dd");
-        var gets = new List<string>
-        {
-            "api/v1/HistoricalError",
-            $"api/v1/HistoricalError?start={configured(now.AddHours(-1))}&end={configured(now)}",
-            $"api/v1/HistoricalError?start={Z(now.AddHours(-1))}&end={Z(now)}",
-            $"api/v1/HistoricalError?start={Local(now.AddHours(-1))}&end={Local(now)}",
-            $"api/v1/HistoricalError?start={Day(now.AddDays(-1))}&end={Day(now.AddDays(1))}",
-        };
         if (clientId != null)
         {
-            gets.Add($"api/v1/Client/{clientId}/HistoricalError");
-            foreach (var (si, ei) in new[] { (0, 0), (0, 95), (0, 1439), (0, 23) })
-                gets.Add($"api/v1/Client/{clientId}/OverallAvailability?start={Z(now.AddDays(-7))}&end={Z(now)}&starttimeindex={si}&endtimeindex={ei}");
-            gets.Add($"api/v1/Client/{clientId}/OverallAvailability?start={Day(now.AddDays(-7))}&end={Day(now)}&starttimeindex=0&endtimeindex=0");
-            gets.Add($"api/v1/Client/{clientId}/Top5UnavailableReasons?start={Z(now.AddDays(-7))}&end={Z(now)}");
+            L($"Date formats for Client/{clientId}/OverallAvailability (last 7 days):");
+            foreach (var f in KtcDateFormats.Candidates)
+            {
+                var u = $"api/v1/Client/{clientId}/OverallAvailability?start={KtcDateFormats.Format(now.AddDays(-7), f, null)}&end={KtcDateFormats.Format(now, f, null)}&starttimeindex=0&endtimeindex=0";
+                var r = await GetJson(http, u, token, ct);
+                L($"  {f,-22} {Uri.UnescapeDataString(u[(u.IndexOf('?') + 1)..])} -> {r.Status}{(r.Ok ? " OK" : " " + r.Message)}");
+            }
         }
-        foreach (var g in gets)
+        var probeFormats = new[] { "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
+        foreach (var f in probeFormats)
         {
-            var r = await GetJson(http, g, token, ct);
-            L($"GET  {Uri.UnescapeDataString(g)} -> {r.Status}{(r.Ok ? "" : " " + r.Message)}");
+            var q = $"start={KtcDateFormats.Format(now.AddHours(-24), f, null)}&end={KtcDateFormats.Format(now, f, null)}";
+            var r = await GetJson(http, "api/v1/HistoricalError?" + q, token, ct);
+            L($"GET  HistoricalError ({f}) -> {r.Status}{(r.Ok ? $" OK ({KtcJson.Items(r.Json).Count()} rows)" : " " + r.Message)}");
+            if (clientId != null)
+            {
+                var rc = await GetJson(http, $"api/v1/Client/{clientId}/HistoricalError?" + q, token, ct);
+                L($"GET  Client/{clientId}/HistoricalError ({f}) -> {rc.Status}{(rc.Ok ? $" OK ({KtcJson.Items(rc.Json).Count()} rows)" : " " + rc.Message)}");
+            }
         }
-        var groupIds = new List<int?> { null, 0, 1, 2 };
-        foreach (var gid in KtcJson.Items(groups.Json).Take(3).Select(g => KtcJson.Int(g, -1, "ID", "Id", "GroupID")).Where(x => x >= 0)) if (!groupIds.Contains(gid)) groupIds.Add(gid);
-        foreach (var gid in groupIds)
-        {
-            var t = await PostJson(http, "api/v1/Ticket/Search", token, new { BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
-                Start = now.AddDays(-7), End = now, SLAFilterType = 0, SLAHours = 0, OwnerName = (string?)null, ClientName = (string?)null, GroupID = gid, ExtraDataField = (string?)null, ExtraDataValue = (string?)null }, ct);
-            L($"POST Ticket/Search GroupID={gid?.ToString() ?? "null"} -> {t.Status}{(t.Ok ? $" ({KtcJson.Items(t.Json).Count()} rows)" : " " + t.Message)}");
-            var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = (int?)null, GroupID = gid, Start = now.AddHours(-1), End = now, ClientName = (string?)null }, ct);
-            L($"POST TransactionData/Search GroupID={gid?.ToString() ?? "null"} (last hour) -> {x.Status}{(x.Ok ? $" ({KtcJson.Items(x.Json).Count()} rows)" : " " + x.Message)}");
-        }
+        var bizTry = bizIds.Take(2).Select(i => (int?)i).ToList();
+        if (bizTry.Count == 0) bizTry.Add(0);
+        foreach (var b in bizTry)
+            foreach (var gid in new int?[] { 2, null })
+            {
+                var t = await PostJson(http, "api/v1/Ticket/Search", token, new { BusinessID = b, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
+                    Start = now.AddDays(-7), End = now, SLAFilterType = 0, SLAHours = 0, OwnerName = (string?)null, ClientName = (string?)null, GroupID = gid, ExtraDataField = (string?)null, ExtraDataValue = (string?)null }, ct);
+                L($"POST Ticket/Search BusinessID={b} GroupID={gid?.ToString() ?? "null"} -> {t.Status}{(t.Ok ? $" OK ({KtcJson.Items(t.Json).Count()} rows)" : " " + t.Message)}");
+                var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = b, GroupID = gid ?? 1, Start = now.AddHours(-1), End = now, ClientName = (string?)null }, ct);
+                L($"POST TransactionData/Search BusinessID={b} GroupID={gid ?? 1} (last hour) -> {x.Status}{(x.Ok ? $" OK ({KtcJson.Items(x.Json).Count()} rows)" : " " + x.Message)}");
+            }
     }
 
     private static JsonElement? First(JsonElement? j) => KtcJson.Items(j).Select(e => (JsonElement?)e).FirstOrDefault();
