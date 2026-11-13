@@ -336,12 +336,16 @@ public class PermissionAndDefaultsTests
     }
 
     [Fact]
-    public void HistoricalError_without_query_gets_last_24h()
+    public void HistoricalError_range_goes_in_a_DateTimePair_body()
     {
-        var q = ApiCatalogRules.DefaultQuery("api/v1/HistoricalError", new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc));
-        Assert.Equal("start=20261112100000000&end=20261113100000000", Uri.UnescapeDataString(q!));
-        Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/HistoricalError?start=x", DateTime.UtcNow));
-        Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/Region", DateTime.UtcNow));
+        Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/HistoricalError", DateTime.UtcNow));
+        Assert.True(KtcDateFormats.IsHistoricalError("api/v1/HistoricalError"));
+        Assert.True(KtcDateFormats.IsHistoricalError("/api/v1/Client/3/HistoricalError?x=1"));
+        Assert.False(KtcDateFormats.IsHistoricalError("api/v1/ActiveError"));
+        var from = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc); var to = from.AddDays(1);
+        Assert.Equal("{\"dt1\":\"2026-11-12T10:00:00\",\"dt2\":\"2026-11-13T10:00:00\"}", KtcDateFormats.DateTimePair(from, to, "yyyy-MM-ddTHH:mm:ss", null));
+        Assert.Equal("{\"dt1\":\"2026-11-12T10:00:00Z\",\"dt2\":\"2026-11-13T10:00:00Z\"}", KtcDateFormats.DateTimePair(from, to, "yyyy-MM-ddTHH:mm:ss'Z'", "Asia/Dubai"));
+        Assert.Equal("/Date(1794477600000)/", KtcDateFormats.Raw(from, "msdate", null));
     }
 }
 

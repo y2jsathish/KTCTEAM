@@ -154,16 +154,22 @@ public class KtcAuthDiagnostics
                 L($"  {f,-22} {Uri.UnescapeDataString(u[(u.IndexOf('?') + 1)..])} -> {r.Status}{(r.Ok ? " OK" : " " + r.Message)}");
             }
         }
-        var probeFormats = new[] { "yyyyMMddHHmmssfff", "yyyy-MM-ddTHH:mm:ss", "yyyy-MM-dd HH:mm:ss", "MM/dd/yyyy HH:mm:ss", "dd/MM/yyyy HH:mm:ss", "ticks" };
-        foreach (var f in probeFormats)
+        L("Top5UnavailableReasons and HistoricalError (last 24h):");
+        if (clientId != null)
         {
-            var q = $"start={KtcDateFormats.Format(now.AddHours(-24), f, null)}&end={KtcDateFormats.Format(now, f, null)}";
-            var r = await GetJson(http, "api/v1/HistoricalError?" + q, token, ct);
-            L($"GET  HistoricalError ({f}) -> {r.Status}{(r.Ok ? $" OK ({KtcJson.Items(r.Json).Count()} rows)" : " " + r.Message)}");
-            if (clientId != null)
+            var t5 = $"api/v1/Client/{clientId}/Top5UnavailableReasons?start={KtcDateFormats.Format(now.AddDays(-7), "yyyyMMddHHmmssfff", null)}&end={KtcDateFormats.Format(now, "yyyyMMddHHmmssfff", null)}";
+            var r5 = await GetJson(http, t5, token, ct);
+            L($"GET  Client/{clientId}/Top5UnavailableReasons (yyyyMMddHHmmssfff, 7 days) -> {r5.Status}{(r5.Ok ? $" OK ({KtcJson.Items(r5.Json).Count()} rows)" : " " + r5.Message)}");
+        }
+        // KTC's docs: HistoricalError takes no URI parameters; the range is a DateTimePair body {"dt1","dt2"} on the GET.
+        foreach (var f in KtcDateFormats.BodyCandidates)
+        {
+            var body = KtcDateFormats.DateTimePair(now.AddHours(-24), now, f, null);
+            foreach (var route in clientId != null ? new[] { "api/v1/HistoricalError", $"api/v1/Client/{clientId}/HistoricalError" } : new[] { "api/v1/HistoricalError" })
             {
-                var rc = await GetJson(http, $"api/v1/Client/{clientId}/HistoricalError?" + q, token, ct);
-                L($"GET  Client/{clientId}/HistoricalError ({f}) -> {rc.Status}{(rc.Ok ? $" OK ({KtcJson.Items(rc.Json).Count()} rows)" : " " + rc.Message)}");
+                var req = new HttpRequestMessage(HttpMethod.Get, route) { Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json") };
+                var r = await SendJson(http, req, token, ct);
+                L($"GET  {route[7..]} body {body} -> {r.Status}{(r.Ok ? $" OK ({KtcJson.Items(r.Json).Count()} rows)" : " " + r.Message)}");
             }
         }
         L("");
@@ -232,6 +238,11 @@ public class KtcAuthDiagnostics
         using var req = new HttpRequestMessage(HttpMethod.Get, route);
         if (scheme == "Bearer") req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         else if (scheme == null) req.Headers.TryAddWithoutValidation("Authorization", token);
+        if (KtcDateFormats.IsHistoricalError(route))
+        {
+            req.Content = new StringContent(KtcDateFormats.DateTimePair(DateTime.UtcNow.AddHours(-24), DateTime.UtcNow, KtcDateFormats.CurrentBody, null), Encoding.UTF8, "application/json");
+            note = (note + " (dt1/dt2 body, last 24h)").Trim();
+        }
         var (res, ms) = await Send(http, req, ct);
         if (res == null) { L($"{n}. GET {route} {note} -> failed: {ms}"); return; }
         using (res)
