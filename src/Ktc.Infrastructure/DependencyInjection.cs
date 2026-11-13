@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Ktc.Application.Abstractions;
 using Ktc.Application.Models;
 using Ktc.Application.Options;
@@ -16,10 +17,13 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddKtcInfrastructure(this IServiceCollection s, IConfiguration cfg)
     {
-        s.Configure<KtcOptions>(cfg.GetSection(KtcOptions.Section));
         s.Configure<PortalOptions>(cfg.GetSection(PortalOptions.Section));
         s.Configure<NotificationOptions>(cfg.GetSection(NotificationOptions.Section));
+        // One KtcOptions instance for the whole app. The HTTP pipeline (mock or live handler) is built from it at startup, so the
+        // token provider, dashboard and jobs must read the very same values: before, they could disagree (pipeline live while
+        // IOptions said UseMock=true), and the background jobs then sent the literal "mock-token" to the real KTC server.
         var ktc = cfg.GetSection(KtcOptions.Section).Get<KtcOptions>() ?? new KtcOptions();
+        s.AddSingleton<IOptions<KtcOptions>>(Options.Create(ktc));
 
         var provider = cfg["Database:Provider"] ?? "SqlServer";
         s.AddDbContext<KtcDbContext>(o =>

@@ -37,6 +37,7 @@ public class ApiExecutionService : IApiExecutionService
         p ??= new Dictionary<string, string>();
         var url = BuildUrl(ep.RelativeUrl, p, out var missing);
         if (missing != null) return Fail($"Missing parameter '{missing}'.");
+        if (ApiCatalogRules.DefaultQuery(url, DateTime.UtcNow) is { } dq) url += "?" + dq;
 
         var ttl = TimeSpan.FromSeconds(Math.Max(5, ep.Mappings.FirstOrDefault()?.RefreshInterval ?? 30));
         var key = "exec:" + endpointId + ":" + Hash(url + "|" + body);

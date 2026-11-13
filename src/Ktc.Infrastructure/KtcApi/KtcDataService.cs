@@ -84,6 +84,7 @@ public class KtcDataService : IKtcDataService
         await Task.WhenAll(tLookup, tContact, tInc, tTk);
 
         var contacts = new Dictionary<string, DateTime>();
+        var contactsKnown = tContact.Result != null;
         foreach (var e in KtcJson.Items(tContact.Result))
         {
             var id = KtcJson.Str(e, "ClientID", "ID", "Id"); var d = KtcJson.Date(e, "LastContact", "LastClientContact", "LastContactTime", "Timestamp", "Time");
@@ -100,9 +101,11 @@ public class KtcDataService : IKtcDataService
             var inc = incByAtm[c.Id].ToList();
             DateTime? last = contacts.TryGetValue(c.Id, out var d) ? d : null;
             bool commFault = inc.Any(i => Regex.IsMatch(i.Description, @"communication failure|link down|offline|unreachable device", RegexOptions.IgnoreCase) && !Regex.IsMatch(i.Description, "host", RegexOptions.IgnoreCase));
-            bool offline = commFault || !last.HasValue || (now - last.Value).TotalMinutes > _opt.OfflineMinutes;
+            // Without LastClientContact (e.g. the KTC user lacks the Administrator/MergeClients role) contact age is unknown:
+            // judge the ATM on its incidents only instead of marking every ATM offline.
+            bool offline = commFault || (contactsKnown && (!last.HasValue || (now - last.Value).TotalMinutes > _opt.OfflineMinutes));
             bool host = inc.Any(i => i.HostRelated && Regex.IsMatch(i.Description, @"disconnect|unreachable|down|no response|timeout", RegexOptions.IgnoreCase));
-            var hr = AtmHealthCalculator.Evaluate(new HealthInput(last, offline, host,
+            var hr = AtmHealthCalculator.Evaluate(new HealthInput(contactsKnown ? last : now, offline, host,
                 inc.Count(i => i.Severity == Severity.P1), inc.Count(i => i.Severity == Severity.P2), inc.Count(i => i.Severity == Severity.P3), inc.Count(i => i.Severity == Severity.P4)), now, _opt.AtmOnlineMinutes);
             list.Add(new AtmDto
             {
