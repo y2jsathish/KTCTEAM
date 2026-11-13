@@ -174,7 +174,7 @@ public class KtcAuthDiagnostics
         }
         L("");
         L("--- KTC's own documentation for the failing routes (parameters section) ---");
-        foreach (var page in new[] { "GET-api-v1-Client-id-OverallAvailability_start_end_starttimeindex_endtimeindex", "GET-api-v1-Client-id-Top5UnavailableReasons_start_end", "GET-api-v1-HistoricalError", "GET-api-v1-Client-id-HistoricalError" })
+        foreach (var page in new[] { "POST-api-v1-Client-id-EJRow", "POST-api-v1-Client-id-EJPlusTime", "GET-api-v1-EJField", "POST-api-v1-TransactionData-Search" })
         {
             var (res, info) = await Send(http, new HttpRequestMessage(HttpMethod.Get, "Documentation/Api/" + page), ct);
             if (res == null) { L($"{page}: {info}"); continue; }
@@ -185,7 +185,7 @@ public class KtcAuthDiagnostics
                 text = System.Text.RegularExpressions.Regex.Replace(text, "\\s+", " ").Trim();
                 var i = text.IndexOf("Request Information", StringComparison.OrdinalIgnoreCase);
                 if (i < 0) i = text.IndexOf("URI Parameters", StringComparison.OrdinalIgnoreCase);
-                L($"{page}: HTTP {(int)res.StatusCode}{(res.IsSuccessStatusCode ? " | " + (i >= 0 ? text[i..Math.Min(text.Length, i + 700)] : text[..Math.Min(400, text.Length)]) : "")}");
+                L($"{page}: HTTP {(int)res.StatusCode}{(res.IsSuccessStatusCode ? " | " + (i >= 0 ? text[i..Math.Min(text.Length, i + 1500)] : text[..Math.Min(400, text.Length)]) : "")}");
             }
         }
         L("");
@@ -207,11 +207,13 @@ public class KtcAuthDiagnostics
         L("");
         L($"--- Transactions (TransactionData/Search; portal uses GroupID={allGroup} \"All Clients\") ---");
         var shown = false;
+        var txClients = new List<string>();
         foreach (var b in bizTry)
             foreach (var (gid, span, label) in new[] { (allGroup, TimeSpan.FromHours(1), "1h"), (allGroup, TimeSpan.FromHours(24), "24h"), (allGroup, TimeSpan.FromDays(7), "7d"), (1, TimeSpan.FromHours(24), "24h") })
             {
                 var x = await PostJson(http, "api/v1/TransactionData/Search", token, new { BusinessID = b, GroupID = gid, Start = now - span, End = now, ClientName = (string?)null }, ct);
                 var rows = KtcJson.Items(x.Json).ToList();
+                foreach (var tr in rows) if (KtcJson.NormId(KtcJson.Str(tr, "ClientID", "ClientId", "CID")) is { Length: > 0 } tc && !txClients.Contains(tc)) txClients.Add(tc);
                 L($"POST TransactionData/Search BusinessID={b} GroupID={gid} last {label} -> {x.Status}{(x.Ok ? $" OK, body {x.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + x.Message)}");
                 if (x.Ok && x.Json is { ValueKind: JsonValueKind.Object } top && rows.Count <= 1)
                     L($"  top-level fields: {Fields(top)}");
@@ -240,20 +242,37 @@ public class KtcAuthDiagnostics
         var ejNames = KtcJson.Items(ejf.Json).Select(e => KtcJson.Str(e, "Name", "FieldName", "Description")).Where(n => n.Length > 0).Distinct().ToArray();
         L(ejf.Ok ? $"EJ fields ({ejNames.Length}): {string.Join(", ", ejNames.Take(40))}" : $"EJField: HTTP {ejf.Status} {ejf.Message}");
         if (ejf.Ok && KtcJson.Items(ejf.Json).FirstOrDefault() is { ValueKind: JsonValueKind.Object } f0) L($"  EJField record fields: {Fields(f0)}");
-        if (clientId != null)
-            foreach (var (label, span, names) in new[] { ("24h, all EJ fields", TimeSpan.FromHours(24), ejNames), ("24h, no fields", TimeSpan.FromHours(24), Array.Empty<string>()), ("7d, all EJ fields", TimeSpan.FromDays(7), ejNames) })
+        var ejIds = KtcJson.Items(ejf.Json).Select(e => KtcJson.Int(e, -1, "ID", "Id", "EJFieldID")).Where(i => i >= 0).Distinct().ToArray();
+        // ATMs that had transactions are the ones most likely to have EJ; fall back to the first client.
+        var ejClients = txClients.Take(3).ToList();
+        if (clientId != null && !ejClients.Contains(clientId)) ejClients.Add(clientId);
+        L($"Transactions came from clients: {(txClients.Count == 0 ? "none" : string.Join(", ", txClients.Take(15)))}; EJ is tried on {string.Join(", ", ejClients)}");
+        async Task Ej(string route, string label, object body)
+        {
+            var ej = await PostJson(http, route, token, body, ct);
+            var rows = KtcJson.Rows(ej.Json).ToList();
+            L($"POST {route[7..]} {label} -> {ej.Status}{(ej.Ok ? $" OK, body {ej.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + ej.Message)}");
+            if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.Object } er)
             {
-                var ej = await PostJson(http, $"api/v1/Client/{clientId}/EJRow", token, new { Value1 = now - span, Value2 = now, Value3 = names }, ct);
-                var rows = KtcJson.Rows(ej.Json).ToList();
-                L($"POST Client/{clientId}/EJRow {label} -> {ej.Status}{(ej.Ok ? $" OK, body {ej.Json?.ValueKind.ToString().ToLowerInvariant() ?? "empty"}, {rows.Count} rows" : " " + ej.Message)}");
-                if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.Object } er)
-                {
-                    L($"  row fields: {Fields(er.Value)}{(er.Key.Length > 0 ? $" (keyed by id, e.g. {er.Key})" : "")}");
-                    L($"  sample values (first row): {Samples(er.Value)}");
-                }
-                else if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.String } es)
-                    L($"  rows are strings, e.g. {CardMaskerSafe(Shorten(es.Value.GetString() ?? ""))}");
+                L($"  row fields: {Fields(er.Value)}{(er.Key.Length > 0 ? $" (keyed by id, e.g. {er.Key})" : "")}");
+                L($"  sample values (first row): {Samples(er.Value)}");
             }
+            else if (rows.FirstOrDefault() is { Value.ValueKind: JsonValueKind.String } es)
+                L($"  rows are strings, e.g. {CardMaskerSafe(Shorten(es.Value.GetString() ?? ""))}");
+        }
+        string Ktc(DateTime d) => KtcDateFormats.Raw(d, "yyyyMMddHHmmssfff", null);
+        foreach (var ec in ejClients)
+        {
+            var r = $"api/v1/Client/{ec}/EJRow";
+            await Ej(r, "7d, ISO dates, all field names", new { Value1 = now.AddDays(-7), Value2 = now, Value3 = ejNames });
+            await Ej(r, "7d, ISO dates, no fields", new { Value1 = now.AddDays(-7), Value2 = now, Value3 = Array.Empty<string>() });
+            await Ej(r, "7d, ISO dates, field ids", new { Value1 = now.AddDays(-7), Value2 = now, Value3 = ejIds.Select(i => i.ToString()).ToArray() });
+            await Ej(r, "7d, yyyyMMddHHmmssfff dates, all field names", new { Value1 = Ktc(now.AddDays(-7)), Value2 = Ktc(now), Value3 = ejNames });
+            await Ej(r, "7d, UTC+4 local dates (no Z), all field names", new { Value1 = now.AddHours(4).AddDays(-7).ToString("yyyy-MM-ddTHH:mm:ss"), Value2 = now.AddHours(4).ToString("yyyy-MM-ddTHH:mm:ss"), Value3 = ejNames });
+            await Ej($"api/v1/Client/{ec}/EJPlusTime", "7d, ISO dates, all field names", new { Value1 = now.AddDays(-7), Value2 = now, Value3 = ejNames });
+        }
+        if (ejClients.FirstOrDefault() is { } c30)
+            await Ej($"api/v1/Client/{c30}/EJRow", "30d, ISO dates, all field names", new { Value1 = now.AddDays(-30), Value2 = now, Value3 = ejNames });
     }
 
     /// <summary>Short scalar values of a record for the report; card, track, account and secret-like fields are left out, and long digit runs are masked.</summary>
