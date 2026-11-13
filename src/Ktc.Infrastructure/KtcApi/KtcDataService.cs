@@ -461,7 +461,7 @@ public class KtcDataService : IKtcDataService
         // Short cache: the portal polls this every 30 s from several widgets.
         var all = await Cached(key, TimeSpan.FromSeconds(25), async () =>
         {
-            var w = new Warn(); var lookup = await LookupAsync(w, ct);
+            var w = new Warn(); var lookup = await LookupAsync(w, ct); var types = await TransactionTypesAsync(w, ct);
             var gid = _opt.TransactionSearchGroupId > 0 ? _opt.TransactionSearchGroupId : await AllClientsGroupIdAsync(w, ct);
             var rowsAll = await SearchRowsPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = gid, Start = from, End = to, ClientName = (string?)null }, w, ct);
             var errs = w.ToList();
@@ -471,8 +471,8 @@ public class KtcDataService : IKtcDataService
             foreach (var (k, e) in rowsAll)
             {
                 if (KtcJson.TryProp(e, out var nested, "Transactions", "TransactionList") && nested.ValueKind == JsonValueKind.Array)
-                    foreach (var t in nested.EnumerateArray()) { var m = MapTx(t, lookup, e); if (m != null) res.Add(m); }
-                else { var m = MapTx(e, lookup, null, k); if (m != null) res.Add(m); }
+                    foreach (var t in nested.EnumerateArray()) { var m = MapTx(t, lookup, e, "", types); if (m != null) res.Add(m); }
+                else { var m = MapTx(e, lookup, null, k, types); if (m != null) res.Add(m); }
             }
             if (rowsAll.Count > 0 && res.Count == 0 && rowsAll[0].Value.ValueKind == JsonValueKind.Object)
                 _log.LogWarning("KTC returned {Rows} transaction records but none could be read; fields of the first: {Fields}", rowsAll.Count,
@@ -491,11 +491,21 @@ public class KtcDataService : IKtcDataService
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
         var json = await Fetch($"api/v1/TransactionData/{Uri.EscapeDataString(id)}", w, ct: ct);
-        return KtcJson.Items(json).Select(e => MapTx(e, lookup, null)).FirstOrDefault(t => t != null);
+        var types = await TransactionTypesAsync(w, ct);
+        return KtcJson.Items(json).Select(e => MapTx(e, lookup, null, "", types)).FirstOrDefault(t => t != null);
     }
 
+    /// <summary>KTC transaction type id -> name (GET api/v1/TransactionType); transactions carry only the id.</summary>
+    private Task<Dictionary<string, string>> TransactionTypesAsync(Warn w, CancellationToken ct) =>
+        Cached("tx-types", TimeSpan.FromMinutes(30), async () =>
+        {
+            var json = await Fetch("api/v1/TransactionType", w, ct: ct);
+            return KtcJson.Rows(json).Select(r => (Id: (KtcJson.Str(r.Value, "ID", "Id", "TransactionTypeID", "TypeID") is { Length: > 0 } tid ? tid : r.Key), Name: KtcJson.Str(r.Value, "Name", "TypeName", "Description", "TransactionTypeName", "DisplayName")))
+                .Where(x => x.Id.Length > 0 && x.Name.Length > 0).GroupBy(x => KtcJson.NormId(x.Id)).ToDictionary(g => g.Key, g => g.First().Name);
+        });
+
     private static readonly Regex OkRx = new(@"success|approved|completed ok|\bok\b|completed$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent, string key = "")
+    private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent, string key = "", Dictionary<string, string>? types = null)
     {
         var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "TransactionId", "TransactionDataID", "TransactionDataId", "UUID", "GUID");
         if (id.Length == 0) id = key;
@@ -521,28 +531,67 @@ public class KtcDataService : IKtcDataService
         return new TransactionDto
         {
             Id = id, AtmId = atm, AtmName = c?.Name ?? KtcJson.Str(e, "ClientName"), Client = c?.Business ?? "", Region = c?.Region ?? "",
-            Type = KtcJson.Str(e, "TransactionTypeName", "TransactionType", "Type", "TypeName"), Success = ok,
+            Type = TxType(e, types), Success = ok,
             Amount = double.IsNaN(amount) ? null : (decimal)amount, Currency = KtcJson.Str(e, "Currency", "CurrencyCode"), TimeUtc = start,
             ResponseMs = end.HasValue ? (int)Math.Max(0, (end.Value - start).TotalMilliseconds) : KtcJson.Int(e, 0, "ResponseTime", "ResponseMs"),
             ErrorCode = ok ? "" : (err.Length > 0 ? err : result), FailureCategory = ok ? "" : FailureClassifier.Classify(result + " " + reason)
         };
     }
 
+    /// <summary>The transaction type name: a name field if KTC sends one, else the TransactionTypeID looked up in GET TransactionType.</summary>
+    private static string TxType(JsonElement e, Dictionary<string, string>? types)
+    {
+        var name = KtcJson.Str(e, "TransactionTypeName", "TypeName", "TransactionTypeDescription");
+        if (name.Length > 0) return name;
+        var raw = KtcJson.Str(e, "TransactionTypeID", "TransactionTypeId", "TypeID", "TypeId", "TransactionType", "Type", "TxnType");
+        if (raw.Length == 0) return "";
+        var id = KtcJson.NormId(raw);
+        if (types != null && types.TryGetValue(id, out var n)) return n;
+        return long.TryParse(id, out _) ? "Type " + id : raw;
+    }
+
     // ---------------- EJ ----------------
+    /// <summary>Names of KTC's EJ fields (GET api/v1/EJField), used as EJRow's Value3 when Ktc:EjFields is not set.</summary>
+    private Task<string[]> EjFieldNamesAsync(Warn w, CancellationToken ct) =>
+        Cached("ej-fields", TimeSpan.FromMinutes(30), async () =>
+        {
+            var json = await Fetch("api/v1/EJField", w, ct: ct);
+            return KtcJson.Items(json).Select(e => KtcJson.Str(e, "Name", "FieldName", "Description")).Where(n => n.Length > 0).Distinct().ToArray();
+        });
+
     public async Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery q, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
-        var id = lookup.ContainsKey(q.AtmId) ? q.AtmId : lookup.Values.FirstOrDefault(c => c.Name.Equals(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id;
-        if (id == null) return Array.Empty<EjEntryDto>();
-        var json = await Fetch($"api/v1/Client/{id}/EJRow", w, HttpMethod.Post, new { Value1 = q.From, Value2 = q.To, Value3 = _opt.EjFields }, true, ct);
+        var norm = KtcJson.NormId(q.AtmId);
+        var id = lookup.ContainsKey(norm) ? norm
+               : lookup.Values.FirstOrDefault(c => c.Name.Equals(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id
+               ?? lookup.Values.FirstOrDefault(c => c.Name.Contains(q.AtmId, StringComparison.OrdinalIgnoreCase))?.Id
+               ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) { _log.LogInformation("EJ search: no ATM matches '{Atm}'", q.AtmId); return Array.Empty<EjEntryDto>(); }
+
+        // EJRow's Value3 is the list of EJ field names to return; KTC answers with nothing when it is empty, so default to every EJField.
+        var fields = _opt.EjFields is { Length: > 0 } cfg ? cfg : await EjFieldNamesAsync(w, ct);
+        var r = await _api.SendAsync(HttpMethod.Post, $"api/v1/Client/{id}/EJRow", new { Value1 = q.From, Value2 = q.To, Value3 = fields }, new KtcCallOptions { Idempotent = true }, ct);
+        if (r.Success && !KtcJson.Rows(r.Json).Any() && fields.Length > 0)
+            r = await _api.SendAsync(HttpMethod.Post, $"api/v1/Client/{id}/EJRow", new { Value1 = q.From, Value2 = q.To, Value3 = Array.Empty<string>() }, new KtcCallOptions { Idempotent = true }, ct);
+        if (!r.Success) _log.LogWarning("EJ search for client {Id} {From:u}..{To:u} failed: {Error}", id, q.From, q.To, r.Error);
+        var json = r.Success ? r.Json : null;
 
         var rows = new List<(string Seq, DateTime Time, string Text)>();
-        foreach (var e in KtcJson.Items(json))
+        foreach (var (key, e) in KtcJson.Rows(json))
         {
-            var text = KtcJson.Str(e, "Text", "EJText", "Data", "Line", "Value", "Description");
-            if (text.Length == 0) text = string.Join(" | ", SchemaInferer.Leaves(e).Where(l => l.Value.Length > 0).Select(l => l.Value));
-            rows.Add((KtcJson.Str(e, "Sequence", "RowNumber", "EJID", "ID", "Id"), KtcJson.Date(e, "TimeStamp", "Time", "TransactionStartTime", "DateTime", "Date") ?? q.From, text));
+            string text;
+            if (e.ValueKind == JsonValueKind.String) text = e.GetString() ?? "";
+            else
+            {
+                text = KtcJson.Str(e, "Text", "EJText", "Data", "Line", "Value", "Description", "RowText", "EJRowText", "Content");
+                if (text.Length == 0) text = string.Join(" | ", SchemaInferer.Leaves(e).Where(l => l.Value.Length > 0).Select(l => l.Value));
+            }
+            var seq = e.ValueKind == JsonValueKind.Object ? KtcJson.Str(e, "Sequence", "RowNumber", "EJID", "EJRowID", "ID", "Id") : "";
+            var time = e.ValueKind == JsonValueKind.Object ? KtcJson.Date(e, "TimeStamp", "Timestamp", "Time", "TransactionStartTime", "DateTime", "Date", "TimeLocal") ?? KtcJson.AnyDate(e) : null;
+            rows.Add((seq.Length > 0 ? seq : key, time ?? q.From, text));
         }
+        if (rows.Count == 0 && r.Success) _log.LogInformation("EJ search for client {Id} {From:u}..{To:u}: KTC returned no rows ({Shape})", id, q.From, q.To, r.Json?.ValueKind.ToString() ?? "empty");
 
         // Filtering runs on RAW text (so a full PAN search works) - only masked text is ever returned.
         IEnumerable<(string Seq, DateTime Time, string Text)> f = rows;
