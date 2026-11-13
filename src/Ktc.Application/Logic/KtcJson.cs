@@ -58,6 +58,17 @@ public static class KtcJson
         return Date(e, names);
     }
 
+    /// <summary>The first property that holds a plausible date (year 2000+), for records whose date field name is not known.</summary>
+    public static DateTime? AnyDate(JsonElement e)
+    {
+        if (e.ValueKind != JsonValueKind.Object) return null;
+        foreach (var p in e.EnumerateObject())
+            if (p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { Length: >= 8 } s && (s.Contains('-') || s.Contains('/')) &&
+                DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var d) && d.Year >= 2000)
+                return d;
+        return null;
+    }
+
     /// <summary>Normalises an id: trims, and turns 3.0 / "003" style numbers into "3" so ids from different routes match.</summary>
     public static string NormId(string id)
     {

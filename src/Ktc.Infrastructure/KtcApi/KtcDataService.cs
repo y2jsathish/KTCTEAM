@@ -44,6 +44,80 @@ public class KtcDataService : IKtcDataService
         return r.Json;
     }
 
+    /// <summary>
+    /// GET a route whose query carries dates. If KTC cannot parse the date format, tries the other formats in
+    /// <see cref="KtcDateFormats.Candidates"/> once and remembers the first that KTC accepts.
+    /// </summary>
+    private async Task<KtcResponse> GetWithDatesAsync(Func<Func<DateTime, string>, string> url, CancellationToken ct)
+    {
+        string F(DateTime d, string f) => KtcDateFormats.Format(d, f, _opt.QueryTimeZone);
+        var current = KtcDateFormats.Current(_opt);
+        var r = await _api.GetAsync(url(d => F(d, current)), ct);
+        if (!KtcDateFormats.IsDateError(r) || KtcDateFormats.Resolved != null) return r;
+        await DateProbeGate.WaitAsync(ct);
+        try
+        {
+            if (KtcDateFormats.Resolved is { } other) return await _api.GetAsync(url(d => F(d, other)), ct);
+            foreach (var f in KtcDateFormats.Candidates.Where(c => c != current))
+            {
+                var t = await _api.GetAsync(url(d => F(d, f)), ct);
+                if (KtcDateFormats.IsDateError(t)) continue;
+                if (t.StatusCode < 500) { KtcDateFormats.Remember(f); _log.LogInformation("KTC accepts query dates as {Format}; using it from now on (set Ktc:QueryDateFormat to keep it).", f); }
+                return t;
+            }
+            _log.LogWarning("KTC rejected every known query date format for {Url}", url(d => "{date}"));
+            return r;
+        }
+        finally { DateProbeGate.Release(); }
+    }
+    private static readonly SemaphoreSlim DateProbeGate = new(1, 1);
+
+    /// <summary>ToDictionary that tolerates missing/duplicate ids (first one wins) instead of throwing.</summary>
+    private static Dictionary<string, V> ToMap<V>(IEnumerable<JsonElement> items, Func<JsonElement, string> key, Func<JsonElement, V> val)
+    {
+        var d = new Dictionary<string, V>();
+        foreach (var e in items) { var k = KtcJson.NormId(key(e)); if (k.Length > 0) d.TryAdd(k, val(e)); }
+        return d;
+    }
+
+    /// <summary>
+    /// KTC Ticket/Search and TransactionData/Search refuse a search without a business ("KXArgumentException: ... there is no
+    /// business ID in the search parameters"), so searches run once per business from GET Business and are merged.
+    /// </summary>
+    private Task<List<int>> BusinessIdsAsync(Warn w, CancellationToken ct) =>
+        Cached("business-ids", TimeSpan.FromMinutes(10), async () =>
+        {
+            var json = await Fetch("api/v1/Business?includeDefault=false", w, ct: ct);
+            var ids = KtcJson.Items(json).Select(e => KtcJson.Int(e, -1, "ID", "Id", "BusinessID")).Where(i => i >= 0).Distinct().Take(Math.Max(1, _opt.MaxBusinessesPerSearch)).ToList();
+            if (ids.Count == 0)
+            {
+                json = await Fetch("api/v1/Business?includeDefault=true", w, ct: ct);
+                ids = KtcJson.Items(json).Select(e => KtcJson.Int(e, -1, "ID", "Id", "BusinessID")).Where(i => i >= 0).Distinct().Take(Math.Max(1, _opt.MaxBusinessesPerSearch)).ToList();
+            }
+            return ids;
+        });
+
+    /// <summary>Runs a KTC search once per business and returns all result rows (each tagged with nothing extra; ids stay unique per KTC).</summary>
+    private async Task<List<JsonElement>> SearchPerBusinessAsync(string route, Func<int?, object> body, Warn w, CancellationToken ct)
+    {
+        var ids = await BusinessIdsAsync(w, ct);
+        var targets = ids.Count == 0 ? new List<int?> { null } : ids.Select(i => (int?)i).ToList();
+        var rows = new List<JsonElement>();
+        using var gate = new SemaphoreSlim(Math.Max(1, _opt.MaxParallelCalls));
+        await Task.WhenAll(targets.Select(async b =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                var json = await Fetch(route, w, HttpMethod.Post, body(b), true, ct);
+                var items = KtcJson.Items(json).ToList();
+                lock (rows) rows.AddRange(items);
+            }
+            finally { gate.Release(); }
+        }));
+        return rows;
+    }
+
     private Task<T> Cached<T>(string key, TimeSpan ttl, Func<Task<T>> factory) =>
         _cache.GetOrCreateAsync($"{Scope}|{key}", e => { e.AbsoluteExpirationRelativeToNow = ttl; return factory(); })!;
 
@@ -55,16 +129,16 @@ public class KtcDataService : IKtcDataService
             var tc = Fetch("api/v1/Client?includedeleted=false", w, ct: ct); var tb = Fetch("api/v1/Business?includeDefault=false", w, ct: ct);
             var tr = Fetch("api/v1/Region?includeDefault=false", w, ct: ct); var tbr = Fetch("api/v1/Branch?includeDefault=false", w, ct: ct);
             await Task.WhenAll(tc, tb, tr, tbr);
-            var biz = KtcJson.Items(tb.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "BusinessID"), e => KtcJson.Str(e, "Name", "BusinessName"));
-            var reg = KtcJson.Items(tr.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "RegionID"), e => KtcJson.Str(e, "Name", "RegionName"));
-            var br = KtcJson.Items(tbr.Result).ToDictionary(e => KtcJson.Str(e, "ID", "Id", "BranchID"), e => (Name: KtcJson.Str(e, "Name", "BranchName"), City: KtcJson.Str(e, "City", "Town")));
+            var biz = ToMap(KtcJson.Items(tb.Result), e => KtcJson.Str(e, "ID", "Id", "BusinessID"), e => KtcJson.Str(e, "Name", "BusinessName"));
+            var reg = ToMap(KtcJson.Items(tr.Result), e => KtcJson.Str(e, "ID", "Id", "RegionID"), e => KtcJson.Str(e, "Name", "RegionName"));
+            var br = ToMap(KtcJson.Items(tbr.Result), e => KtcJson.Str(e, "ID", "Id", "BranchID"), e => (Name: KtcJson.Str(e, "Name", "BranchName"), City: KtcJson.Str(e, "City", "Town")));
             var map = new Dictionary<string, ClientRec>();
             foreach (var e in KtcJson.Items(tc.Result))
             {
                 var id = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "ID", "Id"));
                 if (id.Length == 0 || KtcJson.Bool(e, false, "Deleted", "IsDeleted")) continue;
                 br.TryGetValue(KtcJson.Str(e, "BranchID", "BranchId"), out var b);
-                var rid = KtcJson.Str(e, "RegionID", "RegionId");
+                var rid = KtcJson.Str(e, "RegionID", "RegionId", "Level1RegionID", "Level2RegionID");
                 map[id] = new ClientRec(id, KtcJson.Str(e, "Name", "NodeName", "ClientName"), KtcJson.Str(e, "Alias", "DisplayName"), KtcJson.Str(e, "Address", "NetworkAddress"),
                     biz.GetValueOrDefault(KtcJson.Str(e, "BusinessID", "BusinessId")) ?? "", b.Name ?? "", string.IsNullOrEmpty(b.City) ? (b.Name ?? "") : b.City,
                     reg.GetValueOrDefault(rid) ?? "", KtcJson.Str(e, "HardwareTypeName", "HardwareType", "ModelName"));
@@ -84,9 +158,10 @@ public class KtcDataService : IKtcDataService
         await Task.WhenAll(tLookup, tContact, tInc, tTk);
 
         var contacts = new Dictionary<string, DateTime>();
-        foreach (var (rawId, v) in KtcJson.ById(tContact.Result, "ClientID", "ClientId", "ID", "Id"))
+        foreach (var (rawId, v) in KtcJson.ById(tContact.Result, "ClientID", "ClientId", "CID", "ID", "Id"))
         {
-            var d = KtcJson.DateValue(v, "LastContact", "LastClientContact", "LastContactTime", "LastContactTimeStamp", "Timestamp", "TimeStamp", "Time", "DateTime");
+            var d = KtcJson.DateValue(v, "LastContact", "LastClientContact", "LastContactTime", "LastContactTimeStamp", "Timestamp", "TimeStamp", "Time", "DateTime", "LCT", "LastTime", "Last")
+                    ?? KtcJson.AnyDate(v);
             if (d.HasValue) contacts[KtcJson.NormId(rawId)] = d.Value;
         }
         // Only trust contact ages when the response could be matched to the client list; otherwise every ATM would look offline.
@@ -156,7 +231,7 @@ public class KtcDataService : IKtcDataService
 
     private async Task<double?> AvailabilityValueAsync(string id, DateTime from, DateTime to, CancellationToken ct)
     {
-        var r = await _api.GetAsync($"api/v1/Client/{id}/OverallAvailability?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}&starttimeindex=0&endtimeindex=0", ct);
+        var r = await GetWithDatesAsync(f => $"api/v1/Client/{id}/OverallAvailability?start={f(from)}&end={f(to)}&starttimeindex=0&endtimeindex=0", ct);
         if (!r.Success || r.Json is not { } j) return null;
         if (j.ValueKind == JsonValueKind.Number) return Norm(j.GetDouble());
         foreach (var e in KtcJson.Items(j))
@@ -171,7 +246,7 @@ public class KtcDataService : IKtcDataService
     public async Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default)
     {
         var tA = AvailabilityValueAsync(atmId, from, to, ct);
-        var tR = _api.GetAsync($"api/v1/Client/{atmId}/Top5UnavailableReasons?start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}", ct);
+        var tR = GetWithDatesAsync(f => $"api/v1/Client/{atmId}/Top5UnavailableReasons?start={f(from)}&end={f(to)}", ct);
         await Task.WhenAll(tA, tR);
         var reasons = new List<(string, double)>();
         if (tR.Result.Success)
@@ -194,8 +269,9 @@ public class KtcDataService : IKtcDataService
     public async Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
-        var q = $"start={_opt.QueryDate(from)}&end={_opt.QueryDate(to)}";
-        var json = await Fetch(string.IsNullOrEmpty(atmId) ? $"api/v1/HistoricalError?{q}" : $"api/v1/Client/{atmId}/HistoricalError?{q}", w, ct: ct);
+        var r = await GetWithDatesAsync(f => (string.IsNullOrEmpty(atmId) ? "api/v1/HistoricalError" : $"api/v1/Client/{atmId}/HistoricalError") + $"?start={f(from)}&end={f(to)}", ct);
+        if (!r.Success) w.Add($"GET api/v1/HistoricalError: {r.Error}");
+        var json = r.Success ? r.Json : null;
         return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null && i.OpenedUtc >= from && i.OpenedUtc <= to).Select(i => i!).ToList();
     }
 
@@ -221,18 +297,22 @@ public class KtcDataService : IKtcDataService
     }
 
     // ---------------- tickets ----------------
+    private object TicketBody(int? businessId, DateTime from, DateTime to) => new
+    {
+        BusinessID = businessId, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
+        Start = from, End = to, SLAFilterType = 0, SLAHours = 0,
+        OwnerName = (string?)null, ClientName = (string?)null, GroupID = _opt.TicketSearchGroupId, ExtraDataField = (string?)null, ExtraDataValue = (string?)null
+    };
+
+    private static List<TicketDto> DistinctTickets(IEnumerable<TicketDto?> t) =>
+        t.Where(x => x != null).Select(x => x!).GroupBy(x => x.Id).Select(g => g.First()).ToList();
+
     private Task<List<TicketDto>> TicketsCore(Warn w, CancellationToken ct) =>
         Cached("tickets", TimeSpan.FromSeconds(30), async () =>
         {
             var lookup = await LookupAsync(w, ct);
-            var body = new
-            {
-                BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
-                Start = DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), End = DateTime.UtcNow.AddMinutes(5), SLAFilterType = 0, SLAHours = 0,
-                OwnerName = (string?)null, ClientName = (string?)null, GroupID = _opt.TicketSearchGroupId, ExtraDataField = (string?)null, ExtraDataValue = (string?)null
-            };
-            var json = await Fetch("api/v1/Ticket/Search", w, HttpMethod.Post, body, true, ct);
-            return KtcJson.Items(json).Select(e => MapTicket(e, lookup)).Where(t => t != null).Select(t => t!).ToList();
+            var rows = await SearchPerBusinessAsync("api/v1/Ticket/Search", b => TicketBody(b, DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), DateTime.UtcNow.AddMinutes(5)), w, ct);
+            return DistinctTickets(rows.Select(e => MapTicket(e, lookup)));
         });
 
     public async Task<IReadOnlyList<TicketDto>> SearchTicketsAsync(TicketQuery q, CancellationToken ct = default)
@@ -242,14 +322,8 @@ public class KtcDataService : IKtcDataService
         if (q.From.HasValue || q.To.HasValue)
         {
             var lookup = await LookupAsync(w, ct);
-            var body = new
-            {
-                BusinessID = (int?)null, BranchID = (int?)null, TicketTypeID = (int?)null, ErrorCodeTypeID = (int?)null, DispatchID = (int?)null, Status = (int[]?)null,
-                Start = q.From ?? DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), End = q.To ?? DateTime.UtcNow, SLAFilterType = 0, SLAHours = 0,
-                OwnerName = (string?)null, ClientName = (string?)null, GroupID = _opt.TicketSearchGroupId, ExtraDataField = (string?)null, ExtraDataValue = (string?)null
-            };
-            var json = await Fetch("api/v1/Ticket/Search", w, HttpMethod.Post, body, true, ct);
-            all = KtcJson.Items(json).Select(e => MapTicket(e, lookup)).Where(t => t != null).Select(t => t!).ToList();
+            var rows = await SearchPerBusinessAsync("api/v1/Ticket/Search", b => TicketBody(b, q.From ?? DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), q.To ?? DateTime.UtcNow), w, ct);
+            all = DistinctTickets(rows.Select(e => MapTicket(e, lookup)));
         }
         else all = await TicketsCore(w, ct);
 
@@ -306,10 +380,9 @@ public class KtcDataService : IKtcDataService
         var all = await Cached(key, TimeSpan.FromSeconds(25), async () =>
         {
             var w = new Warn(); var lookup = await LookupAsync(w, ct);
-            var body = new { BusinessID = (int?)null, GroupID = _opt.TransactionSearchGroupId, Start = from, End = to, ClientName = (string?)null };
-            var json = await Fetch("api/v1/TransactionData/Search", w, HttpMethod.Post, body, true, ct);
+            var rowsAll = await SearchPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = _opt.TransactionSearchGroupId, Start = from, End = to, ClientName = (string?)null }, w, ct);
             var res = new List<TransactionDto>();
-            foreach (var e in KtcJson.Items(json))
+            foreach (var e in rowsAll)
             {
                 if (KtcJson.TryProp(e, out var nested, "Transactions", "TransactionList") && nested.ValueKind == JsonValueKind.Array)
                     foreach (var t in nested.EnumerateArray()) { var m = MapTx(t, lookup, e); if (m != null) res.Add(m); }
