@@ -19,8 +19,9 @@ public class ApiExecutionService : IApiExecutionService
 {
     private static readonly Dictionary<int, DateTime> LastRun = new();
     private readonly IUnitOfWork _uow; private readonly IKtcApiClient _api; private readonly IMemoryCache _cache; private readonly IExportService _export; private readonly ILogger<ApiExecutionService> _log;
-    public ApiExecutionService(IUnitOfWork uow, IKtcApiClient api, IMemoryCache cache, IExportService export, ILogger<ApiExecutionService> log)
-    { _uow = uow; _api = api; _cache = cache; _export = export; _log = log; }
+    private readonly Ktc.Application.Options.KtcOptions _ktc;
+    public ApiExecutionService(IUnitOfWork uow, IKtcApiClient api, IMemoryCache cache, IExportService export, ILogger<ApiExecutionService> log, Microsoft.Extensions.Options.IOptions<Ktc.Application.Options.KtcOptions>? ktc = null)
+    { _uow = uow; _api = api; _cache = cache; _export = export; _log = log; _ktc = ktc?.Value ?? new(); }
 
     private static readonly Regex Placeholder = new(@"\{(\w+)\}", RegexOptions.Compiled);
 
@@ -37,7 +38,7 @@ public class ApiExecutionService : IApiExecutionService
         p ??= new Dictionary<string, string>();
         var url = BuildUrl(ep.RelativeUrl, p, out var missing);
         if (missing != null) return Fail($"Missing parameter '{missing}'.");
-        if (ApiCatalogRules.DefaultQuery(url, DateTime.UtcNow) is { } dq) url += "?" + dq;
+        if (ApiCatalogRules.DefaultQuery(url, DateTime.UtcNow, _ktc.QueryDate) is { } dq) url += "?" + dq;
 
         var ttl = TimeSpan.FromSeconds(Math.Max(5, ep.Mappings.FirstOrDefault()?.RefreshInterval ?? 30));
         var key = "exec:" + endpointId + ":" + Hash(url + "|" + body);

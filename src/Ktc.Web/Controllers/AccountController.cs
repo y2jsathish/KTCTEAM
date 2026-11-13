@@ -60,6 +60,10 @@ public class AccountController : Controller
         return LocalRedirect(Url.IsLocalUrl(m.ReturnUrl) ? m.ReturnUrl! : "/");
     }
 
+    /// <summary>A typed or bookmarked /Account/Logout used to answer 405. Sign-out stays POST-only (CSRF); this sends people home, where the sign-out button is.</summary>
+    [HttpGet("/Account/Logout")]
+    public IActionResult LogoutGet() => User.Identity?.IsAuthenticated == true ? Redirect("/") : RedirectToAction(nameof(Login));
+
     [HttpPost]
     public async Task<IActionResult> Logout()
     {

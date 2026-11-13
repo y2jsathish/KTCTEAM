@@ -40,12 +40,15 @@ public static class ApiCatalogRules
     /// Query string to use when a route is called without one but KTC needs it (KTC answers 500 otherwise), e.g. a scheduled widget.
     /// HistoricalError without start/end fails on the server; default to the last 24 hours.
     /// </summary>
-    public static string? DefaultQuery(string relativeUrl, DateTime nowUtc)
+    public static string? DefaultQuery(string relativeUrl, DateTime nowUtc, Func<DateTime, string>? fmt = null)
     {
         if (relativeUrl.Contains('?')) return null;
         var path = relativeUrl.TrimStart('/');
         if (path.Equals("api/v1/HistoricalError", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(path, @"^api/v1/Client/[^/]+/HistoricalError$", RegexOptions.IgnoreCase))
-            return $"start={Uri.EscapeDataString(nowUtc.AddHours(-24).ToString("o"))}&end={Uri.EscapeDataString(nowUtc.ToString("o"))}";
+        {
+            fmt ??= d => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+            return $"start={fmt(nowUtc.AddHours(-24))}&end={fmt(nowUtc)}";
+        }
         return null;
     }
 
