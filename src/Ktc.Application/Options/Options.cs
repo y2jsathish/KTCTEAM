@@ -31,7 +31,8 @@ public class KtcOptions
     /// <summary>Fallback SLA hours per severity when the Ticket SLA endpoint returns nothing.</summary>
     public Dictionary<string, double> DefaultSlaHours { get; set; } = new() { ["P1"] = 4, ["P2"] = 8, ["P3"] = 24, ["P4"] = 72 };
     public int NearBreachMinutes { get; set; } = 60;
-    public string[] EjFields { get; set; } = Array.Empty<string>();
+    /// <summary>EJ application names to leave out of EJ search (KTC's EJRow Value3). Empty = all.</summary>
+    public string[] EjExcludeApps { get; set; } = Array.Empty<string>();
     public int AvailabilityLookbackDays { get; set; } = 7;
     public int MaxParallelCalls { get; set; } = 8;
     /// <summary>Ticket and transaction searches run once per KTC business (KTC requires a BusinessID); at most this many businesses.</summary>
