@@ -439,4 +439,19 @@ public class LastContactShapeTests
         Assert.Equal("3", id);
         Assert.Equal(new DateTime(2026, 11, 13, 11, 40, 0, DateTimeKind.Utc), KtcJson.AnyDate(v));
     }
+
+    [Fact]
+    public void Id_keyed_map_of_records_is_read_as_rows_with_keys()
+    {
+        using var d = System.Text.Json.JsonDocument.Parse("{\"42348\":{\"ClientID\":3},\"42349\":{\"ClientID\":4}}");
+        var rows = Ktc.Application.Logic.KtcJson.Rows(d.RootElement).ToList();
+        Assert.Equal(new[] { "42348", "42349" }, rows.Select(r => r.Key));
+        Assert.Equal(2, Ktc.Application.Logic.KtcJson.Items(d.RootElement).Count());
+        using var empty = System.Text.Json.JsonDocument.Parse("{}");
+        Assert.Empty(Ktc.Application.Logic.KtcJson.Items(empty.RootElement));
+        using var strings = System.Text.Json.JsonDocument.Parse("{\"3\":\"2026-11-13T10:00:00\"}");
+        Assert.Single(Ktc.Application.Logic.KtcJson.Items(strings.RootElement));   // id -> value maps stay one record (read with ById)
+        using var rec = System.Text.Json.JsonDocument.Parse("{\"InService\":99.5}");
+        Assert.Single(Ktc.Application.Logic.KtcJson.Items(rec.RootElement));
+    }
 }

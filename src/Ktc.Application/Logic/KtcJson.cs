@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Globalization;
 using System.Text.Json;
 
@@ -9,16 +10,26 @@ namespace Ktc.Application.Logic;
 /// </summary>
 public static class KtcJson
 {
-    public static IEnumerable<JsonElement> Items(JsonElement? root)
+    public static IEnumerable<JsonElement> Items(JsonElement? root) => Rows(root).Select(r => r.Value);
+
+    /// <summary>
+    /// The records in a KTC answer, with the key they were stored under when KTC returns an id-keyed map of records
+    /// ({"42348": {...}, "42349": {...}}, as TransactionData/Search does); the key is "" for arrays and wrapped lists.
+    /// An empty object is no records.
+    /// </summary>
+    public static IEnumerable<(string Key, JsonElement Value)> Rows(JsonElement? root)
     {
         if (root is not { } r) yield break;
-        if (r.ValueKind == JsonValueKind.Array) { foreach (var e in r.EnumerateArray()) yield return e; yield break; }
+        if (r.ValueKind == JsonValueKind.Array) { foreach (var e in r.EnumerateArray()) yield return ("", e); yield break; }
         if (r.ValueKind == JsonValueKind.Object)
         {
             foreach (var name in new[] { "items", "data", "results", "result", "value", "values", "records", "list" })
                 if (TryProp(r, out var inner, name) && inner.ValueKind == JsonValueKind.Array)
-                { foreach (var e in inner.EnumerateArray()) yield return e; yield break; }
-            yield return r;
+                { foreach (var e in inner.EnumerateArray()) yield return ("", e); yield break; }
+            if (!r.EnumerateObject().Any()) yield break;
+            if (IsIdMap(r) && r.EnumerateObject().All(p => p.Value.ValueKind == JsonValueKind.Object))
+            { foreach (var p in r.EnumerateObject()) yield return (p.Name, p.Value); yield break; }
+            yield return ("", r);
         }
     }
 

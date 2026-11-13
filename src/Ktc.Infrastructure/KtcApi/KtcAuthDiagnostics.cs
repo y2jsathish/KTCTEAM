@@ -219,12 +219,21 @@ public class KtcAuthDiagnostics
                 {
                     shown = true;
                     L($"  row fields: {Fields(r0)}");
+                    L($"  sample values (first row): {Samples(r0)}");
                     foreach (var pr in r0.EnumerateObject().Where(pr => pr.Value.ValueKind == JsonValueKind.Array && pr.Value.GetArrayLength() > 0))
-                        if (pr.Value[0] is { ValueKind: JsonValueKind.Object } n0) L($"  {pr.Name}[] ({pr.Value.GetArrayLength()}) fields: {Fields(n0)}");
+                        if (pr.Value[0] is { ValueKind: JsonValueKind.Object } n0) { L($"  {pr.Name}[] ({pr.Value.GetArrayLength()}) fields: {Fields(n0)}"); L($"  {pr.Name}[0] sample values: {Samples(n0)}"); }
+                    foreach (var pr in r0.EnumerateObject().Where(pr => pr.Value.ValueKind == JsonValueKind.Object && pr.Value.EnumerateObject().Any()))
+                        L($"  {pr.Name}{{}} fields: {Fields(pr.Value)}");
                     L($"  row id-like values: {IdValues(r0)}");
                 }
             }
     }
+
+    /// <summary>Short scalar values of a record for the report; card, track, account and secret-like fields are left out, and long digit runs are masked.</summary>
+    private static string Samples(JsonElement o) => string.Join(", ", o.EnumerateObject()
+        .Where(p => !System.Text.RegularExpressions.Regex.IsMatch(p.Name, "card|pan|track|account|pass|pin|secret|token|hash|salt|cvv|name|address", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        .Where(p => p.Value.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null || (p.Value.ValueKind == JsonValueKind.String && (p.Value.GetString()?.Length ?? 0) <= 40))
+        .Take(40).Select(p => p.Name + "=" + CardMaskerSafe(p.Value.ValueKind == JsonValueKind.String ? "\"" + p.Value.GetString() + "\"" : p.Value.GetRawText())));
 
     private static string Fields(JsonElement o) => string.Join(", ", o.EnumerateObject().Take(60).Select(p => p.Name + ":" + p.Value.ValueKind.ToString().ToLowerInvariant()));
 

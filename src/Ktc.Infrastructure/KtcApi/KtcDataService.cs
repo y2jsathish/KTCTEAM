@@ -158,12 +158,16 @@ public class KtcDataService : IKtcDataService
         });
 
     /// <summary>Runs a KTC search once per business and returns all result rows (each tagged with nothing extra; ids stay unique per KTC).</summary>
-    private async Task<List<JsonElement>> SearchPerBusinessAsync(string route, Func<int?, object> body, Warn w, CancellationToken ct)
+    private async Task<List<JsonElement>> SearchPerBusinessAsync(string route, Func<int?, object> body, Warn w, CancellationToken ct) =>
+        (await SearchRowsPerBusinessAsync(route, body, w, ct)).Select(r => r.Value).ToList();
+
+    /// <summary>Like <see cref="SearchPerBusinessAsync"/> but keeps each record's key when KTC returns an id-keyed map.</summary>
+    private async Task<List<(string Key, JsonElement Value)>> SearchRowsPerBusinessAsync(string route, Func<int?, object> body, Warn w, CancellationToken ct)
     {
         var ids = await BusinessIdsAsync(w, ct);
         // KTC lists no business ids on some servers; BusinessID 0 (the default business) is then what it accepts.
         var targets = ids.Count == 0 ? new List<int?> { 0 } : ids.Select(i => (int?)i).ToList();
-        var rows = new List<JsonElement>();
+        var rows = new List<(string Key, JsonElement Value)>();
         using var gate = new SemaphoreSlim(Math.Max(1, _opt.MaxParallelCalls));
         await Task.WhenAll(targets.Select(async b =>
         {
@@ -171,7 +175,7 @@ public class KtcDataService : IKtcDataService
             try
             {
                 var json = await Fetch(route, w, HttpMethod.Post, body(b), true, ct);
-                var items = KtcJson.Items(json).ToList();
+                var items = KtcJson.Rows(json).ToList();
                 lock (rows) rows.AddRange(items);
             }
             finally { gate.Release(); }
@@ -459,17 +463,20 @@ public class KtcDataService : IKtcDataService
         {
             var w = new Warn(); var lookup = await LookupAsync(w, ct);
             var gid = _opt.TransactionSearchGroupId > 0 ? _opt.TransactionSearchGroupId : await AllClientsGroupIdAsync(w, ct);
-            var rowsAll = await SearchPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = gid, Start = from, End = to, ClientName = (string?)null }, w, ct);
+            var rowsAll = await SearchRowsPerBusinessAsync("api/v1/TransactionData/Search", b => new { BusinessID = b, GroupID = gid, Start = from, End = to, ClientName = (string?)null }, w, ct);
             var errs = w.ToList();
             if (errs.Count > 0) _log.LogWarning("Transaction search {From:u}..{To:u} (group {Group}) had KTC errors: {Errors}", from, to, gid, string.Join("; ", errs.Take(3)));
             else _log.LogDebug("Transaction search {From:u}..{To:u} (group {Group}) returned {Rows} KTC rows", from, to, gid, rowsAll.Count);
             var res = new List<TransactionDto>();
-            foreach (var e in rowsAll)
+            foreach (var (k, e) in rowsAll)
             {
                 if (KtcJson.TryProp(e, out var nested, "Transactions", "TransactionList") && nested.ValueKind == JsonValueKind.Array)
                     foreach (var t in nested.EnumerateArray()) { var m = MapTx(t, lookup, e); if (m != null) res.Add(m); }
-                else { var m = MapTx(e, lookup, null); if (m != null) res.Add(m); }
+                else { var m = MapTx(e, lookup, null, k); if (m != null) res.Add(m); }
             }
+            if (rowsAll.Count > 0 && res.Count == 0 && rowsAll[0].Value.ValueKind == JsonValueKind.Object)
+                _log.LogWarning("KTC returned {Rows} transaction records but none could be read; fields of the first: {Fields}", rowsAll.Count,
+                    string.Join(", ", rowsAll[0].Value.EnumerateObject().Take(40).Select(p => p.Name)));
             return res;
         });
         IEnumerable<TransactionDto> r = all;
@@ -488,10 +495,11 @@ public class KtcDataService : IKtcDataService
     }
 
     private static readonly Regex OkRx = new(@"success|approved|completed ok|\bok\b|completed$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent)
+    private TransactionDto? MapTx(JsonElement e, Dictionary<string, ClientRec> lookup, JsonElement? parent, string key = "")
     {
         var id = KtcJson.Str(e, "ID", "Id", "TransactionID", "TransactionId", "TransactionDataID", "TransactionDataId", "UUID", "GUID");
-        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "CID"));
+        if (id.Length == 0) id = key;
+        var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "CID", "ClientIDInt"));
         if (atm.Length == 0 && parent is { } p) atm = KtcJson.NormId(KtcJson.Str(p, "ClientID", "ClientId", "CID"));
         if (id.Length == 0)
         {
@@ -506,8 +514,9 @@ public class KtcDataService : IKtcDataService
         var err = KtcJson.Str(e, "ErrorCode", "ReasonID", "ErrorID");
         bool ok = result.Length > 0 ? OkRx.IsMatch(result) && !Regex.IsMatch(result, "fail|error|declin|timeout|retract|revers", RegexOptions.IgnoreCase)
                                     : KtcJson.Int(e, 0, "CompletionCodeID", "CompletionID") == 0 && reason.Length == 0;
-        var start = KtcJson.Date(e, "StartTime", "TransactionStartTime", "TimeStamp", "Time", "TransactionTime") ?? DateTime.UtcNow;
-        var end = KtcJson.Date(e, "EndTime", "TransactionEndTime");
+        var start = KtcJson.Date(e, "StartTime", "TransactionStartTime", "Start", "StartTimestamp", "Timestamp_Start", "TimeStamp", "Timestamp", "Time", "TransactionTime", "DateTime")
+                    ?? KtcJson.AnyDate(e) ?? DateTime.UtcNow;
+        var end = KtcJson.Date(e, "EndTime", "TransactionEndTime", "End", "EndTimestamp", "Timestamp_End");
         var amount = KtcJson.Dbl(e, double.NaN, "Amount", "TransactionAmount", "RequestedAmount");
         return new TransactionDto
         {
