@@ -37,20 +37,10 @@ public static class ApiCatalogRules
     };
 
     /// <summary>
-    /// Query string to use when a route is called without one but KTC needs it (KTC answers 500 otherwise), e.g. a scheduled widget.
-    /// HistoricalError without start/end fails on the server; default to the last 24 hours.
+    /// Query string to add when a route is called without one but KTC needs it. HistoricalError is not one of them: KTC reads
+    /// its range from a DateTimePair JSON body, which the API executor adds instead. No route needs a default query today.
     /// </summary>
-    public static string? DefaultQuery(string relativeUrl, DateTime nowUtc, Func<DateTime, string>? fmt = null)
-    {
-        if (relativeUrl.Contains('?')) return null;
-        var path = relativeUrl.TrimStart('/');
-        if (path.Equals("api/v1/HistoricalError", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(path, @"^api/v1/Client/[^/]+/HistoricalError$", RegexOptions.IgnoreCase))
-        {
-            fmt ??= d => Uri.EscapeDataString(d.ToString("yyyyMMddHHmmssfff", System.Globalization.CultureInfo.InvariantCulture));
-            return $"start={fmt(nowUtc.AddHours(-24))}&end={fmt(nowUtc)}";
-        }
-        return null;
-    }
+    public static string? DefaultQuery(string relativeUrl, DateTime nowUtc, Func<DateTime, string>? fmt = null) => null;
 
     public static readonly CuratedMapping[] Curated =
     {

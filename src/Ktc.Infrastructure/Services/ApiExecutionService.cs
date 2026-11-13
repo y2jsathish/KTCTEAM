@@ -46,6 +46,9 @@ public class ApiExecutionService : IApiExecutionService
 
         var method = new HttpMethod(ep.HttpMethod);
         var payload = method == HttpMethod.Get || method == HttpMethod.Delete ? null : (string.IsNullOrWhiteSpace(body) ? ep.RequestSchema : body);
+        // KTC's HistoricalError GETs read the time range from a {"dt1","dt2"} body; default to the last 24 hours.
+        if (method == HttpMethod.Get && KtcDateFormats.IsHistoricalError(url))
+            payload = string.IsNullOrWhiteSpace(body) ? KtcDateFormats.DateTimePair(DateTime.UtcNow.AddHours(-24), DateTime.UtcNow, KtcDateFormats.CurrentBody, _ktc.QueryTimeZone) : body;
         var r = await _api.SendAsync(method, url, payload, new KtcCallOptions { Idempotent = !mutating }, ct);
         var res = new ApiExecutionResult(r.Success, r.StatusCode, r.Error, r.Raw, r.ElapsedMs, false, DateTime.UtcNow);
 

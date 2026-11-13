@@ -53,8 +53,14 @@ public class KtcDataService : IKtcDataService
         // A route that fails on the KTC server for every request (a server-side error, not our parameters) is paused so
         // per-ATM widgets do not send hundreds of failing calls and trip API alerts each refresh.
         var routeKey = ApiHealthTracker.Normalize(url(_ => "x").Split('?')[0]);
+        return await PausableAsync(routeKey, () => GetWithDatesCoreAsync(url, ct));
+    }
+
+    /// <summary>Runs a KTC call, pausing its route for <see cref="BrokenFor"/> after 3 server-side failures in a row.</summary>
+    private async Task<KtcResponse> PausableAsync(string routeKey, Func<Task<KtcResponse>> call)
+    {
         if (BrokenRoutes.TryGetValue(routeKey, out var paused) && paused.Until > DateTime.UtcNow) return paused.Response;
-        var res = await GetWithDatesCoreAsync(url, ct);
+        var res = await call();
         if (res.StatusCode >= 500 && res.StatusCode != 503 && res.StatusCode != 504)
         {
             var n = BrokenCounts.AddOrUpdate(routeKey, 1, (_, c) => c + 1);
@@ -97,6 +103,34 @@ public class KtcDataService : IKtcDataService
         finally { DateProbeGate.Release(); }
     }
     private static readonly SemaphoreSlim DateProbeGate = new(1, 1);
+
+    /// <summary>
+    /// KTC's HistoricalError routes have no query parameters: the range is a DateTimePair JSON body {"dt1","dt2"} on the GET.
+    /// Sends it in the remembered format; if KTC fails on it, tries the other body formats once and keeps the first that works.
+    /// </summary>
+    private async Task<KtcResponse> HistoricalErrorCoreAsync(string url, DateTime from, DateTime to, CancellationToken ct)
+    {
+        Task<KtcResponse> Send(string f) => _api.SendAsync(HttpMethod.Get, url, KtcDateFormats.DateTimePair(from, to, f, _opt.QueryTimeZone), new KtcCallOptions { Idempotent = true }, ct);
+        bool ServerFailed(KtcResponse x) => x.StatusCode >= 500 && x.StatusCode != 503 && x.StatusCode != 504;
+        var current = KtcDateFormats.CurrentBody;
+        var r = await Send(current);
+        if ((!ServerFailed(r) && r.StatusCode != 400) || KtcDateFormats.ResolvedBody != null) return r;
+        await DateProbeGate.WaitAsync(ct);
+        try
+        {
+            if (KtcDateFormats.ResolvedBody is { } other) return await Send(other);
+            foreach (var f in KtcDateFormats.BodyCandidates.Where(c => c != current))
+            {
+                var t = await Send(f);
+                if (ServerFailed(t) || t.StatusCode == 400) continue;
+                if (t.Success) { KtcDateFormats.RememberBody(f); _log.LogInformation("KTC HistoricalError accepts dt1/dt2 dates as {Format}; using it from now on.", f); }
+                return t;
+            }
+            _log.LogWarning("KTC {Url} failed with every dt1/dt2 date format: {Error}", url, r.Error);
+            return r;
+        }
+        finally { DateProbeGate.Release(); }
+    }
 
     /// <summary>ToDictionary that tolerates missing/duplicate ids (first one wins) instead of throwing.</summary>
     private static Dictionary<string, V> ToMap<V>(IEnumerable<JsonElement> items, Func<JsonElement, string> key, Func<JsonElement, V> val)
@@ -298,8 +332,9 @@ public class KtcDataService : IKtcDataService
     public async Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
-        var r = await GetWithDatesAsync(f => (string.IsNullOrEmpty(atmId) ? "api/v1/HistoricalError" : $"api/v1/Client/{atmId}/HistoricalError") + $"?start={f(from)}&end={f(to)}", ct);
-        if (!r.Success) w.Add($"GET api/v1/HistoricalError: {r.Error}");
+        var url = string.IsNullOrEmpty(atmId) ? "api/v1/HistoricalError" : $"api/v1/Client/{atmId}/HistoricalError";
+        var r = await PausableAsync(ApiHealthTracker.Normalize(url), () => HistoricalErrorCoreAsync(url, from, to, ct));
+        if (!r.Success) w.Add($"GET {url}: {r.Error}");
         var json = r.Success ? r.Json : null;
         return KtcJson.Items(json).Select(e => MapIncident(e, lookup)).Where(i => i != null && i.OpenedUtc >= from && i.OpenedUtc <= to).Select(i => i!).ToList();
     }
