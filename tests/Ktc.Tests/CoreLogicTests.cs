@@ -344,3 +344,37 @@ public class PermissionAndDefaultsTests
         Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/Region", DateTime.UtcNow));
     }
 }
+
+public class BreakerTests
+{
+    private sealed class Always500 : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
+        { Interlocked.Increment(ref Calls); return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError) { Content = new StringContent("{\"Message\":\"boom\"}") }); }
+    }
+
+    [Fact]
+    public async Task Http_500s_do_not_open_the_breaker_or_get_retried()
+    {
+        var h = new Always500();
+        var opt = new Ktc.Application.Options.KtcOptions { UseMock = true, BaseUrl = "https://ktc.test/", BreakerFailures = 2 };
+        var s = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        Microsoft.Extensions.DependencyInjection.LoggingServiceCollectionExtensions.AddLogging(s);
+        Microsoft.Extensions.DependencyInjection.MemoryCacheServiceCollectionExtensions.AddMemoryCache(s);
+        Microsoft.Extensions.DependencyInjection.HttpServiceCollectionExtensions.AddHttpContextAccessor(s);
+        Microsoft.Extensions.DependencyInjection.DataProtectionServiceCollectionExtensions.AddDataProtection(s);
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton(s, Microsoft.Extensions.Options.Options.Create(opt));
+        s.AddKtcHttp(opt);
+        Microsoft.Extensions.DependencyInjection.HttpClientBuilderExtensions.ConfigurePrimaryHttpMessageHandler(
+            Microsoft.Extensions.DependencyInjection.HttpClientFactoryServiceCollectionExtensions.AddHttpClient<Ktc.Application.Abstractions.IKtcApiClient, KtcApiClient>(s), () => h);
+        using var sp = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(s);
+        var api = Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Ktc.Application.Abstractions.IKtcApiClient>(sp);
+        for (var i = 0; i < 6; i++)
+        {
+            var r = await api.GetAsync("api/v1/HistoricalError");
+            Assert.Equal(500, r.StatusCode);
+        }
+        Assert.Equal(6, h.Calls);   // no retries, and the breaker never opened
+    }
+}

@@ -114,7 +114,11 @@ public class KtcApiClient : IKtcApiClient
             else _log.LogDebug("KTC {Method} {Url} -> {Status} in {Ms}ms", method, url, (int)res.StatusCode, sw.ElapsedMilliseconds);
             return new KtcResponse(ok, (int)res.StatusCode, el, raw, ok ? null : $"HTTP {(int)res.StatusCode} {res.ReasonPhrase}", sw.ElapsedMilliseconds);
         }
-        catch (BrokenCircuitException) { return KtcResponse.Fail("KTC API circuit breaker is open - calls are temporarily suspended.", 503, sw.ElapsedMilliseconds); }
+        catch (BrokenCircuitException)
+        {
+            var left = KtcHttpRegistration.BreakerOpenUntilUtc is { } u ? Math.Max(1, (int)(u - DateTime.UtcNow).TotalSeconds) : 0;
+            return KtcResponse.Fail($"KTC server not reachable: calls paused after repeated connection failures{(left > 0 ? $", retrying in {left}s" : "")}.", 503, sw.ElapsedMilliseconds);
+        }
         catch (TimeoutRejectedException) { return KtcResponse.Fail("KTC API call timed out.", 504, sw.ElapsedMilliseconds); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
