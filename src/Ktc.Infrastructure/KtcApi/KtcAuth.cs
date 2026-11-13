@@ -28,33 +28,42 @@ public static class KtcTokenScope
     private sealed class Reset : IDisposable { public void Dispose() => Forced.Value = false; }
 }
 
-/// <summary>Talks to POST api/v1/Login | ReLogin | Logoff. Uses the HttpClient factory directly to avoid a dependency cycle with the token provider.</summary>
+/// <summary>Talks to POST api/v1/Login | Relogin | Logoff. Uses the HttpClient factory directly to avoid a dependency cycle with the token provider.</summary>
 public class KtcAuthService : IKtcAuthService
 {
+    private static readonly string[] TokenNames = { "access_token", "AccessToken", "Token", "BearerToken", "SessionToken", "AuthToken", "ktc_access_token", "KtcAccessToken" };
+    private static readonly string[] Wrappers = { "Data", "Result", "Value", "Response", "Session", "Payload" };
+
     private readonly IHttpClientFactory _factory;
     private readonly KtcOptions _opt;
     private readonly ILogger<KtcAuthService> _log;
     public KtcAuthService(IHttpClientFactory f, IOptions<KtcOptions> o, ILogger<KtcAuthService> log) { _factory = f; _opt = o.Value; _log = log; }
 
-    public Task<KtcLoginResult> LoginAsync(string u, string p, string? m, string? app = null, CancellationToken ct = default) => CallAsync("api/v1/Login", u, p, m, app, ct);
-    public Task<KtcLoginResult> ReLoginAsync(string u, string p, string? m, string? app = null, CancellationToken ct = default) => CallAsync("api/v1/ReLogin", u, p, m, app, ct);
+    public Task<KtcLoginResult> LoginAsync(string u, string p, string? m, string? app = null, CancellationToken ct = default) => CallAsync("api/v1/Login", u, p, m, app, null, ct);
+    public Task<KtcLoginResult> ReLoginAsync(string u, string p, string? m, string? app = null, CancellationToken ct = default) => ReLoginAsync(u, p, m, app, null, ct);
+    /// <summary>Relogin refreshes an existing KTC session, so KTC expects the current token as Bearer (see the Postman collection).</summary>
+    public Task<KtcLoginResult> ReLoginAsync(string u, string p, string? m, string? app, string? currentToken, CancellationToken ct = default) => CallAsync("api/v1/Relogin", u, p, m, app, currentToken, ct);
 
-    private async Task<KtcLoginResult> CallAsync(string url, string user, string pass, string? mode, string? app, CancellationToken ct)
+    private async Task<KtcLoginResult> CallAsync(string url, string user, string pass, string? mode, string? app, string? bearer, CancellationToken ct)
     {
         try
         {
             var http = _factory.CreateClient("ktc");
-            var body = JsonSerializer.Serialize(new { Username = user, Password = pass, AppName = string.IsNullOrWhiteSpace(app) ? _opt.AppName : app, AuthMode = mode ?? _opt.DefaultAuthMode, PluginName = (string?)null });
+            var body = JsonSerializer.Serialize(new { Username = user, Password = pass, AppName = string.IsNullOrWhiteSpace(app) ? _opt.AppName : app, AuthMode = string.IsNullOrWhiteSpace(mode) ? _opt.DefaultAuthMode : mode, PluginName = (string?)null });
             using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+            req.Headers.Accept.ParseAdd("application/json");
+            if (!string.IsNullOrEmpty(bearer)) req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
             using var res = await http.SendAsync(req, ct);
             var raw = (await res.Content.ReadAsStringAsync(ct)).Trim();
             if (!res.IsSuccessStatusCode)
             {
-                _log.LogWarning("KTC login failed for {User}: HTTP {Status}", user, (int)res.StatusCode);
+                _log.LogWarning("KTC {Route} failed for {User}: HTTP {Status} {Reason}", url, user, (int)res.StatusCode, res.ReasonPhrase);
                 return new(false, null, null, res.StatusCode == System.Net.HttpStatusCode.Unauthorized || res.StatusCode == System.Net.HttpStatusCode.BadRequest
                     ? "Invalid username or password." : $"KTC login failed (HTTP {(int)res.StatusCode}).");
             }
-            return ParseToken(raw);
+            var parsed = ParseToken(raw);
+            if (!parsed.Success) _log.LogWarning("KTC {Route} returned HTTP {Status} but no token was found. Response shape: {Shape}", url, (int)res.StatusCode, Describe(raw));
+            return parsed;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -63,28 +72,80 @@ public class KtcAuthService : IKtcAuthService
         }
     }
 
-    /// <summary>The response shape is not documented: accept a bare/quoted token string or an object with a token + optional expiry.</summary>
+    /// <summary>
+    /// The response shape is not documented: accept a bare/quoted token string, or an object (optionally wrapped in Data/Result/...)
+    /// with a token + optional expiry. The token is cleaned of quotes, whitespace and a leading "Bearer " so the header is never "Bearer Bearer x".
+    /// </summary>
     public KtcLoginResult ParseToken(string raw)
     {
-        string? token = null; DateTime? exp = null;
+        string? token = null, field = null; DateTime? bodyExp = null; int secs = 0;
         try
         {
             using var doc = JsonDocument.Parse(raw);
             var r = doc.RootElement;
-            if (r.ValueKind == JsonValueKind.String) token = r.GetString();
+            if (r.ValueKind == JsonValueKind.String) { token = r.GetString(); field = "(string body)"; }
             else if (r.ValueKind == JsonValueKind.Object)
             {
-                token = KtcJson.Str(r, "access_token", "AccessToken", "Token", "token", "BearerToken", "SessionToken");
-                exp = KtcJson.Date(r, "expires", "Expires", "ExpiresAt", "Expiry", "expiry", "TokenExpiry", "Expiration", ".expires");
-                var secs = KtcJson.Int(r, 0, "expires_in", "ExpiresIn");
-                if (exp == null && secs > 0) exp = DateTime.UtcNow.AddSeconds(secs);
+                var o = FindTokenObject(r, out field);
+                if (o is { } obj)
+                {
+                    token = KtcJson.Str(obj, field!);
+                    bodyExp = KtcJson.Date(obj, "expires", "Expires", "ExpiresAt", "Expiry", "expiry", "TokenExpiry", "Expiration", ".expires", "ExpiresUtc", "expires_at");
+                    secs = KtcJson.Int(obj, 0, "expires_in", "ExpiresIn", "ExpiresInSeconds");
+                }
             }
         }
-        catch (JsonException) { token = raw.Trim('"'); }
+        catch (JsonException) { token = raw; field = "(plain text body)"; }
 
+        token = CleanToken(token);
         if (string.IsNullOrWhiteSpace(token)) return new(false, null, null, "KTC returned no access token.");
-        exp ??= JwtExpiry(token) ?? DateTime.UtcNow.AddMinutes(_opt.DefaultTokenLifetimeMinutes);
+
+        // Prefer the unambiguous sources: JWT exp, then expires_in, then a date in the body (which may be server-local time).
+        var now = DateTime.UtcNow;
+        DateTime? exp = JwtExpiry(token);
+        if (exp == null && secs > 0) exp = now.AddSeconds(secs);
+        if (exp == null && bodyExp is { } be && be > now.AddMinutes(1)) exp = be;
+        exp ??= now.AddMinutes(_opt.DefaultTokenLifetimeMinutes);
+        _log.LogInformation("KTC token read from {Field}: {Length} chars, {Kind}, expires {Exp:u}", field, token.Length, token.Count(c => c == '.') == 2 ? "JWT" : "opaque", exp);
         return new(true, token, exp, null);
+    }
+
+    public static string? CleanToken(string? t)
+    {
+        if (t == null) return null;
+        t = t.Trim().Trim('"', '\'').Trim();
+        if (t.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) t = t[7..].Trim();
+        return t.Length == 0 ? null : t;
+    }
+
+    private static JsonElement? FindTokenObject(JsonElement o, out string? field)
+    {
+        foreach (var n in TokenNames)
+            if (KtcJson.TryProp(o, out var v, n) && v.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(v.GetString())) { field = n; return o; }
+        foreach (var w in Wrappers)
+            if (KtcJson.TryProp(o, out var inner, w))
+            {
+                if (inner.ValueKind == JsonValueKind.Object && FindTokenObject(inner, out field) is { } hit) return hit;
+                if (inner.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(inner.GetString()) && inner.GetString()!.Length >= 16) { field = w; return o; }
+            }
+        field = null; return null;
+    }
+
+    /// <summary>Property names and value kinds only (never values), so a log can show the real Login response shape safely.</summary>
+    public static string Describe(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            static string D(JsonElement e, int depth) => e.ValueKind switch
+            {
+                JsonValueKind.Object when depth < 3 => "{" + string.Join(", ", e.EnumerateObject().Select(p => p.Name + ":" + D(p.Value, depth + 1))) + "}",
+                JsonValueKind.Array => "array",
+                _ => e.ValueKind.ToString().ToLowerInvariant()
+            };
+            return D(doc.RootElement, 0);
+        }
+        catch (JsonException) { return $"non-JSON text, {raw.Length} chars"; }
     }
 
     private static DateTime? JwtExpiry(string token)
@@ -115,76 +176,127 @@ public class KtcAuthService : IKtcAuthService
 }
 
 /// <summary>
-/// Token management. Interactive requests use the token stored in the server-side session (auto-refreshed through ReLogin using
-/// the encrypted credentials kept in the session). Background jobs use the configured service account.
+/// Token management. Interactive requests use the signed-in user's token, auto-refreshed through Relogin using the encrypted
+/// credentials kept in the session. Background jobs use the configured service account.
+///
+/// The current token per user lives in a process-wide map, not only in the ASP.NET session. Session values are a per-request
+/// snapshot that is written back when the request ends (last write wins), so with several dashboard calls running at once a
+/// request could keep using, or even save back, a token that a parallel refresh had already replaced, and KTC answers
+/// "401 Invalid token" for it. A refresh also only logs in again when the token that failed is still the current one, so a
+/// burst of parallel 401s causes one Relogin instead of a chain of logins that invalidate each other.
 /// </summary>
 public class KtcTokenProvider : IKtcTokenProvider
 {
-    private static readonly SemaphoreSlim UserGate = new(1, 1);
+    private sealed record Entry(string Token, DateTime ExpiresUtc);
+    private static readonly ConcurrentDictionary<string, Entry> Users = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> UserGates = new(StringComparer.OrdinalIgnoreCase);
     private static readonly SemaphoreSlim ServiceGate = new(1, 1);
-    private static string? _svcToken; private static DateTime _svcExp;
+    private static Entry? _svc;
     private static readonly TimeSpan Skew = TimeSpan.FromSeconds(60);
 
     private readonly IHttpContextAccessor _ctx;
     private readonly IKtcAuthService _auth;
     private readonly KtcOptions _opt;
     private readonly IDataProtector _protector;
+    private readonly ILogger<KtcTokenProvider>? _log;
 
-    public KtcTokenProvider(IHttpContextAccessor ctx, IKtcAuthService auth, IOptions<KtcOptions> opt, IDataProtectionProvider dp)
-    { _ctx = ctx; _auth = auth; _opt = opt.Value; _protector = dp.CreateProtector("Ktc.SessionCredentials"); }
+    public KtcTokenProvider(IHttpContextAccessor ctx, IKtcAuthService auth, IOptions<KtcOptions> opt, IDataProtectionProvider dp, ILogger<KtcTokenProvider>? log = null)
+    { _ctx = ctx; _auth = auth; _opt = opt.Value; _protector = dp.CreateProtector("Ktc.SessionCredentials"); _log = log; }
 
     public static string ProtectCredentials(IDataProtectionProvider dp, string user, string pass, string? mode, string? app)
         => dp.CreateProtector("Ktc.SessionCredentials").Protect($"{user}\n{mode}\n{app}\n{pass}");
 
+    /// <summary>Records the token from an interactive login in the session and in the shared map.</summary>
+    public static void Remember(HttpContext http, string user, string token, DateTime expiresUtc)
+    {
+        http.Session.SetString(SessionKeys.Token, token);
+        http.Session.SetString(SessionKeys.Expiry, expiresUtc.Ticks.ToString());
+        Users[user] = new Entry(token, expiresUtc);
+    }
+
+    public static void Forget(string? user) { if (user != null) Users.TryRemove(user, out _); }
+
+    /// <summary>The newest token known for this user (shared map first, then the session copy). Used by logoff/status.</summary>
+    public static (string? Token, DateTime? ExpiresUtc) Current(HttpContext http)
+    {
+        var name = http.User?.Identity?.Name;
+        if (name != null && Users.TryGetValue(name, out var e)) return (e.Token, e.ExpiresUtc);
+        var t = http.Session.GetString(SessionKeys.Token);
+        return (t, long.TryParse(http.Session.GetString(SessionKeys.Expiry), out var x) ? new DateTime(x, DateTimeKind.Utc) : null);
+    }
+
     private HttpContext? Http => KtcTokenScope.IsServiceForced ? null : _ctx.HttpContext;
     private bool Interactive => Http?.User?.Identity?.IsAuthenticated == true && Http.Session != null;
 
-    public Task<string?> GetTokenAsync(CancellationToken ct = default) => Interactive ? UserTokenAsync(false, ct) : ServiceTokenAsync(false, ct);
-    public Task<string?> RefreshAsync(CancellationToken ct = default) => Interactive ? UserTokenAsync(true, ct) : ServiceTokenAsync(true, ct);
+    public Task<string?> GetTokenAsync(CancellationToken ct = default) => Interactive ? UserTokenAsync(false, null, ct) : ServiceTokenAsync(false, null, ct);
+    public Task<string?> RefreshAsync(CancellationToken ct = default) => RefreshAsync(null, ct);
+    public Task<string?> RefreshAsync(string? failedToken, CancellationToken ct = default) => Interactive ? UserTokenAsync(true, failedToken, ct) : ServiceTokenAsync(true, failedToken, ct);
 
-    private async Task<string?> UserTokenAsync(bool force, CancellationToken ct)
+    private Entry? Load(HttpContext http, string user)
     {
-        var s = Http!.Session;
-        if (!force && Valid(s.GetString(SessionKeys.Token), s.GetString(SessionKeys.Expiry), out var t)) return t;
-        await UserGate.WaitAsync(ct);
+        if (Users.TryGetValue(user, out var e)) return e;
+        var t = http.Session.GetString(SessionKeys.Token);
+        if (t == null || !long.TryParse(http.Session.GetString(SessionKeys.Expiry), out var x)) return null;
+        e = new Entry(t, new DateTime(x, DateTimeKind.Utc));
+        return Users.GetOrAdd(user, e);       // e.g. after an app restart with a persistent session store
+    }
+
+    private static bool Fresh(Entry? e) => e != null && DateTime.UtcNow < e.ExpiresUtc - Skew;
+
+    /// <summary>True when another caller already replaced the token that failed (or a forced refresh with no failed token).</summary>
+    private static bool AlreadyRefreshed(Entry? e, string? failedToken) => failedToken != null && e != null && e.Token != failedToken && Fresh(e);
+
+    private async Task<string?> UserTokenAsync(bool force, string? failedToken, CancellationToken ct)
+    {
+        var http = Http!;
+        var user = http.User.Identity!.Name!;
+        var cur = Load(http, user);
+        if (!force && Fresh(cur)) return cur!.Token;
+        if (force && AlreadyRefreshed(cur, failedToken)) return cur!.Token;
+
+        var gate = UserGates.GetOrAdd(user, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
         try
         {
-            if (!force && Valid(s.GetString(SessionKeys.Token), s.GetString(SessionKeys.Expiry), out t)) return t;
-            var cred = s.GetString(SessionKeys.Cred);
+            cur = Load(http, user);
+            if (!force && Fresh(cur)) return cur!.Token;
+            if (force && AlreadyRefreshed(cur, failedToken)) return cur!.Token;
+
+            var cred = http.Session.GetString(SessionKeys.Cred);
             if (cred == null) return null;
             string[] parts;
             try { parts = _protector.Unprotect(cred).Split('\n', 4); } catch { return null; }
-            var res = await _auth.ReLoginAsync(parts[0], parts[3], parts[1].Length == 0 ? null : parts[1], parts[2], ct);
-            if (!res.Success) res = await _auth.LoginAsync(parts[0], parts[3], parts[1].Length == 0 ? null : parts[1], parts[2], ct);
-            if (!res.Success) return null;
-            s.SetString(SessionKeys.Token, res.Token!);
-            s.SetString(SessionKeys.Expiry, res.ExpiresUtc!.Value.Ticks.ToString());
+            var mode = parts[1].Length == 0 ? null : parts[1];
+            var res = await _auth.ReLoginAsync(parts[0], parts[3], mode, parts[2], cur?.Token, ct);
+            if (!res.Success) res = await _auth.LoginAsync(parts[0], parts[3], mode, parts[2], ct);
+            if (!res.Success) { _log?.LogWarning("KTC token refresh failed for {User}: {Error}", user, res.Error); return null; }
+            Remember(http, user, res.Token!, res.ExpiresUtc!.Value);
+            _log?.LogInformation("KTC token refreshed for {User}", user);
             return res.Token;
         }
-        finally { UserGate.Release(); }
+        finally { gate.Release(); }
     }
 
-    private async Task<string?> ServiceTokenAsync(bool force, CancellationToken ct)
+    private async Task<string?> ServiceTokenAsync(bool force, string? failedToken, CancellationToken ct)
     {
         if (_opt.UseMock) return "mock-token";
         if (!_opt.ServiceAccount.Configured) return null;
-        if (!force && _svcToken != null && DateTime.UtcNow < _svcExp - Skew) return _svcToken;
+        var cur = _svc;
+        if (!force && Fresh(cur)) return cur!.Token;
+        if (force && AlreadyRefreshed(cur, failedToken)) return cur!.Token;
         await ServiceGate.WaitAsync(ct);
         try
         {
-            if (!force && _svcToken != null && DateTime.UtcNow < _svcExp - Skew) return _svcToken;
+            cur = _svc;
+            if (!force && Fresh(cur)) return cur!.Token;
+            if (force && AlreadyRefreshed(cur, failedToken)) return cur!.Token;
             var sa = _opt.ServiceAccount;
-            var res = await _auth.LoginAsync(sa.Username!, sa.Password!, sa.AuthMode, null, ct);
-            if (!res.Success) { _svcToken = null; return null; }
-            _svcToken = res.Token; _svcExp = res.ExpiresUtc!.Value;
-            return _svcToken;
+            var res = cur != null ? await _auth.ReLoginAsync(sa.Username!, sa.Password!, sa.AuthMode, null, cur.Token, ct) : new KtcLoginResult(false, null, null, null);
+            if (!res.Success) res = await _auth.LoginAsync(sa.Username!, sa.Password!, sa.AuthMode, null, ct);
+            if (!res.Success) { _svc = null; _log?.LogWarning("KTC service account login failed: {Error}", res.Error); return null; }
+            _svc = new Entry(res.Token!, res.ExpiresUtc!.Value);
+            return res.Token;
         }
         finally { ServiceGate.Release(); }
-    }
-
-    private static bool Valid(string? token, string? ticks, out string? t)
-    {
-        t = token;
-        return token != null && long.TryParse(ticks, out var x) && DateTime.UtcNow < new DateTime(x, DateTimeKind.Utc) - Skew;
     }
 }

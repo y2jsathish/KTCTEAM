@@ -45,7 +45,7 @@ public class KtcApiClient : IKtcApiClient
         var resp = await ExecuteOnce(method, relativeUrl, body, options, token, ct);
         if (resp.StatusCode == 401 && !options.BypassAuth && options.Token == null)
         {
-            var fresh = await _tokens.RefreshAsync(ct);
+            var fresh = await _tokens.RefreshAsync(token, ct);
             if (fresh != null) resp = await ExecuteOnce(method, relativeUrl, body, options, fresh, ct);
         }
         if (cacheKey != null && resp.Success) _cache.Set(cacheKey, resp, options.CacheFor!.Value);

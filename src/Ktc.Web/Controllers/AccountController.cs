@@ -50,8 +50,7 @@ public class AccountController : Controller
         }
 
         HttpContext.Session.Clear();
-        HttpContext.Session.SetString(SessionKeys.Token, res.Token!);
-        HttpContext.Session.SetString(SessionKeys.Expiry, res.ExpiresUtc!.Value.Ticks.ToString());
+        KtcTokenProvider.Remember(HttpContext, user.Username, res.Token!, res.ExpiresUtc!.Value);
         HttpContext.Session.SetString(SessionKeys.Cred, KtcTokenProvider.ProtectCredentials(_dp, m.Username.Trim(), m.Password, m.AuthMode, m.AppName));
 
         var claims = new List<Claim> { new(ClaimTypes.Name, user.Username), new(ClaimTypes.NameIdentifier, user.Id.ToString()), new(ClaimTypes.Role, user.Role), new("theme", user.Theme), new("authmode", m.AuthMode) };
@@ -64,8 +63,9 @@ public class AccountController : Controller
     [HttpPost]
     public async Task<IActionResult> Logout()
     {
-        var token = HttpContext.Session.GetString(SessionKeys.Token);
+        var token = KtcTokenProvider.Current(HttpContext).Token;
         if (token != null) await _auth.LogoffAsync(token);
+        KtcTokenProvider.Forget(User.Identity?.Name);
         await _audit.LogAsync("Login", "Logout");
         HttpContext.Session.Clear();
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
@@ -75,7 +75,7 @@ public class AccountController : Controller
     [HttpGet("/data/session")]
     public IActionResult SessionStatus()
     {
-        var exp = long.TryParse(HttpContext.Session.GetString(SessionKeys.Expiry), out var t) ? new DateTime(t, DateTimeKind.Utc) : (DateTime?)null;
+        var exp = KtcTokenProvider.Current(HttpContext).ExpiresUtc;
         var left = exp.HasValue ? (int)Math.Max(0, (exp.Value - DateTime.UtcNow).TotalSeconds) : 0;
         return Json(new { user = User.Identity!.Name, role = User.FindFirstValue(ClaimTypes.Role), status = left > 0 ? "Active" : "Refreshing", expiresUtc = exp, secondsLeft = left, mock = _opt.UseMock });
     }
