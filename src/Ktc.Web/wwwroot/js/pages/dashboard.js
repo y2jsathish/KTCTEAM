@@ -3,7 +3,7 @@
  function kpi(l,v,d,c){return `<div class="kpi ${c||'info'}"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d||'&nbsp;'}</div></div>`;}
  function render(s){
   last=s; document.getElementById('gen').textContent='Updated '+K.local(s.generatedUtc)+' · refreshes every 60 s';
-  document.getElementById('warnings').innerHTML=(s.warnings&&s.warnings.length)?`<div class="alert alert-warning py-2 small"><b>Partial data</b> – some KTC calls failed:<ul class="mb-0">${s.warnings.slice(0,5).map(w=>'<li>'+K.esc(w)+'</li>').join('')}</ul>${s.warnings.some(w=>/401/.test(w))?'<div class="mt-1">KTC rejected the token. <a href="/diag/ktc-token">Run the KTC token check</a> and send the report.</div>':''}</div>`:'';
+  document.getElementById('warnings').innerHTML=(s.warnings&&s.warnings.length)?`<div class="alert alert-warning py-2 small"><b>Partial data</b> – some KTC calls failed:<ul class="mb-0">${s.warnings.slice(0,5).map(w=>'<li>'+K.esc(w)+'</li>').join('')}</ul>${s.warnings.some(w=>/Permission required/.test(w))?'<div class="mt-1">Some data needs extra KTC roles for the account shown. Ask your KTC administrator to add them.</div>':''}${s.warnings.some(w=>/401/.test(w))?'<div class="mt-1">KTC rejected the token. <a href="/diag/ktc-token">Run the KTC token check</a> and send the report.</div>':''}</div>`:'';
   const fr=s.totalTransactions||0, fp=s.transactionsToday?Math.round(1000*s.failedTransactions/s.transactionsToday)/10:0;
   document.getElementById('kpis').innerHTML=[
    kpi('Total ATMs',s.totalAtms,`${s.warningAtms} warning`,'info'),kpi('Online ATMs',s.onlineAtms,'in contact','ok'),

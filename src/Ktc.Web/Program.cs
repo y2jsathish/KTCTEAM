@@ -59,6 +59,11 @@ builder.Services.AddResponseCompression();
 builder.Services.AddHealthChecks().AddDbContextCheck<KtcDbContext>("database");
 
 var app = builder.Build();
+{
+    var k = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Ktc.Application.Options.KtcOptions>>().Value;
+    app.Logger.LogInformation("KTC mode: {Mode}, base URL {Url}, service account {Sa}", k.UseMock ? "MOCK (built-in fake data)" : "LIVE", k.BaseUrl,
+        k.ServiceAccount.Configured ? k.ServiceAccount.Username + " (" + k.ServiceAccount.AuthMode + ")" : "not configured");
+}
 
 if (!app.Environment.IsDevelopment()) { app.UseExceptionHandler("/Home/Error"); app.UseHsts(); if (app.Configuration.GetValue<bool>("Portal:RequireHttps")) app.UseHttpsRedirection(); }
 app.UseResponseCompression();

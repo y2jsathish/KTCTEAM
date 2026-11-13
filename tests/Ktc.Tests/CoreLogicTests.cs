@@ -300,3 +300,47 @@ public class RedirectHandlerTests
         Assert.Equal("Bearer abc", inner.AuthOnSecond);
     }
 }
+
+public class PermissionAndDefaultsTests
+{
+    private sealed class Always403 : HttpMessageHandler
+    {
+        public int Calls;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage r, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Forbidden)
+            { Content = new StringContent("{\"Message\":\"User is not member of any of the required roles: Administrator,MergeClients\"}") });
+        }
+    }
+    private sealed class Tokens : Ktc.Application.Abstractions.IKtcTokenProvider
+    {
+        public int Refreshes;
+        public Task<string?> GetTokenAsync(CancellationToken ct = default) => Task.FromResult<string?>("t");
+        public Task<string?> RefreshAsync(CancellationToken ct = default) { Refreshes++; return Task.FromResult<string?>("t2"); }
+    }
+
+    [Fact]
+    public async Task Forbidden_is_reported_as_permission_and_not_retried()
+    {
+        var h = new Always403(); var tk = new Tokens();
+        Ktc.Application.Abstractions.IKtcApiClient api = new KtcApiClient(new HttpClient(h) { BaseAddress = new Uri("https://ktc.test/") }, tk,
+            new Microsoft.Extensions.Caching.Memory.MemoryCache(new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<KtcApiClient>.Instance);
+        var r = await api.GetAsync("api/v1/LastClientContact");
+        Assert.Equal(403, r.StatusCode);
+        Assert.StartsWith("Permission required: User is not member", r.Error);
+        await api.GetAsync("api/v1/LastClientContact");
+        Assert.Equal(1, h.Calls);
+        Assert.Equal(0, tk.Refreshes);
+    }
+
+    [Fact]
+    public void HistoricalError_without_query_gets_last_24h()
+    {
+        var q = ApiCatalogRules.DefaultQuery("api/v1/HistoricalError", new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc));
+        Assert.StartsWith("start=2026-11-12T10", Uri.UnescapeDataString(q!));
+        Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/HistoricalError?start=x", DateTime.UtcNow));
+        Assert.Null(ApiCatalogRules.DefaultQuery("api/v1/Region", DateTime.UtcNow));
+    }
+}

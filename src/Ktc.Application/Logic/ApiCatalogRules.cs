@@ -36,6 +36,19 @@ public static class ApiCatalogRules
         ["Region"] = new("Client Management", "bi-building", "Client Dashboard", "Regions", 7),
     };
 
+    /// <summary>
+    /// Query string to use when a route is called without one but KTC needs it (KTC answers 500 otherwise), e.g. a scheduled widget.
+    /// HistoricalError without start/end fails on the server; default to the last 24 hours.
+    /// </summary>
+    public static string? DefaultQuery(string relativeUrl, DateTime nowUtc)
+    {
+        if (relativeUrl.Contains('?')) return null;
+        var path = relativeUrl.TrimStart('/');
+        if (path.Equals("api/v1/HistoricalError", StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(path, @"^api/v1/Client/[^/]+/HistoricalError$", RegexOptions.IgnoreCase))
+            return $"start={Uri.EscapeDataString(nowUtc.AddHours(-24).ToString("o"))}&end={Uri.EscapeDataString(nowUtc.ToString("o"))}";
+        return null;
+    }
+
     public static readonly CuratedMapping[] Curated =
     {
         new("GET", "api/v1/Client", "ATM Monitoring Dashboard", WidgetType.Table, 60, ExecutionMode.Realtime),

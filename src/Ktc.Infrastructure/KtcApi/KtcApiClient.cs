@@ -22,6 +22,21 @@ public static class KtcRequestKeys
 public class KtcApiClient : IKtcApiClient
 {
     private static readonly TimeSpan DeniedFor = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ForbiddenFor = TimeSpan.FromMinutes(15);
+
+    /// <summary>KTC errors come back as {"Message":"..."}; returns that text, trimmed.</summary>
+    public static string? KtcMessage(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        try
+        {
+            using var d = JsonDocument.Parse(raw);
+            if (d.RootElement.ValueKind == JsonValueKind.String) return d.RootElement.GetString();
+            if (d.RootElement.ValueKind == JsonValueKind.Object && d.RootElement.TryGetProperty("Message", out var m) && m.ValueKind == JsonValueKind.String) return m.GetString();
+        }
+        catch (JsonException) { }
+        return raw.Length > 200 ? raw[..200] : raw;
+    }
     private readonly HttpClient _http;
     private readonly IKtcTokenProvider _tokens;
     private readonly IMemoryCache _cache;
@@ -48,6 +63,15 @@ public class KtcApiClient : IKtcApiClient
         }
 
         var resp = await ExecuteOnce(method, relativeUrl, body, options, token, ct);
+        if (resp.StatusCode == 403 && !options.BypassAuth && options.Token == null)
+        {
+            // A real permission refusal: the token is fine, the KTC user lacks a role. Do not re-login or retry; pause the route.
+            var why = KtcMessage(resp.Raw) ?? "KTC refused this request (HTTP 403).";
+            _log.LogWarning("KTC {Method} {Url} -> 403 for {Identity}: {Why}. Paused for {Minutes} min.", method, relativeUrl, _tokens.Identity, why, ForbiddenFor.TotalMinutes);
+            var msg = KtcResponse.Fail("Permission required: " + why, 403, resp.ElapsedMs);
+            _cache.Set(deniedKey, msg, ForbiddenFor);
+            return msg;
+        }
         if (resp.StatusCode == 401 && !options.BypassAuth && options.Token == null)
         {
             var fresh = await _tokens.RefreshAsync(token, ct);
