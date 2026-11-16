@@ -427,24 +427,26 @@ public class KtcDataService : IKtcDataService
         var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
         var diag = new List<string>();
 
-        // 1. Optional ready-made counters route.
+        // 1. KTC's counters route (GET Client/{id}/Counters, what KTC's own UI reads): device counters per component.
         var route = _opt.CountersEndpoint?.Trim() ?? "";
+        List<ApplicationCounter> routeApp = new(); List<XfsCounter> routeXfs = new(); DateTime? routeReset = null, routeAt = null;
         if (route.Length > 0)
         {
             var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase).Replace("{id}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase);
             var rw = new Warn();
             var raw = await Fetch(url, rw, ct: ct);
-            var (c0, r0, a0, x0) = CounterRules.Parse(raw);
-            if (raw != null && a0.Count == 0 && x0.Count == 0)
+            (routeAt, routeReset, routeApp, routeXfs) = CounterRules.Parse(raw);
+            var path = url.Split('?')[0];
+            if (raw == null) diag.Add($"{path}: {rw.ToList().FirstOrDefault() ?? "no answer"}.");
+            else if (routeApp.Count == 0 && routeXfs.Count == 0)
             {
                 var shape = CounterRules.Shape(raw);
-                _log.LogInformation("KTC {Route} answered without counters the portal can read; shape: {Shape}", url.Split('?')[0], shape);
-                diag.Add($"Ktc:CountersEndpoint answer shape: {shape}");
+                var sample = raw.Value.GetRawText(); sample = sample.Length > 300 ? sample[..300] + "…" : sample;
+                _log.LogInformation("KTC {Route} answered without counters the portal can read; shape: {Shape}; start: {Sample}", path, shape, sample);
+                diag.Add($"{path}: no counters the portal can read ({shape}).");
             }
-            if (a0.Count > 0 || x0.Count > 0)
-                return new AtmCounters(id, name, c0, r0, a0.OrderBy(a => CounterRules.CategoryRank(a.Category)).ToList(), x0.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ToList(),
-                    w.ToList(), r0.HasValue ? "last reset reported by KTC" : null, new[] { $"Counters from Ktc:CountersEndpoint ({url.Split('?')[0]}): {a0.Count} application, {x0.Count} XFS." });
-            diag.Add($"Ktc:CountersEndpoint ({url.Split('?')[0]}) gave no counters{(rw.ToList().FirstOrDefault() is { } e ? ": " + e : "")}; using CurrentStatus and transactions instead.");
+            else diag.Add($"{path}: {routeXfs.Count} device counters on {routeXfs.Select(x => x.Device).Distinct().Count()} devices{(routeApp.Count > 0 ? $", {routeApp.Count} application counters" : "")}.");
+            routeXfs = routeXfs.Select(x => x with { Threshold = x.Threshold ?? CounterRules.ThresholdFor(x.Counter, _opt.CounterThresholds) }).ToList();
         }
 
         // 2. XFS counters from CurrentStatus + cash units; 3. application counters from transactions. In parallel.
@@ -487,11 +489,19 @@ public class KtcDataService : IKtcDataService
             xfs.Add(new XfsCounter(dev, CounterRules.XfsClass(dev) ?? "CDM", null, $"Cash unit {(unit.Length > 0 ? unit : "?")} notes", count, null));
             if (KtcJson.Date(e, "Timestamp", "TimeStamp") is { } t && t > (collected ?? DateTime.MinValue)) collected = t;
         }
-        diag.Add($"CurrentStatus: {rows.Count} rows, {comps.Count} components, {xfsComps.Count} XFS devices ({string.Join(", ", xfsComps.OrderBy(x => x))}), {xfs.Count - cashRows.Count} counter properties; CurrentCashUnitStatus: {cashRows.Count} cash units.");
-        if (tStatus.Result == null) w.Add("XFS counters: KTC did not answer Client/" + id + "/CurrentStatus.");
-        else if (rows.Count == 0) w.Add("XFS counters: KTC returned no CurrentStatus rows for this ATM.");
+        var statusCounters = xfs.Count - cashRows.Count;
+        if (routeXfs.Count > 0)
+        {
+            // KTC's own counters first; CurrentStatus counter properties only for devices the counters route does not cover; then the cash units.
+            var covered = routeXfs.Select(x => x.Device).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            xfs = routeXfs.Concat(xfs.Take(statusCounters).Where(x => !covered.Contains(x.Device))).Concat(xfs.Skip(statusCounters)).ToList();
+        }
+        diag.Add($"CurrentStatus: {rows.Count} rows, {comps.Count} components, {xfsComps.Count} XFS devices ({string.Join(", ", xfsComps.OrderBy(x => x))}), {statusCounters} counter-like properties{(routeXfs.Count > 0 ? " (used only for devices the counters route does not list)" : "")}; CurrentCashUnitStatus: {cashRows.Count} cash units.");
+        if (xfs.Count > 0) { }
+        else if (tStatus.Result == null) w.Add("XFS counters: KTC did not answer Client/" + id + "/CurrentStatus.");
+        else if (rows.Count == 0) w.Add("XFS counters: KTC returned no counters and no CurrentStatus rows for this ATM.");
         else if (xfsComps.Count == 0) w.Add($"XFS counters: none of this ATM's {comps.Count} components is an XFS device (card reader, dispenser, acceptor, printer, PIN pad, sensors).");
-        else if (xfs.Count == 0) w.Add("XFS counters: no counter properties reported by this ATM (its XFS devices report only status values). Open /diag/ktc-token and send the Counters section.");
+        else if (xfs.Count == 0) w.Add("XFS counters: no counters reported by this ATM (neither Client/{id}/Counters nor counter properties in CurrentStatus). Open /diag/ktc-token and send the Counters section.");
 
         // ---- application ----
         var tx = tTx.Result.Where(t => t.AtmId == id).ToList();
@@ -506,6 +516,8 @@ public class KtcDataService : IKtcDataService
         var resetSource = resetUtc is { } ru ? $"last {resetType} {ru:yyyy-MM-dd HH:mm} UTC" : tx.Count > 0 ? $"start of the {days}-day lookback (no replenishment found)" : null;
         if (tx.Count > 0 && resetUtc == null) resetUtc = now.AddDays(-days);
 
+        if (routeApp.Count > 0) { app = routeApp; resetUtc = routeReset ?? resetUtc; resetSource = routeReset.HasValue ? "last reset reported by KTC" : resetSource; }
+        if (routeAt > (collected ?? DateTime.MinValue)) collected = routeAt;
         return new AtmCounters(id, name, collected, resetUtc, app, xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ThenBy(x => x.Device).ToList(), w.ToList(), resetSource, diag);
     }
 
