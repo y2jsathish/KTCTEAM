@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Ktc.Application.Models;
 
 namespace Ktc.Application.Logic;
@@ -92,9 +93,136 @@ public static class CounterRules
         return null;
     }
 
+    /// <summary>Field names of a JSON answer, for logs and the "What KTC returned" note: kind, record count and the fields of the first record.</summary>
+    public static string Shape(JsonElement? root)
+    {
+        if (root is not { } r) return "empty";
+        var rows = KtcJson.Rows(r).ToList();
+        var first = rows.FirstOrDefault().Value;
+        var fields = first.ValueKind == JsonValueKind.Object
+            ? string.Join(", ", first.EnumerateObject().Take(25).Select(p => $"{p.Name}:{p.Value.ValueKind.ToString().ToLowerInvariant()}"))
+            : first.ValueKind.ToString().ToLowerInvariant();
+        return $"{r.ValueKind.ToString().ToLowerInvariant()} with {rows.Count} record(s); first record: {{{fields}}}";
+    }
+
     /// <summary>Rank of a category / service class for display order; unknown ones go last.</summary>
     public static int CategoryRank(string category) { var i = Array.FindIndex(Categories, c => c.Equals(category, StringComparison.OrdinalIgnoreCase)); return i < 0 ? 99 : i; }
     public static int ClassRank(string cls) { var i = Array.FindIndex(ServiceClasses, s => s.Class.Equals(cls, StringComparison.OrdinalIgnoreCase)); return i < 0 ? 99 : i; }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // Counters built from standard KTC data (no counters route needed).
+    // ------------------------------------------------------------------------------------------------------------
+
+    private const RegexOptions Ci = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+
+    /// <summary>XFS service class of a KTC component (ComponentList DisplayName or DBName such as "KXDevice.KXCardReader"); null when it is not an XFS device.</summary>
+    public static string? XfsClass(string component)
+    {
+        var c = Regex.Replace(component ?? "", @"[\s_.\-/]", "").ToLowerInvariant();
+        if (c.Length == 0) return null;
+        if (c.Contains("cardreader") || c.Contains("idc") || c.Contains("chipcard") || c.Contains("contactless")) return "IDC";
+        if (c.Contains("dispenser") || c.Contains("cdm") || c.Contains("recycler")) return "CDM";
+        if (c.Contains("cashacceptor") || c.Contains("cashin") || c.Contains("cim") || c.Contains("depository") || c.Contains("chequ") || c.Contains("check")) return "CIM";
+        if (c.Contains("printer") || c.Contains("ptr") || c.Contains("passbook")) return "PTR";
+        if (c.Contains("pinpad") || c.Contains("epp") || c.Contains("pin")) return "PIN";
+        if (c.Contains("sensor") || c.Contains("door") || c.Contains("indicator") || c.Contains("siu") || c.Contains("guidelight") || c.Contains("alarm") || c.Contains("safe")) return "SIU";
+        return null;
+    }
+
+    private static readonly Regex CounterName = new(@"count|counter|total|number of|\bno\.? of|jam|fail|retain|retract|reject|refus|captur|dispens|insert|printed|accepted|purge|opens?\b|opened|tamper|suspect|counterfeit|cycles?\b|operations?\b|entries|events", Ci);
+    private static readonly Regex NotCounter = new(@"version|firmware|serial|model|vendor|percent|%|temperature|duration|time|date|status|state|level|severity|address|\bid\b|capabilit|type\b|mode\b|code\b", Ci);
+
+    /// <summary>
+    /// True when a CurrentStatus property is a counter: its value is a whole number and its name says so
+    /// (count, jams, failures, retains, ...), or KTC marked it numeric and the name is not a version, time, status, etc.
+    /// </summary>
+    public static bool IsCounter(string propertyName, bool useNumeric, string value, out long number)
+    {
+        number = 0;
+        if (!double.TryParse((value ?? "").Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d) || d < 0 || d != Math.Floor(d) || d > long.MaxValue) return false;
+        number = (long)d;
+        if (CounterName.IsMatch(propertyName)) return true;
+        return useNumeric && !NotCounter.IsMatch(propertyName);
+    }
+
+    /// <summary>Threshold for a counter from Ktc:CounterThresholds: the longest key that the counter name contains.</summary>
+    public static long? ThresholdFor(string counter, IReadOnlyDictionary<string, long>? thresholds)
+    {
+        if (thresholds == null || string.IsNullOrWhiteSpace(counter)) return null;
+        var hit = thresholds.Where(t => t.Key.Length > 0 && counter.Contains(t.Key, StringComparison.OrdinalIgnoreCase)).OrderByDescending(t => t.Key.Length).FirstOrDefault();
+        return hit.Key == null ? null : hit.Value;
+    }
+
+    // Transaction type and reason names as KTC's STXFieldLookup spells them (CashWithdrawal, BalanceInquiry, HostDeclined, ...)
+    // or as other servers do ("Cash Withdrawal"); spaces and underscores are ignored.
+    private static string Flat(string s) => Regex.Replace(s ?? "", @"[\s_\-]", "").ToLowerInvariant();
+    private static readonly Regex Supervisor = new(@"^(select|exit|checkpassword|replenish|prntcntrs|printcounters|clrcash|clearcash|addcash|addcashcomplete|testcash|dispcashrecycler|supervisor.*|.*supervisor|balancing|settlement|cassette.*)$", Ci);
+    private static readonly Regex Reset = new(@"^(replenish|replenishment|clrcash|clearcash|addcash|addcashcomplete|settlement|balancing|cassettereplace.*)$", Ci);
+
+    /// <summary>True for supervisor / replenishment operations recorded as transactions (REPLENISH, ADD_CASH, CLR_CASH, PRNT_CNTRS, ...).</summary>
+    public static bool IsSupervisorType(string type) => Supervisor.IsMatch(Flat(type));
+    /// <summary>True for operations that reset the ATM counters (replenishment, clear cash, add cash).</summary>
+    public static bool IsResetType(string type) => Reset.IsMatch(Flat(type));
+
+    /// <summary>The application counters and the list of counter names, in display order.</summary>
+    public static readonly (string Category, string Name)[] ApplicationCounters =
+    {
+        ("Transactions", "Customer sessions"), ("Transactions", "Cash withdrawals"), ("Transactions", "Balance inquiries"), ("Transactions", "Mini statements"),
+        ("Transactions", "Fund transfers"), ("Transactions", "PIN changes"), ("Transactions", "Cash deposits"),
+        ("Exceptions", "Declined by host"), ("Exceptions", "Host timeouts"), ("Exceptions", "Reversals"), ("Exceptions", "Cards captured"), ("Exceptions", "Cash retracts"),
+        ("Operations", "Supervisor entries"), ("Operations", "Application restarts"),
+    };
+
+    /// <summary>Which application counter(s) one customer transaction adds to (besides "Customer sessions").</summary>
+    public static IEnumerable<string> CountersFor(TransactionDto t)
+    {
+        var type = Flat(t.Type);
+        var why = Flat($"{t.Reason} {t.ErrorCode} {(t.Success ? "" : t.FailureCategory)}");
+        if (Regex.IsMatch(type, "withdraw|fastcash")) yield return "Cash withdrawals";
+        else if (type.Contains("balance")) yield return "Balance inquiries";
+        else if (type.Contains("statement")) yield return "Mini statements";
+        else if (type.Contains("transfer")) yield return "Fund transfers";
+        else if (Regex.IsMatch(type, "pin(change|reset|unlock)")) yield return "PIN changes";
+        else if (Regex.IsMatch(type, "deposit|cashin|paymentbycash")) yield return "Cash deposits";
+        if (type.Contains("revers") || why.Contains("revers")) yield return "Reversals";
+        if (why.Contains("declin")) yield return "Declined by host";
+        if (Regex.IsMatch(why, "hosttimeout|noresponsefrom.*host|hostnotresponding")) yield return "Host timeouts";
+        if (Regex.IsMatch(why, "captur|retain")) yield return "Cards captured";
+        if (why.Contains("retract") || t.FailureCategory == "CashRetract") yield return "Cash retracts";
+        if (Regex.IsMatch(why, "restart|powerfail|apprestart")) yield return "Application restarts";
+    }
+
+    /// <summary>
+    /// Application counters of one ATM from its transactions: "Today" counts from <paramref name="todayStartUtc"/>,
+    /// "Since reset" from the last replenishment / clear-cash operation in the list (or from the oldest transaction searched when there is none).
+    /// </summary>
+    public static (List<ApplicationCounter> Counters, DateTime? ResetUtc, string? ResetType) ApplicationFromTransactions(IReadOnlyCollection<TransactionDto> tx, DateTime todayStartUtc)
+    {
+        // The reset point is the start of the latest replenishment session (REPLENISH, ADD_CASH, ... share one sessionID),
+        // so that supervisor session itself counts as the first supervisor entry since the reset.
+        var last = tx.Where(t => IsResetType(t.Type)).OrderByDescending(t => t.TimeUtc).FirstOrDefault();
+        var reset = last == null ? null : last.SessionId.Length == 0 ? last
+            : tx.Where(t => t.SessionId == last.SessionId).OrderBy(t => t.TimeUtc).ThenBy(t => IsResetType(t.Type) ? 0 : 1).First();
+        var since = reset?.TimeUtc;
+        var today = new Dictionary<string, long>(); var total = new Dictionary<string, long>();
+        void Add(string name, DateTime when)
+        {
+            if (since is { } s && when < s) return;
+            total[name] = total.GetValueOrDefault(name) + 1;
+            if (when >= todayStartUtc) today[name] = today.GetValueOrDefault(name) + 1;
+        }
+        // Sessions: one per KTC sessionID (or per transaction when KTC sends no session id); supervisor sessions count as supervisor entries.
+        foreach (var g in tx.GroupBy(t => t.SessionId.Length > 0 ? "s" + t.SessionId : "t" + t.Id))
+        {
+            var first = g.Min(t => t.TimeUtc);
+            if (g.Any(t => IsSupervisorType(t.Type))) Add("Supervisor entries", first);
+            if (g.Any(t => !IsSupervisorType(t.Type))) Add("Customer sessions", first);
+        }
+        foreach (var t in tx.Where(t => !IsSupervisorType(t.Type)))
+            foreach (var name in CountersFor(t)) Add(name, t.TimeUtc);
+        var list = ApplicationCounters.Select(c => new ApplicationCounter(c.Category, c.Name, today.GetValueOrDefault(c.Name), total.GetValueOrDefault(c.Name))).ToList();
+        return (list, since, last == null ? null : (reset != null && IsResetType(reset.Type) ? reset.Type : last.Type));
+    }
 
     /// <summary>The counters of one ATM as a report (CSV / Excel / PDF): application counters first, then XFS counters.</summary>
     public static ReportData ToReport(AtmCounters c, DateTime generatedUtc)
@@ -108,7 +236,7 @@ public static class CounterRules
         var flagged = c.Xfs.Count(x => x.Status != Ok);
         var subtitle = string.Join(" | ", new[]
         {
-            c.LastResetUtc is { } r ? $"Last reset {r:yyyy-MM-dd HH:mm} UTC" : null,
+            c.ResetSource is { Length: > 0 } rs ? $"Since reset = since {rs}" : c.LastResetUtc is { } r ? $"Last reset {r:yyyy-MM-dd HH:mm} UTC" : null,
             c.CollectedUtc is { } at ? $"Reported {at:yyyy-MM-dd HH:mm} UTC" : null
         }.Where(s => s != null));
         return new ReportData($"Counters {c.AtmName}", generatedUtc, subtitle.Length > 0 ? subtitle : null,

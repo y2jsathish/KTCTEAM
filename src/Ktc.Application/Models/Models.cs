@@ -78,6 +78,10 @@ public record TransactionDto
     public int ResponseMs { get; init; }
     public string ErrorCode { get; init; } = "";
     public string FailureCategory { get; init; } = "";     // Host | Communication | CashRetract | Dispense | Other
+    /// <summary>KTC sessionID (one customer or supervisor session can hold several transactions).</summary>
+    public string SessionId { get; init; } = "";
+    /// <summary>KTC reason name (reasonID looked up), also for successful transactions, e.g. Normal, HostDeclined, HostTimeout.</summary>
+    public string Reason { get; init; } = "";
 }
 
 /// <summary>Text is always PAN-masked; raw journal text never leaves the data service.</summary>
@@ -181,5 +185,8 @@ public record XfsCounter(string Device, string ServiceClass, string? LogicalName
     public string Status => Ktc.Application.Logic.CounterRules.Status(Value, Threshold);
 }
 
+/// <param name="ResetSource">What "Since reset" counts from, e.g. "last replenishment (REPLENISH) 2026-11-14 06:02 UTC" or "start of the 7-day lookback".</param>
+/// <param name="Diagnostics">What KTC returned (rows, components, transactions), so an empty tab says why.</param>
 public record AtmCounters(string AtmId, string AtmName, DateTime? CollectedUtc, DateTime? LastResetUtc,
-    IReadOnlyList<ApplicationCounter> Application, IReadOnlyList<XfsCounter> Xfs, IReadOnlyList<string> Warnings);
+    IReadOnlyList<ApplicationCounter> Application, IReadOnlyList<XfsCounter> Xfs, IReadOnlyList<string> Warnings,
+    string? ResetSource = null, IReadOnlyList<string>? Diagnostics = null);

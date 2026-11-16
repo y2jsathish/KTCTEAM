@@ -68,37 +68,172 @@ public class CounterTests
         Assert.Contains(r.Summary, s => s.Label == "XFS at or over threshold" && s.Value == "1");
     }
 
+    [Theory]
+    [InlineData("Card Reader", "IDC")]
+    [InlineData("KXDevice.KXCashDispenser", "CDM")]
+    [InlineData("Cash Acceptor", "CIM")]
+    [InlineData("Journal Printer", "PTR")]
+    [InlineData("Encrypting PinPad", "PIN")]
+    [InlineData("Doors", "SIU")]
+    [InlineData("Sensors", "SIU")]
+    [InlineData("Application", null)]
+    [InlineData("Camera", null)]
+    [InlineData("Audio", null)]
+    public void Maps_ktc_components_to_xfs_classes(string component, string? expected) => Assert.Equal(expected, CounterRules.XfsClass(component));
+
+    [Theory]
+    [InlineData("Cards retained", false, "3", true)]
+    [InlineData("Media jams", false, "0", true)]
+    [InlineData("Fatal error count", true, "2", true)]
+    [InlineData("Some numeric", true, "17", true)]
+    [InlineData("Firmware version", true, "4", false)]
+    [InlineData("ShutdownDuration", true, "81", false)]
+    [InlineData("Device status", false, "Online", false)]
+    [InlineData("Cards retained", false, "n/a", false)]
+    public void Picks_counter_properties(string name, bool numeric, string value, bool expected) => Assert.Equal(expected, CounterRules.IsCounter(name, numeric, value, out _));
+
+    [Fact]
+    public void Thresholds_match_by_the_longest_name_part()
+    {
+        var t = new KtcOptions().CounterThresholds;
+        Assert.Equal(1, CounterRules.ThresholdFor("Fatal error count", t));
+        Assert.Equal(3, CounterRules.ThresholdFor("Media jams", t));
+        Assert.Equal(50, CounterRules.ThresholdFor("Read failures", t));
+        Assert.Null(CounterRules.ThresholdFor("Cards inserted", t));
+    }
+
+    [Fact]
+    public void Application_counters_count_from_the_last_replenishment()
+    {
+        var day = new DateTime(2026, 11, 16, 0, 0, 0, DateTimeKind.Utc);
+        TransactionDto T(string id, string session, string type, DateTime at, bool ok = true, string reason = "", string category = "") =>
+            new() { Id = id, SessionId = session, Type = type, TimeUtc = at, Success = ok, Reason = reason, ErrorCode = ok ? "" : reason, FailureCategory = category };
+        var tx = new[]
+        {
+            T("1", "10", "CashWithdrawal", day.AddDays(-3)),                              // before the reset: not counted
+            T("2", "20", "REPLENISH", day.AddDays(-2)), T("3", "20", "ADD_CASH", day.AddDays(-2).AddMinutes(1)),
+            T("4", "30", "CashWithdrawal", day.AddDays(-1)), T("5", "30", "BalanceInquiry", day.AddDays(-1)),
+            T("6", "40", "CashWithdrawal", day.AddHours(5), false, "HostDeclined"),
+            T("7", "41", "CashWithdrawal", day.AddHours(6), false, "HostTimeout"),
+            T("8", "42", "PinChange", day.AddHours(7)), T("9", "43", "CashDepositToAccount", day.AddHours(8)),
+            T("10", "44", "CashWithdrawal", day.AddHours(9), false, "Cash retract - note not taken", "CashRetract"),
+            T("11", "45", "CashWithdrawal", day.AddHours(10), false, "RESTART"),
+        };
+        var (app, reset, type) = CounterRules.ApplicationFromTransactions(tx, day);
+        Assert.Equal(day.AddDays(-2), reset);   // start of the latest replenishment session
+        Assert.Equal("REPLENISH", type);
+        long Today(string n) => app.Single(a => a.Name == n).Today;
+        long Since(string n) => app.Single(a => a.Name == n).SinceReset;
+        Assert.Equal((4, 5), (Today("Cash withdrawals"), Since("Cash withdrawals")));
+        Assert.Equal((6, 7), (Today("Customer sessions"), Since("Customer sessions")));
+        Assert.Equal((0, 1), (Today("Balance inquiries"), Since("Balance inquiries")));
+        Assert.Equal(1, Today("Declined by host")); Assert.Equal(1, Today("Host timeouts")); Assert.Equal(1, Today("Cash retracts"));
+        Assert.Equal(1, Today("PIN changes")); Assert.Equal(1, Today("Cash deposits")); Assert.Equal(1, Today("Application restarts"));
+        Assert.Equal((0, 1), (Today("Supervisor entries"), Since("Supervisor entries")));  // the replenishment session itself
+        Assert.Equal(CounterRules.ApplicationCounters.Length, app.Count);
+    }
+
+    [Fact]
+    public async Task Builds_counters_from_real_ktc_shapes()
+    {
+        var c = await Service(new RealShapes()).GetCountersAsync("19");
+        Assert.NotNull(c);
+        // XFS: numeric / counter-named properties of the XFS components, plus the cash units.
+        Assert.Contains(c!.Xfs, x => x.Device == "Card Reader" && x.ServiceClass == "IDC" && x.Counter == "Cards retained" && x.Value == 4 && x.Threshold == 20);
+        Assert.Contains(c.Xfs, x => x.Device == "Card Reader" && x.Counter == "Fatal error count" && x.Status == "Warning");
+        Assert.DoesNotContain(c.Xfs, x => x.Counter == "Device status" || x.Counter == "Firmware version" || x.Device == "Application");
+        Assert.Contains(c.Xfs, x => x.Device == "Cash Dispenser" && x.Counter == "Cash unit 1 notes" && x.Value == 812);
+        // Application: from TransactionData/Search rows (typeID / completionID / reasonID looked up in STXFieldLookup).
+        Assert.Equal(2, c.Application.Single(a => a.Name == "Cash withdrawals").SinceReset);
+        Assert.Equal(1, c.Application.Single(a => a.Name == "Declined by host").SinceReset);
+        Assert.Equal(1, c.Application.Single(a => a.Name == "Balance inquiries").SinceReset);
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("CurrentStatus: 6 rows"));
+        Assert.Contains(c.Diagnostics!, d => d.Contains("4 for this ATM"));
+    }
+
+    [Fact]
+    public async Task Empty_ktc_data_gives_reasons_instead_of_null()
+    {
+        var c = await Service(new RealShapes { Empty = true }).GetCountersAsync("19");
+        Assert.NotNull(c);
+        Assert.Empty(c!.Xfs); Assert.Empty(c.Application);
+        Assert.Contains(c.Warnings, w => w.StartsWith("XFS counters: KTC returned no CurrentStatus rows"));
+        Assert.Contains(c.Warnings, w => w.StartsWith("Application counters: KTC returned no transactions"));
+        Assert.Null(await Service(new RealShapes()).GetCountersAsync("NO-SUCH-ATM"));
+    }
+
+    [Fact]
+    public async Task Counters_endpoint_is_an_optional_override()
+    {
+        var api = new RealShapes { Override = """{"Xfs":[{"ServiceClass":"CDM","Counter":"Pick failures","Value":41,"Threshold":40}]}""" };
+        var c = await Service(api, new KtcOptions { CountersEndpoint = "/api/v2/Atm/{atmId}/Counters" }).GetCountersAsync("19");
+        Assert.Contains("api/v2/Atm/19/Counters", api.Urls);
+        Assert.Single(c!.Xfs, x => x.Counter == "Pick failures" && x.Status == "Warning");
+
+        var failing = await Service(new RealShapes(), new KtcOptions { CountersEndpoint = "api/v2/Atm/{atmId}/Counters" }).GetCountersAsync("19");
+        Assert.Contains(failing!.Xfs, x => x.Counter == "Cards retained");          // falls back to CurrentStatus
+        Assert.Contains(failing.Diagnostics!, d => d.Contains("gave no counters"));
+    }
+
     [Fact]
     public async Task Demo_data_has_application_and_xfs_counters_for_every_device()
     {
-        var svc = Service(new MockClient());
-        var c = await svc.GetCountersAsync("1019");
+        var c = await Service(new MockClient()).GetCountersAsync("1019");
         Assert.NotNull(c);
         Assert.Equal("1019", c!.AtmId);
         Assert.Empty(c.Warnings);
         Assert.NotNull(c.LastResetUtc);
-        foreach (var name in new[] { "Customer sessions", "Cash withdrawals", "Balance inquiries", "Mini statements", "Fund transfers", "PIN changes", "Cash deposits",
-                                     "Declined by host", "Host timeouts", "Reversals", "Cards captured", "Cash retracts", "Supervisor entries", "Application restarts" })
-            Assert.Contains(c.Application, a => a.Name == name);
-        Assert.Equal(new[] { "Transactions", "Exceptions", "Operations" }, c.Application.Select(a => a.Category).Distinct());
+        Assert.True(c.ResetSource!.StartsWith("last "), c.ResetSource + " | " + string.Join(" | ", c.Diagnostics!));
+        Assert.Equal(CounterRules.ApplicationCounters.Select(a => a.Name), c.Application.Select(a => a.Name));
+        Assert.True(c.Application.Single(a => a.Name == "Cash withdrawals").SinceReset > 0);
         Assert.All(c.Application, a => Assert.True(a.SinceReset >= a.Today));
         Assert.Equal(new[] { "IDC", "CDM", "CIM", "PTR", "PIN", "SIU" }, c.Xfs.Select(x => x.ServiceClass).Distinct());
         Assert.Contains(c.Xfs, x => x.Threshold != null);
-        Assert.Null(await svc.GetCountersAsync("NO-SUCH-ATM"));
     }
 
-    [Fact]
-    public async Task Unconfigured_or_failing_endpoint_gives_empty_counters_with_a_warning()
+    /// <summary>A KTC server answering in the shapes the real one sends (see the /diag/ktc-token report).</summary>
+    private sealed class RealShapes : IKtcApiClient
     {
-        var off = await Service(new MockClient(), new KtcOptions { CountersEndpoint = "" }).GetCountersAsync("1019");
-        Assert.Empty(off!.Xfs);
-        Assert.Contains(off.Warnings, w => w.Contains("Ktc:CountersEndpoint"));
-
-        var client = new MockClient();
-        var custom = await Service(client, new KtcOptions { CountersEndpoint = "/api/v2/Atm/{atmId}/DeviceCounters" }).GetCountersAsync("1019");
-        Assert.Contains("api/v2/Atm/1019/DeviceCounters", client.Urls);
-        Assert.Empty(custom!.Application);
-        Assert.Contains(custom.Warnings, w => w.Contains("DeviceCounters"));
+        public bool Empty { get; init; }
+        public string? Override { get; init; }
+        public List<string> Urls { get; } = new();
+        public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
+        {
+            var path = url.Split('?')[0];
+            lock (Urls) Urls.Add(path);
+            var now = DateTime.UtcNow; string D(DateTime d) => d.ToString("yyyy-MM-ddTHH:mm:ss");
+            string? json = path switch
+            {
+                "api/v1/Client" => """[{"ID":19,"Name":"ATM-NINETEEN","BusinessID":0},{"ID":5,"Name":"ATM-FIVE","BusinessID":0}]""",
+                "api/v2/Atm/19/Counters" => Override,
+                "api/v1/Client/19/CurrentStatus" => Empty ? "[]" : """
+                    [{"CID":19,"CompId":1,"PropId":70,"VID":0,"NumericValue":81.0,"UseNumeric":true,"Timestamp":"2026-11-10T11:58:33.903"},
+                     {"CID":19,"CompId":5,"PropId":71,"VID":6,"UseNumeric":false,"Timestamp":"2026-11-16T06:55:51.27"},
+                     {"CID":19,"CompId":5,"PropId":300,"VID":-1,"NumericValue":4.0,"UseNumeric":true,"Timestamp":"2026-11-16T06:55:51.27"},
+                     {"CID":19,"CompId":5,"PropId":301,"VID":-1,"NumericValue":2.0,"UseNumeric":true,"Timestamp":"2026-11-16T06:55:51.27"},
+                     {"CID":19,"CompId":5,"PropId":302,"VID":-1,"ManualValue":"v4.07","UseNumeric":false,"Timestamp":"2026-11-16T06:55:51.27"},
+                     {"CID":19,"CompId":4,"PropId":303,"VID":-1,"NumericValue":9.0,"UseNumeric":true,"Timestamp":"2026-11-16T06:55:51.27"}]
+                    """,
+                "api/v1/Client/19/CurrentCashUnitStatus" => Empty ? "[]" : """[{"ClientID":19,"DBComponentID":7,"TypeID":21,"StatusID":1,"CashUnitNumber":1,"Value":100.0,"Count":812,"Total":0,"Timestamp":"2026-11-16T05:37:39.823"}]""",
+                "api/v1/ComponentList" => """{"1":{"ID":1,"DBName":"Application","DisplayName":"Application"},"4":{"ID":4,"DBName":"KXDevice.KXCamera","DisplayName":"Camera"},"5":{"ID":5,"DBName":"KXDevice.KXCardReader","DisplayName":"Card Reader"},"7":{"ID":7,"DBName":"KXDevice.KXCashDispenser","DisplayName":"Cash Dispenser"}}""",
+                "api/v1/PropertyList" => """{"70":{"ID":70,"DisplayName":"ShutdownDuration"},"71":{"ID":71,"DisplayName":"Device status"},"300":{"ID":300,"DisplayName":"Cards retained"},"301":{"ID":301,"DisplayName":"Fatal error count"},"302":{"ID":302,"DisplayName":"Firmware version"},"303":{"ID":303,"DisplayName":"Pictures taken"}}""",
+                "api/v1/ValueList" => """{"6":"IDLE"}""",
+                "api/v1/Group" => """[{"ID":1,"Name":"Unknown Clients"},{"ID":2,"Name":"All Clients"}]""",
+                "api/v1/TransactionType" => """{"1":{"ID":1,"Name":"CashWithdrawal","STXFieldLookupIDs":[4]}}""",
+                "api/v1/STXFieldLookup" => """{"4":{"ID":4,"Description":"CashWithdrawal"},"52":{"ID":52,"Description":"BalanceInquiry"},"6":{"ID":6,"Description":"SUCCESS"},"10":{"ID":10,"Description":"FAIL"},"3":{"ID":3,"Description":"Normal"},"28":{"ID":28,"Description":"HostDeclined"}}""",
+                "api/v1/TransactionData/Search" => Empty ? "{}" : $$$"""
+                    {"1":{"transactionID":1,"sessionID":100,"timestampUTC":"{{{D(now.AddHours(-3))}}}","typeID":4,"completionID":6,"reasonID":3,"ClientID":19},
+                     "2":{"transactionID":2,"sessionID":101,"timestampUTC":"{{{D(now.AddHours(-2))}}}","typeID":4,"completionID":10,"reasonID":28,"ClientID":19},
+                     "3":{"transactionID":3,"sessionID":101,"timestampUTC":"{{{D(now.AddHours(-2))}}}","typeID":52,"completionID":6,"reasonID":3,"ClientID":19},
+                     "4":{"transactionID":4,"sessionID":102,"timestampUTC":"{{{D(now.AddHours(-1))}}}","typeID":17,"completionID":18,"reasonID":0,"ClientID":19},
+                     "5":{"transactionID":5,"sessionID":200,"timestampUTC":"{{{D(now.AddHours(-1))}}}","typeID":4,"completionID":6,"reasonID":3,"ClientID":5}}
+                    """,
+                _ => null
+            };
+            if (json == null) return Task.FromResult(KtcResponse.Fail("HTTP 404 Not Found", 404));
+            using var d = JsonDocument.Parse(json);
+            return Task.FromResult(new KtcResponse(true, 200, d.RootElement.Clone(), json, null, 1));
+        }
     }
 
     private static JsonElement Json(string s) { using var d = JsonDocument.Parse(s); return d.RootElement.Clone(); }
@@ -117,6 +252,7 @@ public class CounterTests
             if (url.StartsWith("api/v2/")) return KtcResponse.Fail("HTTP 404 Not Found", 404);
             using var req = new HttpRequestMessage(method, url);
             req.Headers.TryAddWithoutValidation("Authorization", "Bearer test");
+            if (body != null) req.Content = new StringContent(JsonSerializer.Serialize(body), System.Text.Encoding.UTF8, "application/json");
             using var res = await _http.SendAsync(req, ct);
             var raw = await res.Content.ReadAsStringAsync(ct);
             if (!res.IsSuccessStatusCode) return KtcResponse.Fail($"HTTP {(int)res.StatusCode}", (int)res.StatusCode);
