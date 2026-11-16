@@ -64,6 +64,11 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             return Ok(Codes.Take(5).Select((c, k) => new { Reason = c.Name, Hours = Math.Round(Hash(Idx(r), k, 7) % 900 / 100.0 + 0.5, 1) }).OrderByDescending(x => x.Hours));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentCashUnitStatus")).Success) return Ok(CashUnits(Idx(r), now));
+        if (Is(path, "api/v1/CashUnitType")) return Ok(new[] { new { ID = 21, Name = "Recycling" }, new { ID = 22, Name = "Dispense" }, new { ID = 23, Name = "Cash in" }, new { ID = 24, Name = "Reject" } });
+        if (Is(path, "api/v1/CashUnitStatus")) return Ok(new[] { new { ID = 1, Name = "OK" }, new { ID = 2, Name = "Low" }, new { ID = 3, Name = "Empty" }, new { ID = 4, Name = "Full" } });
+        if (Rx(path, @"api/v1/Client/(\d+)/ReplenishmentOrders").Success) return Ok(Array.Empty<object>());
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/PhysicalCassettes")).Success)
+            return Ok(new[] { 100, 200, 500, 1000 }.Select((v, k) => new { ClientID = Id(Idx(r)), CassetteNumber = k + 1, Denomination = v, Currency = "AED", Capacity = 2500, Inserted = true }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(KtcCounters(Idx(r), now));
         if (Is(path, "api/v1/HistoricalCounter/ClientTransactionCounters")) return Ok(long.TryParse(q["transactionid"], out var txc) ? TransactionCounters(txc).ToList() : new List<object>());
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));

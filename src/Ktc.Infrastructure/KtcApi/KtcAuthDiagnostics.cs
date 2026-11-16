@@ -309,6 +309,11 @@ public class KtcAuthDiagnostics
             L($"  property ids: {propIds}");
             L($"  value ids (VID): {vids}");
             await Shape($"api/v1/Client/{hwClient}/CurrentCashUnitStatus");
+            // Replenishment tab sources: what this KTC returns for them.
+            await Shape($"api/v1/Client/{hwClient}/PhysicalCassettes", 3, true);
+            await Shape($"api/v1/Client/{hwClient}/ReplenishmentOrders?start={DateTime.UtcNow.AddDays(-30):yyyy-MM-ddTHH:mm:ss}&end={DateTime.UtcNow:yyyy-MM-ddTHH:mm:ss}&providerID=0", 3, true);
+            await Shape("api/v1/CashUnitType", 10, true);
+            await Shape("api/v1/CashUnitStatus", 10, true);
             var c1 = compIds.Split(',')[0]; var p1 = propIds.Split(',')[0]; var v1 = vids.Split(',')[0];
             if (c1.Length > 0)
             {
