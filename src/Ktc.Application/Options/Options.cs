@@ -34,11 +34,12 @@ public class KtcOptions
     /// <summary>EJ application names to leave out of EJ search (KTC's EJRow Value3). Empty = all.</summary>
     public string[] EjExcludeApps { get; set; } = Array.Empty<string>();
     /// <summary>
-    /// Optional KTC route that returns ready-made ATM counters ({atmId} = KTC client id). Empty (default): the counters are built
-    /// from KTC data that every server has: XFS counters from Client/{id}/CurrentStatus + CurrentCashUnitStatus, application
-    /// counters from TransactionData/Search. When set and it answers with counters, its answer is used instead.
+    /// KTC route with the device counters of one ATM ({atmId} = KTC client id). KTC's own UI reads GET Client/{id}/Counters
+    /// (List of KTCCounter: component DBName, counter name, value), so that is the default. When it gives no counters the XFS
+    /// counters come from the counter-like properties in Client/{id}/CurrentStatus instead. Empty turns the route off.
+    /// Application counters always come from TransactionData/Search unless this route also returns application counters.
     /// </summary>
-    public string CountersEndpoint { get; set; } = "";
+    public string CountersEndpoint { get; set; } = "api/v1/Client/{atmId}/Counters";
     /// <summary>Days of transactions searched for the application counters ("Since reset" goes back at most this far).</summary>
     public int CounterLookbackDays { get; set; } = 7;
     /// <summary>
@@ -48,7 +49,8 @@ public class KtcOptions
     public Dictionary<string, long> CounterThresholds { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
         ["fatal error count"] = 1, ["error count"] = 5, ["jam"] = 3, ["tamper"] = 1, ["fail"] = 50, ["retain"] = 20, ["captur"] = 20,
-        ["retract"] = 10, ["reject"] = 200, ["refused"] = 150, ["suspect"] = 5, ["counterfeit"] = 5
+        ["retract"] = 10, ["reject"] = 200, ["refused"] = 150, ["suspect"] = 5, ["counterfeit"] = 5,
+        ["bad reads"] = 50, ["bad chip reads"] = 50, ["print errors"] = 20, ["captured"] = 20
     };
     public int AvailabilityLookbackDays { get; set; } = 7;
     public int MaxParallelCalls { get; set; } = 8;
