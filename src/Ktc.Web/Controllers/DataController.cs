@@ -68,6 +68,16 @@ public class DataController : ControllerBase
         return r == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(r);
     }
 
+    /// <summary>EJ Counters tab: the cash counter reports the ATM printed to its EJ (on restart) in the last 1-31 days.</summary>
+    [HttpGet("atm/{id}/ej-counters")]
+    [Audit("AtmView", "ATM EJ counters")]
+    public async Task<IActionResult> AtmEjCounters(string id, int days = 7, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Select an ATM." });
+        var r = await _data.GetEjCountersAsync(id.Trim(), Math.Clamp(days, 1, 31), ct);
+        return r == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(r);
+    }
+
     [HttpPost("atm/{id}/favorite")]
     public async Task<IActionResult> Favorite(string id, string? name, CancellationToken ct)
     {

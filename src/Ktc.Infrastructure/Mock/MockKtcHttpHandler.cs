@@ -399,7 +399,38 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             int k = 0;
             foreach (var l in lines) rows.Add(new { ID = ++seq, Sequence = seq, TimeStamp = cursor.AddSeconds(k++ * 3), Text = l });
         }
+        // The cash counter report the ATM prints when it restarts (daily at 05:10 here): one row on even ATMs, one row per line on odd ones.
+        for (var day = start.Date; day <= end; day = day.AddDays(1))
+        {
+            var at = day.AddHours(5).AddMinutes(10 + Hash(i, day.DayOfYear, 90) % 20);
+            if (at < start || at > end) continue;
+            var report = EjCounterReport(i, at);
+            if (i % 2 == 0) rows.Add(new { ID = ++seq, Sequence = seq, TimeStamp = at, Text = string.Join("\n", report) });
+            else { int k = 0; foreach (var l in report) rows.Add(new { ID = ++seq, Sequence = seq, TimeStamp = at.AddMilliseconds(k++ * 10), Text = l }); }
+        }
         return rows;
+    }
+
+    private static List<string> EjCounterReport(int i, DateTime at)
+    {
+        var types = new[] { (1, 1000), (2, 500), (3, 50), (4, 100) };
+        var lines = new List<string> { $"MACHINE NO ={AtmName(i).Replace("-", "")[..Math.Min(8, AtmName(i).Replace("-", "").Length)]}", $"DATE-TIME ={at:MM/dd/yy HH:mm:ss}" };
+        foreach (var pair in types.Chunk(2))
+        {
+            lines.Add("             " + string.Join(" ", pair.Select(t => $"TYPE{t.Item1}-{t.Item2}".PadRight(10))));
+            var vals = pair.Select(t =>
+            {
+                long total = t.Item2 == 50 ? 0 : 2500 + 500 * (Hash(i, t.Item1, 91) % 2);
+                long disp = total == 0 ? 0 : Math.Min(total - 10, (long)((at - at.Date.AddDays(-3)).TotalHours * 20 * (1 + Hash(i, t.Item1, 92) % 3)));
+                long rej = total == 0 ? 0 : Math.Min(Hash(i, t.Item1, at.DayOfYear) % 20, total - disp);
+                return (Cas: total - disp - rej, Rej: rej, Disp: disp, Dep: 0L, Tot: total);
+            }).ToList();
+            string Row(string label, Func<(long Cas, long Rej, long Disp, long Dep, long Tot), long> f) => label.PadRight(14) + string.Join("", vals.Select(v => f(v).ToString("00000").PadRight(11)));
+            lines.Add(Row(" CASSETTE", v => v.Cas)); lines.Add(Row("+REJECTED", v => v.Rej)); lines.Add(Row("+DISPENSED", v => v.Disp));
+            lines.Add(Row("-DEPOSITED", v => v.Dep)); lines.Add(Row("=TOTAL", v => v.Tot));
+        }
+        lines.Add($" LAST CLEARED  {at.AddDays(-3):MM/dd/yy HH:mm}");
+        return lines;
     }
 
     // ------------- transaction details -------------
