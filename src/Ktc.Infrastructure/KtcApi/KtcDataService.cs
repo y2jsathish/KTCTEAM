@@ -1020,6 +1020,157 @@ public class KtcDataService : IKtcDataService
     }
 
     /// <summary>
+    /// The transaction details popup, from the routes KTC's own UI calls when a transaction is opened:
+    /// TransactionData/{id} (or the transaction search), SessionData/{sessionId}, TransactionData/AllTransactionsWithSessionID,
+    /// SessionData/{sessionId}/FieldsFromSession, TransactionData/{uuid}/FieldsFromTransaction (STX fields named through GET STXField,
+    /// lookup values through STXFieldLookup), EJData/EJDataForClientBetweenIDs (startEJID..endEJID; EJRow by time when the ids are missing)
+    /// and HistoricalCounter/ClientTransactionCounters (notes / items per device and denomination).
+    /// </summary>
+    public async Task<TransactionDetails?> GetTransactionDetailsAsync(string id, string? atmId, DateTime? timeUtc, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct); var types = await TxLookupsAsync(w, ct);
+        var diag = new List<string>(); var missing = new Dictionary<string, string>();
+        id = id.Trim();
+
+        // ---- the transaction ----
+        var raw = long.TryParse(id, out _) || Guid.TryParse(id, out _) ? await Fetch($"api/v1/TransactionData/{Uri.EscapeDataString(id)}", new Warn(), ct: ct) : null;
+        JsonElement? rec = KtcJson.Items(raw).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object) is { ValueKind: JsonValueKind.Object } r0 ? r0 : null;
+        var tx = rec is { } re ? MapTx(re, lookup, null, id, types) : null;
+        diag.Add($"TransactionData/{id}: {(rec != null ? "found" : "no record")}.");
+        if (tx == null && timeUtc is { } at)
+        {
+            // Not readable by id: find it in the transaction search around its time.
+            var found = await SearchTransactionsAsync(new TransactionQuery(atmId, null, null, at.AddHours(-1), at.AddHours(1)), ct);
+            tx = found.FirstOrDefault(t => t.Id == id);
+            diag.Add($"TransactionData/Search {at.AddHours(-1):HH:mm}-{at.AddHours(1):HH:mm} UTC: {(tx != null ? "found" : "not found")} among {found.Count}.");
+        }
+        if (tx == null) return null;
+        var atm = tx.AtmId.Length > 0 ? tx.AtmId : KtcJson.NormId(atmId ?? "");
+        string StxName(string sid) => sid.Length == 0 ? "" : types.Stx.GetValueOrDefault(sid) ?? "";
+        var record = rec is { } rr
+            ? TxDetailRules.Flatten(rr, (path, v) => Regex.IsMatch(path, @"^(typeID|completionID|reasonID|currencyID)$", RegexOptions.IgnoreCase) ? StxName(KtcJson.NormId(v)) : null)
+            : new List<DetailField>
+            {
+                new("Transaction ID", tx.Id), new("ATM", $"{tx.AtmName} ({tx.AtmId})"), new("Type", tx.Type), new("Status", tx.Status), new("Reason", tx.Reason),
+                new("Time (UTC)", tx.TimeUtc.ToString("yyyy-MM-dd HH:mm:ss")), new("Session ID", tx.SessionId), new("Amount", tx.Amount is { } a ? $"{a:0.##} {tx.Currency}" : ""),
+                new("UUID", tx.Uuid), new("EJ rows", tx.StartEjId.Length > 0 ? $"{tx.StartEjId} - {tx.EndEjId}" : ""),
+            }.Where(f => f.Value.Length > 0).ToList();
+
+        // ---- session, fields, EJ, dispense in parallel ----
+        var tSession = tx.SessionId.Length > 0 ? Fetch($"api/v1/SessionData/{tx.SessionId}", new Warn(), ct: ct) : Task.FromResult<JsonElement?>(null);
+        var tSessionTx = tx.SessionId.Length > 0 ? Fetch($"api/v1/TransactionData/AllTransactionsWithSessionID?sessionid={tx.SessionId}", new Warn(), ct: ct) : Task.FromResult<JsonElement?>(null);
+        var tSessionFields = tx.SessionId.Length > 0 ? Fetch($"api/v1/SessionData/{tx.SessionId}/FieldsFromSession", new Warn(), ct: ct) : Task.FromResult<JsonElement?>(null);
+        var tFields = tx.Uuid.Length > 0 ? Fetch($"api/v1/TransactionData/{Uri.EscapeDataString(tx.Uuid)}/FieldsFromTransaction", new Warn(), ct: ct) : Task.FromResult<JsonElement?>(null);
+        var tStx = StxFieldNamesAsync(ct);
+        var tEj = TransactionEjAsync(atm, tx, ct);
+        var route = _opt.TransactionCountersEndpoint?.Trim() ?? "";
+        var tCounters = route.Length > 0 && long.TryParse(tx.Id, out _) && atm.Length > 0 ? TransactionCountersAsync(route, atm, tx.Id, ct) : Task.FromResult<JsonElement?>(null);
+        await Task.WhenAll(tSession, tSessionTx, tSessionFields, tFields, tStx, tEj, tCounters);
+
+        // STX lookup values (LookupString fields) not in the cached STXFieldLookup list: one batch call.
+        var stxFields = tStx.Result;
+        var wanted = new List<string>();
+        void CollectLookups(JsonElement? j) { foreach (var (_, e) in KtcJson.Rows(j)) if (e.ValueKind == JsonValueKind.Object && KtcJson.Str(e, "Type", "DataType", "ValueType", "FieldType").Contains("lookup", StringComparison.OrdinalIgnoreCase) && KtcJson.NormId(KtcJson.Str(e, "Value", "LookupValue", "IntValue")) is { Length: > 0 } v && !types.Stx.ContainsKey(v)) wanted.Add(v); }
+        CollectLookups(tFields.Result); CollectLookups(tSessionFields.Result);
+        var extra = wanted.Count > 0 ? await StxBatchAsync(wanted.Distinct().ToList(), ct) : new Dictionary<string, string>();
+        string? LookupName(string v) => types.Stx.GetValueOrDefault(v) ?? extra.GetValueOrDefault(v);
+        string? FieldName(string f) => stxFields.GetValueOrDefault(f);
+
+        var session = TxDetailRules.Flatten(tSession.Result);
+        var sessionTx = KtcJson.Rows(tSessionTx.Result).Where(x => x.Value.ValueKind == JsonValueKind.Object).Select(x => MapTx(x.Value, lookup, null, x.Key, types)).Where(t => t != null).Select(t => t!).OrderBy(t => t.TimeUtc).ToList();
+        var sessionFields = TxDetailRules.ReadFields(tSessionFields.Result, FieldName, LookupName);
+        var fields = TxDetailRules.ReadFields(tFields.Result, FieldName, LookupName);
+        diag.Add($"SessionData/{(tx.SessionId.Length > 0 ? tx.SessionId : "-")}: {(tSession.Result != null ? "found" : "no answer")}; {sessionTx.Count} transactions in the session; {sessionFields.Count} session fields.");
+        diag.Add($"FieldsFromTransaction: {(tx.Uuid.Length == 0 ? "no UUID on this transaction" : $"{fields.Count} fields")}; GET STXField: {stxFields.Count} field names.");
+        if (tx.SessionId.Length == 0) missing["session"] = "KTC sent no session id for this transaction.";
+        else if (tSession.Result == null && sessionTx.Count == 0) missing["session"] = $"KTC returned no data for session {tx.SessionId} (SessionData / AllTransactionsWithSessionID).";
+        if (fields.Count == 0)
+            missing["fields"] = tx.Uuid.Length == 0 ? "KTC sent no UUID for this transaction, which FieldsFromTransaction needs." : "KTC returned no STX fields for this transaction (TransactionData/{uuid}/FieldsFromTransaction).";
+
+        var (ej, ejSource, ejDiag) = tEj.Result;
+        diag.Add(ejDiag);
+        if (ej.Count == 0) missing["ej"] = "KTC returned no EJ lines for this transaction.";
+
+        // ---- dispense details: the transaction's device counters, named ----
+        var dispense = new List<DispenseLine>();
+        var recs = KtcJson.Items(tCounters.Result).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        if (recs.Count > 0)
+        {
+            var names = await HardwareNamesAsync(recs, ct); var denoms = await DenominationNamesAsync(ct);
+            (string?, string?) Resolve(JsonElement e)
+            {
+                var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields)); var pid = KtcJson.NormId(KtcJson.Str(e, PropIdFields));
+                return (cid.Length > 0 ? names.Components.GetValueOrDefault(cid) ?? "Component " + cid : null, pid.Length > 0 ? names.Properties.GetValueOrDefault(pid)?.Name : null);
+            }
+            foreach (var e in recs)
+            {
+                var kind = CounterRules.NoteKind(e, Resolve, out var comp, out _, out _);
+                var (cn, pn) = Resolve(e);
+                var nm = KtcJson.Str(e, "CounterName", "Counter", "Name");
+                var counter = pn ?? (nm.Length > 0 ? nm : "Property " + KtcJson.Str(e, PropIdFields));
+                var did = KtcJson.NormId(KtcJson.Str(e, "DenominationID", "DenominationId"));
+                var delta = KtcJson.TryProp(e, out _, "Delta") ? (long)Math.Round(KtcJson.Dbl(e, 0, "Delta")) : (long)Math.Round(KtcJson.Dbl(e, 0, "Value", "Count"));
+                long? running = KtcJson.TryProp(e, out _, "Delta") && KtcJson.TryProp(e, out _, "Value") ? (long)Math.Round(KtcJson.Dbl(e, 0, "Value")) : null;
+                dispense.Add(new DispenseLine(cn ?? (comp.Length > 0 ? CounterRules.DeviceName(comp) : "Device"), CounterRules.SplitWords(counter),
+                    did is "" or "0" ? "All" : denoms.GetValueOrDefault(did) ?? "Denomination " + did, delta, running, kind == 1 ? "Dispensed" : kind == 2 ? "Accepted" : ""));
+            }
+        }
+        diag.Add(route.Length == 0 ? "Dispense: Ktc:TransactionCountersEndpoint is empty." : $"HistoricalCounter/ClientTransactionCounters: {recs.Count} records.");
+        if (dispense.Count == 0)
+            missing["dispense"] = route.Length == 0 ? "Per-transaction counters are turned off (Ktc:TransactionCountersEndpoint)."
+                : tCounters.Result == null ? "KTC did not answer HistoricalCounter/ClientTransactionCounters for this transaction."
+                : "KTC recorded no device counter changes for this transaction (nothing dispensed or deposited).";
+
+        _log.LogInformation("Transaction details {Id} atm={Atm}: {Fields} fields, {SessionFields} session fields, {SessionTx} session transactions, {Ej} EJ lines ({EjSource}), {Dispense} counter lines",
+            id, atm, fields.Count, sessionFields.Count, sessionTx.Count, ej.Count, ejSource, dispense.Count);
+        return new TransactionDetails(tx, record, session, sessionTx, sessionFields, fields, ej, ejSource, dispense, missing, diag);
+    }
+
+    /// <summary>
+    /// EJ lines of one transaction: EJData/EJDataForClientBetweenIDs with its startEJID / endEJID (what KTC's UI calls), else the EJ rows
+    /// from one minute before to five minutes after the transaction start (EJRow), cut to the transaction when the journal marks it.
+    /// </summary>
+    private async Task<(List<string> Lines, string? Source, string Diag)> TransactionEjAsync(string atm, TransactionDto tx, CancellationToken ct)
+    {
+        if (atm.Length == 0) return (new(), null, "EJ: no ATM id.");
+        if (tx.StartEjId.Length > 0 && tx.EndEjId.Length > 0)
+        {
+            var local = tx.LocalTime ?? tx.TimeUtc;
+            var url = $"api/v1/EJData/EJDataForClientBetweenIDs?clientid={atm}&transactionStartTimeLocal={TxDetailRules.KtcTime(local)}&startid={tx.StartEjId}&endid={tx.EndEjId}";
+            var lines = TxDetailRules.EjLines(await Quiet(url, ct));
+            if (lines.Count > 0) return (lines, $"EJ rows {tx.StartEjId}-{tx.EndEjId}", $"EJDataForClientBetweenIDs {tx.StartEjId}-{tx.EndEjId}: {lines.Count} lines.");
+        }
+        var rows = await SearchEjAsync(new EjQuery(atm, tx.TimeUtc.AddMinutes(-1), tx.TimeUtc.AddMinutes(5), null, null, null), ct);
+        var text = rows.OrderBy(r => r.TimeUtc).Select(r => r.Text).ToList();
+        return (text, text.Count > 0 ? "EJ rows from 1 minute before to 5 minutes after the transaction start" : null,
+            $"EJ: {(tx.StartEjId.Length > 0 ? "EJDataForClientBetweenIDs returned nothing; " : "no startEJID / endEJID on the transaction; ")}EJRow by time: {text.Count} lines.");
+    }
+
+    /// <summary>STX field id -> name (GET STXField). Cached.</summary>
+    private Task<Dictionary<string, string>> StxFieldNamesAsync(CancellationToken ct) =>
+        Cached("stx-fields", TimeSpan.FromMinutes(30), async () => NameMap(await Quiet("api/v1/STXField", ct), new[] { "STXFieldID", "FieldID" }));
+
+    /// <summary>Names of STX lookup ids (POST STXFieldLookup/Batch with the ids, as KTC's UI does).</summary>
+    private async Task<Dictionary<string, string>> StxBatchAsync(List<string> ids, CancellationToken ct)
+    {
+        var body = ids.Select(i => long.TryParse(i, out var l) ? l : 0).Where(l => l > 0).ToArray();
+        foreach (var url in new[] { "api/v1/STXFieldLookup/Batch", "api/v1/STXFieldLookup//Batch" })
+        {
+            var r = await _api.SendAsync(HttpMethod.Post, url, body, new KtcCallOptions { Idempotent = true }, ct);
+            if (!r.Success) continue;
+            var map = new Dictionary<string, string>();
+            foreach (var (k, e) in KtcJson.Rows(r.Json))
+            {
+                var lid = KtcJson.NormId(e.ValueKind == JsonValueKind.Object && KtcJson.Str(e, "ID", "Id", "STXFieldLookupID") is { Length: > 0 } x ? x : k);
+                var name = e.ValueKind == JsonValueKind.Object ? KtcJson.Str(e, "Name", "Value", "DisplayName", "Description", "Text", "StringValue") : e.ToString();
+                if (lid.Length > 0 && name.Length > 0) map.TryAdd(lid, name);
+            }
+            return map;
+        }
+        return new Dictionary<string, string>();
+    }
+
+    /// <summary>
     /// Names for the ids on a KTC transaction. typeID, completionID and reasonID are STX field lookup ids (GET STXFieldLookup);
     /// GET TransactionType lists the base types (1 CashWithdrawal, ...) with the lookup ids that belong to each (STXFieldLookupIDs).
     /// </summary>
@@ -1083,7 +1234,12 @@ public class KtcDataService : IKtcDataService
             Amount = double.IsNaN(amount) ? null : (decimal)amount, Currency = KtcJson.Str(e, "Currency", "CurrencyCode"), TimeUtc = start,
             ResponseMs = end.HasValue ? (int)Math.Max(0, (end.Value - start).TotalMilliseconds) : KtcJson.Int(e, 0, "ResponseTime", "ResponseMs"),
             ErrorCode = ok ? "" : (err.Length > 0 ? err : result), FailureCategory = ok ? "" : FailureClassifier.Classify(result + " " + reason),
-            SessionId = KtcJson.NormId(KtcJson.Str(e, "sessionID", "SessionID", "SessionId")), Reason = reason
+            SessionId = KtcJson.NormId(KtcJson.Str(e, "sessionID", "SessionID", "SessionId")), Reason = reason,
+            Uuid = KtcJson.Str(e, "UUID", "transactionUUID", "TransactionUUID", "Uuid", "GUID"),
+            StartEjId = KtcJson.NormId(KtcJson.Str(e, "startEJID", "StartEJID", "StartEjId", "EJStartID")),
+            EndEjId = KtcJson.NormId(KtcJson.Str(e, "endEJID", "EndEJID", "EndEjId", "EJEndID")),
+            LocalTime = KtcJson.Date(e, "timestampLocal", "TimestampLocal", "localTimestamp", "LocalTime", "transactionStartTimeLocal")
+                        ?? (KtcJson.TryProp(e, out _, "timestampUTC") ? KtcJson.Date(e, "timestamp") : null)
         };
     }
 

@@ -9,6 +9,7 @@
   hbar('cErr',r.byError.map(x=>x.error||'(none)'),r.byError.map(x=>x.count),P[1]);hbar('cAtm',r.topAtms.map(x=>x.atm),r.topAtms.map(x=>x.count),P[7]);
   K.reload(dt,r.data);}
  dt=K.table('#tbl',{data:[],order:[[1,'desc']],columns:[{data:'id'},{data:'timeUtc',render:(v,t)=>t==='display'?K.local(v):v},{data:'atmName'},{data:'client'},{data:'type',render:K.esc},{data:'status',render:v=>v==='Success'?'<span class="sbadge ok">Success</span>':'<span class="sbadge crit">Failed</span>'},{data:'amount',render:(v,t,r)=>v==null?'':v.toLocaleString()+' '+K.esc(r.currency||'')},{data:'responseMs'},{data:'errorCode',render:K.esc},{data:'failureCategory',render:K.esc}]});
+ K.txRowClicks('#tbl',()=>dt);
  f.onsubmit=e=>{e.preventDefault();load().catch(x=>K.toast(x.message,'error'));};
  (async()=>{const fl=await K.api('/data/filters');fl.clients.forEach(v=>fClient.insertAdjacentHTML('beforeend',`<option>${K.esc(v)}</option>`));fl.regions.forEach(v=>fRegion.insertAdjacentHTML('beforeend',`<option>${K.esc(v)}</option>`));await load();})().catch(e=>K.toast(e.message,'error'));
  setInterval(()=>load().catch(()=>{}),30000);document.addEventListener('ktc-theme',()=>load().catch(()=>{}));})();

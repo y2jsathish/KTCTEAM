@@ -11,7 +11,7 @@
   const t=(sel,rows,cols,o)=>{tables[sel]=K.table(sel,Object.assign({data:rows,pageLength:8,lengthChange:false,searching:false,columns:cols},o||{}));};
   t('#tInc',r.incidents,[{data:'number'},{data:'severity',render:K.sev},{data:'openedUtc',render:K.local},{data:'status'},{data:'description',render:K.esc}],{order:[[2,'desc']]});
   t('#tTk',r.tickets,[{data:'id'},{data:'status'},{data:'severity',render:K.sev},{data:'createdUtc',render:K.local},{data:'sla',render:K.slaBadge}],{order:[[3,'desc']]});
-  t('#tTx',r.transactions,[{data:'timeUtc',render:K.local},{data:'type',render:K.esc},{data:'status',render:v=>v==='Success'?'<span class="sbadge ok">Success</span>':'<span class="sbadge crit">Failed</span>'},{data:'responseMs'},{data:'errorCode',render:K.esc}],{order:[[0,'desc']]});
+  t('#tTx',r.transactions,[{data:'timeUtc',render:K.local},{data:'type',render:K.esc},{data:'status',render:v=>v==='Success'?'<span class="sbadge ok">Success</span>':'<span class="sbadge crit">Failed</span>'},{data:'responseMs'},{data:'errorCode',render:K.esc}],{order:[[0,'desc']]});K.txRowClicks('#tTx',()=>tables['#tTx']);
   document.getElementById('timeline').innerHTML=r.timeline.length?r.timeline.map(s=>`<li class="${s.level}"><b>${K.esc(s.label)}</b> <span class="text-muted small">${new Date(s.timeUtc.endsWith('Z')?s.timeUtc:s.timeUtc+'Z').toLocaleTimeString()}</span><div class="small">${K.esc(s.detail)}</div></li>`).join(''):'<li class="text-muted">No EJ data in the last 6 hours.</li>';
   document.getElementById('ejRaw').textContent=r.ej.slice(-40).map(e=>e.text).join('\n');
  }

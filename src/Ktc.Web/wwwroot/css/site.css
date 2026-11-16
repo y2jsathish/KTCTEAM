@@ -64,3 +64,6 @@ table.dataTable{font-size:.82rem}table.dataTable tbody tr{cursor:pointer}
 .xfs-pick{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .25rem}
 .xfs-pick .form-check-inline{margin-right:.6rem}
 .counter-table tr.table-warning-soft td{background:var(--warn-bg)}
+
+.tx-clickable tbody tr{cursor:pointer}.tx-clickable tbody tr:hover td{background:var(--panel2)}
+#txModal .modal-content{background:var(--panel);color:var(--ink)}

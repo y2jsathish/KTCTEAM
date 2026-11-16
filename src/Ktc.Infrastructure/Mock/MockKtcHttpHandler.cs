@@ -76,6 +76,17 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT") return Resp(HttpStatusCode.OK, "true");
         if (Is(path, "api/v1/TransactionData/Search") && m == "POST") return Ok(Transactions(body, now));
         if ((r = Rx(path, @"api/v1/TransactionData/(\d+)")).Success) { var id = long.Parse(r.Groups[1].Value); return Ok(Transactions(null, now, id).FirstOrDefault()); }
+        // Transaction details, as KTC's UI reads them when a transaction is opened.
+        if (Is(path, "api/v1/TransactionData/AllTransactionsWithSessionID") && long.TryParse(q["sessionid"], out var sess))
+            return Ok(new[] { sess * 2, sess * 2 + 1 }.SelectMany(x => Transactions(null, now, x)).Select((t, k) => (k, t)).ToDictionary(x => x.k.ToString(), x => x.t));
+        if ((r = Rx(path, @"api/v1/SessionData/(\d+)")).Success) { var sid = long.Parse(r.Groups[1].Value); var first = Transactions(null, now, sid * 2).Concat(Transactions(null, now, sid * 2 + 1)).FirstOrDefault();
+            return first == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(new { ID = sid, StartTime = ((dynamic)first).StartTime, LanguageLookupID = 20, InterfaceLookupID = 59, ClientID = ((dynamic)first).ClientID }); }
+        if ((r = Rx(path, @"api/v1/SessionData/(\d+)/FieldsFromSession")).Success)
+            return Ok(new Dictionary<string, object> { ["5"] = new { ID = 1, STXFieldID = 5, Value = "20", Type = "LookupString" }, ["6"] = new { ID = 2, STXFieldID = 6, Value = "59", Type = "LookupString" } });
+        if ((r = Rx(path, @"api/v1/TransactionData/([0-9a-fA-F-]{36})/FieldsFromTransaction")).Success) return Ok(TxFields(TxIdFromUuid(r.Groups[1].Value), now));
+        if (Is(path, "api/v1/STXField")) return Ok(StxFields.Select((f, k) => (k, f)).ToDictionary(x => (x.k + 1).ToString(), x => new { ID = x.k + 1, Name = x.f }));
+        if (Is(path, "api/v1/STXFieldLookup")) return Ok(new Dictionary<string, object> { ["20"] = new { ID = 20, Value = "en" }, ["22"] = new { ID = 22, Value = "AED" }, ["59"] = new { ID = 59, Value = "TOUCH" } });
+        if (Is(path, "api/v1/EJData/EJDataForClientBetweenIDs") && long.TryParse(q["startid"], out var ejStart)) return Ok(TxEj(q["clientid"], ejStart, now));
         if (m == "GET") return Ok(new { mock = true, note = "Mock KTC server has no sample data for this route.", path });
         return Resp(HttpStatusCode.OK, "true");
     }
@@ -299,6 +310,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                 if (d.RootElement.TryGetProperty("BusinessID", out var bz) && bz.ValueKind == JsonValueKind.Number) business = bz.GetInt32();
             }
             catch { }
+        if (onlyId > 100_000_000_000L) { start = new DateTime(onlyId / 100000 * TimeSpan.TicksPerHour, DateTimeKind.Utc); end = start.AddHours(1); }
         if (end > now) end = now;
         if (end - start > TimeSpan.FromDays(8)) start = end.AddDays(-8);
         var types = new[] { "Cash Withdrawal", "Cash Withdrawal", "Cash Withdrawal", "Balance Inquiry", "Deposit", "Transfer", "Reversal", "Mini Statement", "Cash Withdrawal", "PIN Change" };
@@ -313,7 +325,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                 if (at < start || at > end) continue;
                 long sid = 900000000L + i * 1000 + at.DayOfYear;
                 foreach (var (op, k) in new[] { ("REPLENISH", 0), ("ADD_CASH", 1), ("PRNT_CNTRS", 2) })
-                    rows.Add(new { ID = sid * 10 + k, UUID = Guid.NewGuid().ToString("D"), sessionID = sid, ClientID = Id(i), ClientName = AtmName(i), TransactionTypeName = op,
+                    rows.Add(new { ID = sid * 10 + k, UUID = TxUuid(sid * 10 + k), sessionID = sid, ClientID = Id(i), ClientName = AtmName(i), TransactionTypeName = op,
                         CompletionCodeName = "COMPLETED", ReasonName = (string?)null, ErrorCode = "", Amount = 0m, Currency = "AED", StartTime = at.AddMinutes(k), EndTime = at.AddMinutes(k).AddSeconds(30) });
             }
         var hour = new DateTime(start.Year, start.Month, start.Day, start.Hour, 0, 0, DateTimeKind.Utc);
@@ -339,7 +351,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                     var f = fails[(h / 13 + (Chronic.Contains(i) ? 3 : 0)) % fails.Length];
                     rows.Add(new
                     {
-                        ID = id, UUID = Guid.NewGuid().ToString("D"), sessionID = id / 2, ClientID = Id(i), ClientName = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}",
+                        ID = id, UUID = TxUuid(id), sessionID = id / 2, startEJID = id % 1_000_000 * 10, endEJID = id % 1_000_000 * 10 + 7, ClientID = Id(i), ClientName = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}",
                         TransactionTypeName = type, CompletionCodeName = fail ? f : "Completed OK", ReasonName = fail ? f : (string?)null, ErrorCode = fail ? $"E{100 + h % 60}" : "",
                         Amount = type == "Cash Withdrawal" || type == "Deposit" ? (decimal)(100 * (1 + h % 20)) : 0m, Currency = "AED",
                         StartTime = t, EndTime = t.AddMilliseconds(fail ? 4000 + h % 9000 : 900 + h % 3200)
@@ -377,6 +389,47 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         }
         return rows;
     }
+
+    // ------------- transaction details -------------
+    private static string TxUuid(long id) => new Guid(id.ToString("x32")).ToString("D");
+    private static long TxIdFromUuid(string uuid) => long.TryParse(uuid.Replace("-", ""), System.Globalization.NumberStyles.HexNumber, null, out var l) ? l : 0;
+    private static readonly string[] StxFields = { "Account type", "Card type", "Currency", "Card entry", "Language", "Interface", "Requested amount", "Authorisation code", "Host response code", "Masked PAN" };
+    private static object TxFields(long id, DateTime now)
+    {
+        dynamic? t = Transactions(null, now, id).FirstOrDefault();
+        if (t == null) return new Dictionary<string, object>();
+        int h = (int)(id % 997);
+        var f = new Dictionary<string, object>
+        {
+            ["1"] = new { ID = id * 10 + 1, TransactionID = id, STXFieldID = 1, Value = h % 2 == 0 ? "SAVINGS" : "CURRENT", Type = "String" },
+            ["2"] = new { ID = id * 10 + 2, TransactionID = id, STXFieldID = 2, Value = h % 3 == 0 ? "VISA" : "MASTERCARD", Type = "String" },
+            ["3"] = new { ID = id * 10 + 3, TransactionID = id, STXFieldID = 3, Value = "22", Type = "LookupString" },
+            ["4"] = new { ID = id * 10 + 4, TransactionID = id, STXFieldID = 4, Value = h % 4 == 0 ? "CONTACTLESS" : "CHIP", Type = "String" },
+            ["7"] = new { ID = id * 10 + 7, TransactionID = id, STXFieldID = 7, Value = ((decimal)t.Amount).ToString("0.00"), Type = "Decimal" },
+            ["9"] = new { ID = id * 10 + 9, TransactionID = id, STXFieldID = 9, Value = (string)t.ErrorCode == "" ? "00" : "91", Type = "String" },
+            ["10"] = new { ID = id * 10 + 10, TransactionID = id, STXFieldID = 10, Value = Pans[h % Pans.Length], Type = "String" },
+        };
+        if ((string)t.ErrorCode == "") f["8"] = new { ID = id * 10 + 8, TransactionID = id, STXFieldID = 8, Value = (100000 + h * 37 % 900000).ToString(), Type = "String" };
+        return f;
+    }
+    private static IEnumerable<string> TxEj(string? clientId, long startEj, DateTime now)
+    {
+        // startEJID = id % 1e6 * 10: find the transaction of this ATM in the last 8 days with that EJ start.
+        var i = int.TryParse(clientId, out var c) ? Math.Clamp(c - 1000, 0, AtmCount - 1) : 0;
+        var hit = Transactions(null, now).Concat(Transactions(System.Text.Json.JsonSerializer.Serialize(new { Start = now.AddDays(-8), End = now }), now))
+            .Cast<dynamic>().FirstOrDefault(t => (int)t.ClientID == Id(i) && HasEj(t) && (long)t.startEJID == startEj);
+        if (hit == null) yield break;
+        string type = hit.TransactionTypeName; DateTime at = hit.StartTime; decimal amt = hit.Amount; bool ok = (string)hit.ErrorCode == "";
+        var pan = Pans[(int)((long)hit.ID % Pans.Length)];
+        yield return $"<EJData>_[020t {at:HH:mm:ss}\n_[020t*{startEj % 1000}*{at:dd/MM/yyyy}*{at:HH:mm}*\n     *TRANSACTION STARTED*\nDATE {at:dd/MM/yy}    TIME {at:HH:mm:ss}</EJData>";
+        yield return $"<EJData>_[020t {at.AddSeconds(4):HH:mm:ss} CARD INSERTED  PAN: {pan}</EJData>";
+        yield return $"<EJData>_[020t {at.AddSeconds(15):HH:mm:ss} PIN ENTERED</EJData>";
+        yield return $"<EJData>_[020t {at.AddSeconds(20):HH:mm:ss} {type.ToUpperInvariant()}{(amt > 0 ? $" AED {amt:0.00}" : "")}</EJData>";
+        yield return $"<EJData>_[020t {at.AddSeconds(24):HH:mm:ss} HOST RESPONSE: {(ok ? "APPROVED 00" : (string)hit.ReasonName)}</EJData>";
+        if (ok && type == "Cash Withdrawal") yield return $"<EJData>_[020t {at.AddSeconds(30):HH:mm:ss} NOTES PRESENTED / TAKEN</EJData>";
+        yield return $"<EJData>_[020t {at.AddSeconds(40):HH:mm:ss} TRANSACTION END</EJData>";
+    }
+    private static bool HasEj(dynamic t) { try { return t.startEJID != null; } catch { return false; } }
 
     // ------------- helpers -------------
     private static bool Is(string path, string route, bool cond = true) => cond && path.Equals(route, StringComparison.OrdinalIgnoreCase);

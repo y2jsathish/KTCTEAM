@@ -168,6 +168,17 @@ public class DataController : ControllerBase
         });
     }
 
+    /// <summary>Transaction details popup: record, session, STX fields, EJ lines and dispense counters of one transaction.</summary>
+    [HttpGet("transactions/{id}/details")]
+    [Audit("TransactionView", "Transaction details")]
+    public async Task<IActionResult> TransactionDetails(string id, string? atmId, DateTime? time, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Transaction id is required." });
+        var d = await _data.GetTransactionDetailsAsync(id.Trim(), atmId, time?.ToUniversalTime(), ct);
+        if (d == null) return NotFound(new { error = $"KTC has no transaction {id.Trim()}." });
+        return Ok(d);
+    }
+
     // ---------- hardware ----------
     [HttpGet("hardware")]
     public async Task<IActionResult> Hardware(string atmId, CancellationToken ct)

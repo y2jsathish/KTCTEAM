@@ -67,6 +67,8 @@ public interface IKtcDataService
     Task<TicketDto?> GetTicketAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<TransactionDto>> SearchTransactionsAsync(TransactionQuery query, CancellationToken ct = default);
     Task<TransactionDto?> GetTransactionAsync(string id, CancellationToken ct = default);
+    /// <summary>Transaction details for the popup: the record, session, STX fields, EJ lines and dispense counters. Null when the transaction is not found.</summary>
+    Task<TransactionDetails?> GetTransactionDetailsAsync(string id, string? atmId, DateTime? timeUtc, CancellationToken ct = default);
     Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery query, CancellationToken ct = default);
     Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default);
     /// <summary>Current status of each hardware component (card reader, dispenser, printers, ...) of one ATM.</summary>

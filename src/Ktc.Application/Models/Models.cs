@@ -82,7 +82,31 @@ public record TransactionDto
     public string SessionId { get; init; } = "";
     /// <summary>KTC reason name (reasonID looked up), also for successful transactions, e.g. Normal, HostDeclined, HostTimeout.</summary>
     public string Reason { get; init; } = "";
+    /// <summary>KTC transaction UUID (for TransactionData/{uuid}/FieldsFromTransaction).</summary>
+    public string Uuid { get; init; } = "";
+    /// <summary>First and last EJ row ids of the transaction (startEJID / endEJID), for EJData/EJDataForClientBetweenIDs.</summary>
+    public string StartEjId { get; init; } = "";
+    public string EndEjId { get; init; } = "";
+    /// <summary>The ATM's local start time when KTC sends one.</summary>
+    public DateTime? LocalTime { get; init; }
 }
+
+/// <summary>One named value shown in the transaction details popup (PAN-masked).</summary>
+public record DetailField(string Name, string Value, string? Id = null);
+
+/// <summary>Notes or items one transaction moved on one device counter (HistoricalCounter/ClientTransactionCounters).</summary>
+public record DispenseLine(string Device, string Counter, string Denomination, long Count, long? RunningValue, string Kind);
+
+/// <summary>Everything the transaction details popup shows. Each part has a note when KTC had nothing for it.</summary>
+public record TransactionDetails(
+    TransactionDto Transaction,
+    IReadOnlyList<DetailField> Record,
+    IReadOnlyList<DetailField> Session, IReadOnlyList<TransactionDto> SessionTransactions, IReadOnlyList<DetailField> SessionFields,
+    IReadOnlyList<DetailField> Fields,
+    IReadOnlyList<string> Ej, string? EjSource,
+    IReadOnlyList<DispenseLine> Dispense,
+    IReadOnlyDictionary<string, string> Missing,
+    IReadOnlyList<string> Diagnostics);
 
 /// <summary>Text is always PAN-masked; raw journal text never leaves the data service.</summary>
 public record EjEntryDto(string Sequence, DateTime TimeUtc, string Text, int TransactionNo);
