@@ -658,11 +658,17 @@ public class KtcDataService : IKtcDataService
         var route = _opt.TransactionCountersEndpoint?.Trim() ?? "";
         var max = Math.Clamp(_opt.TransactionNotesMax, 0, 5000);
         var read = new List<(TransactionDto Tx, TxNotes Notes)>(); int asked = 0, answered = 0, unreadable = 0; string? sample = null;
+        var missing = new List<(TransactionDto Tx, string Why)>();
         if (route.Length > 0 && cashTx.Count > 0 && max > 0)
         {
             var pick = cashTx.Where(t => long.TryParse(t.Id, out _)).Take(max).ToList();
             asked = pick.Count;
-            var res = await Task.WhenAll(pick.Select(async t => (t, raw: await TransactionCountersAsync(route, id, t.Id, ct))));
+            var answers = await Task.WhenAll(pick.Select(async t => (t, a: await TransactionCountersAsync(route, id, t.Id, ct))));
+            // A successful answer with no body (or "null") is KTC saying the transaction changed no counters: the same as an empty list.
+            var empty = JsonDocument.Parse("[]").RootElement.Clone();
+            var res = answers.Select(x => (x.t, raw: x.a.Ok ? x.a.Json is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } j ? j : empty : (JsonElement?)null)).ToList();
+            var failedHttp = answers.Where(x => !x.a.Ok).GroupBy(x => x.a.Status).ToDictionary(g => g.Key, g => g.Select(x => x.t).ToList());
+            var noBody = answers.Count(x => x.a.Ok && x.a.Json is not { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) });
             // KTC's records are {ClientID, ComponentID, PropertyID, DenominationID, Value, Delta, TransactionID, ...}: name the ids first.
             var recs = res.Where(r => r.raw != null).SelectMany(r => KtcJson.Items(r.raw)).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
             var names = recs.Any(e => KtcJson.Str(e, PropIdFields).Length > 0) ? await HardwareNamesAsync(recs, ct) : null;
@@ -677,12 +683,18 @@ public class KtcDataService : IKtcDataService
                 if (raw == null) continue;
                 answered++;
                 if (CounterRules.ReadTransactionNotes(raw, names == null ? null : Resolve) is { } n) read.Add((t, n));
-                else { unreadable++; sample ??= raw.Value.GetRawText(); }
+                else if (!t.Success) read.Add((t, new TxNotes(0, 0)));   // a failed transaction whose counters hold no note counter moved no notes
+                else { unreadable++; missing.Add((t, "counters without a dispensed / deposited counter")); sample ??= raw.Value.GetRawText(); }
             }
             var path = route.Split('?')[0];
             var s = sample == null ? "" : sample.Length > 300 ? sample[..300] + "…" : sample;
             if (sample != null) _log.LogInformation("KTC {Route} answered without note counts the portal can read; shape: {Shape}; start: {Sample}", path, CounterRules.Shape(JsonDocument.Parse(sample).RootElement.Clone()), s);
-            diag.Add($"{path}: {cashTx.Count} cash transactions since the reset, {asked} asked, {answered} answered, {read.Count} with note counts{(unreadable > 0 ? $", {unreadable} without note counts the portal can read (first answer: {s})" : "")}.");
+            foreach (var (st, l) in failedHttp) foreach (var t in l) missing.Add((t, st == 0 ? "no answer" : $"HTTP {st}"));
+            diag.Add($"{path}: {cashTx.Count} cash transactions since the reset, {asked} asked, {answered} answered{(noBody > 0 ? $" ({noBody} with an empty answer, counted as no notes)" : "")}, {read.Count} with note counts{(unreadable > 0 ? $", {unreadable} without note counts the portal can read (first answer: {s})" : "")}"
+                     + (failedHttp.Count > 0 ? $", {failedHttp.Sum(f => f.Value.Count)} not answered ({string.Join(", ", failedHttp.Select(f => $"{(f.Key == 0 ? "no answer" : "HTTP " + f.Key)} x{f.Value.Count}"))})" : "") + ".");
+            if (missing.Count > 0)
+                diag.Add("Cash transactions without note counts: " + string.Join("; ", missing.OrderByDescending(m => m.Tx.TimeUtc).Take(20).Select(m =>
+                    $"{m.Tx.Id} {m.Tx.TimeUtc:yyyy-MM-dd HH:mm} {m.Tx.Type} {(m.Tx.Success ? "success" : "failed")}{(m.Tx.Amount is { } am ? $" amount {am:0.##}" : "")}: {m.Why}")) + (missing.Count > 20 ? $"; and {missing.Count - 20} more" : "") + ".");
             // Which component / property ids KTC reported for these transactions, with their names and the sum of their Delta:
             // shows which counters are the notes dispensed / accepted (or why none matched).
             if (names != null)
@@ -707,7 +719,8 @@ public class KtcDataService : IKtcDataService
             List<NotesByDenomination>? byDenom = null;
             if (!running)
             {
-                var values = await DenominationValuesAsync(ct);
+                var wanted = read.SelectMany(r => r.Notes.DispensedByDenomination.Keys.Concat(r.Notes.AcceptedByDenomination.Keys)).Where(k => k.Length > 0).Distinct().ToList();
+                var values = await DenominationValuesAsync(wanted, ct);
                 byDenom = CounterRules.ByDenomination(read.Select(r => r.Notes), values, standard: true);
                 static string TypeOf(TransactionDto t) => t.Type.Length > 0 ? t.Type : "Unknown";
                 byType = byType.Select(t => t with { Denominations = CounterRules.ByDenomination(read.Where(r => TypeOf(r.Tx).Equals(t.Type, StringComparison.OrdinalIgnoreCase)).Select(r => r.Notes), values, standard: false) }).ToList();
@@ -715,12 +728,16 @@ public class KtcDataService : IKtcDataService
                 var unknown = ids.Where(k => !values.ContainsKey(k)).ToList();
                 var list = values.Count == 0 ? "returned no note values" : string.Join(", ", values.OrderBy(v => v.Key.Length).ThenBy(v => v.Key, StringComparer.Ordinal).Select(v => $"id {v.Key} = {v.Value:0.##}"));
                 diag.Add($"Denominations: KTC Denomination list {list}; ids in these transactions: {(ids.Count == 0 ? "none" : string.Join(", ", ids))}{(unknown.Count > 0 ? "; without a note value: " + string.Join(", ", unknown) : "")}.");
-                if (unknown.Count > 0) w.Add($"Application counters: KTC denomination id(s) {string.Join(", ", unknown)} have no note value in KTC's Denomination list, so they show as unknown.");
+                if (unknown.Count > 0) w.Add($"Application counters: KTC denomination id(s) {string.Join(", ", unknown)} have no note value in KTC (Denomination list or Denomination/{{id}}), so they show as unknown. Set their values in Ktc:DenominationValues, e.g. Ktc__DenominationValues__{unknown[0]}=100.");
             }
             else w.Add("Application counters: KTC reports running note totals, so the notes can't be split by denomination per transaction.");
             if (read.Count < cashTx.Count)
+            {
+                var why = missing.GroupBy(m => m.Why).Select(g => $"{g.Count()} {g.Key}").ToList();
                 w.Add($"Application counters: notes are counted for {read.Count} of the {cashTx.Count} cash transactions since the reset" +
-                      (asked < cashTx.Count ? $" (the latest {asked}, Ktc:TransactionNotesMax)." : " (KTC had no per-transaction counters for the others)."));
+                      (asked < cashTx.Count ? $" (the latest {asked}, Ktc:TransactionNotesMax)" : "") +
+                      (why.Count > 0 ? $". KTC's per-transaction counters route gave no note counts for the others: {string.Join(", ", why)} (listed under What KTC returned)." : "."));
+            }
             return (counters, byType, $"KTC per-transaction counters of {read.Count} cash transaction(s){(running ? ", counted as the change from one transaction to the next" : "")}", byDenom);
         }
 
@@ -741,36 +758,72 @@ public class KtcDataService : IKtcDataService
         }, null, "the dispenser and acceptor device counters (no per-transaction counters from KTC)", null);
     }
 
-    /// <summary>KTC denomination id -> note value (100), from GET Denomination: a value field, else the number in its name. Cached.</summary>
-    private Task<Dictionary<string, decimal>> DenominationValuesAsync(CancellationToken ct) =>
-        Cached("denomination-values", TimeSpan.FromMinutes(30), async () =>
+    // KTC's Denomination record is {ID, CurrencyID, CurrencyValue} (Postman POST Denomination); other names are kept for other versions.
+    private static readonly string[] DenomValueFields = { "CurrencyValue", "Value", "Amount", "FaceValue", "DenominationValue", "NoteValue" };
+
+    private static double DenomValue(JsonElement e)
+    {
+        var val = KtcJson.Dbl(e, double.NaN, DenomValueFields);
+        if (double.IsNaN(val) && Regex.Match(KtcJson.Str(e, "Name", "DisplayName", "Description"), @"\d+(\.\d+)?") is { Success: true } mm)
+            val = double.Parse(mm.Value, System.Globalization.CultureInfo.InvariantCulture);
+        return val;
+    }
+
+    /// <summary>
+    /// KTC denomination id -> note value (100): Ktc:DenominationValues first, then GET Denomination, then GET Denomination/{id} for the
+    /// <paramref name="wanted"/> ids still missing. Cached.
+    /// </summary>
+    private async Task<Dictionary<string, decimal>> DenominationValuesAsync(IReadOnlyCollection<string> wanted, CancellationToken ct)
+    {
+        var list = await Cached("denomination-values", TimeSpan.FromMinutes(30), async () =>
         {
             var map = new Dictionary<string, decimal>();
             foreach (var (k, e) in KtcJson.Rows(await Quiet("api/v1/Denomination", ct)))
             {
                 if (e.ValueKind != JsonValueKind.Object) continue;
                 var did = KtcJson.NormId(KtcJson.Str(e, "ID", "Id", "DenominationID") is { Length: > 0 } x ? x : k);
-                var val = KtcJson.Dbl(e, double.NaN, "Value", "Amount", "FaceValue", "DenominationValue", "NoteValue");
-                if (double.IsNaN(val) && Regex.Match(KtcJson.Str(e, "Name", "DisplayName", "Description"), @"\d+(\.\d+)?") is { Success: true } mm)
-                    val = double.Parse(mm.Value, System.Globalization.CultureInfo.InvariantCulture);
+                var val = DenomValue(e);
                 if (did.Length > 0 && !double.IsNaN(val) && val > 0) map.TryAdd(did, (decimal)val);
             }
             return map;
         });
+        var res = new Dictionary<string, decimal>(list);
+        foreach (var (k, v) in _opt.DenominationValues ?? new()) if (v > 0) res[KtcJson.NormId(k)] = v;
+        foreach (var did in wanted.Where(d => !res.ContainsKey(d)).Take(20))
+        {
+            var one = await Cached("denomination-value|" + did, TimeSpan.FromMinutes(30), async () =>
+            {
+                var j = await Quiet($"api/v1/Denomination/{Uri.EscapeDataString(did)}", ct);
+                var e = j is { ValueKind: JsonValueKind.Object } o ? o : KtcJson.Items(j).FirstOrDefault(x => x.ValueKind == JsonValueKind.Object);
+                return e.ValueKind == JsonValueKind.Object && DenomValue(e) is var v && !double.IsNaN(v) && v > 0 ? (decimal?)v : null;
+            });
+            if (one is { } ov) res[did] = ov;
+        }
+        return res;
+    }
 
     /// <summary>KTC denomination id -> name ("AED 100"), from GET Denomination: a name field, else currency and value. Cached.</summary>
     private Task<Dictionary<string, string>> DenominationNamesAsync(CancellationToken ct) =>
         Cached("denominations", TimeSpan.FromMinutes(30), async () =>
         {
             var map = new Dictionary<string, string>();
-            foreach (var (k, e) in KtcJson.Rows(await Quiet("api/v1/Denomination", ct)))
+            var denoms = KtcJson.Rows(await Quiet("api/v1/Denomination", ct)).ToList();
+            // CurrencyID -> code ("AED") from GET Currency, only when a denomination names its currency by id.
+            var currencies = new Dictionary<string, string>();
+            if (denoms.Any(d => d.Item2.ValueKind == JsonValueKind.Object && KtcJson.Str(d.Item2, "CurrencyID", "CurrencyId").Length > 0))
+                foreach (var (ck, ce) in KtcJson.Rows(await Quiet("api/v1/Currency", ct)))
+                    if (ce.ValueKind == JsonValueKind.Object && KtcJson.Str(ce, "Code", "CurrencyCode", "ISOCode", "Symbol", "Name", "Description") is { Length: > 0 } cn)
+                        currencies.TryAdd(KtcJson.NormId(KtcJson.Str(ce, "ID", "Id", "CurrencyID") is { Length: > 0 } ci ? ci : ck), cn);
+            foreach (var (k, e) in denoms)
             {
                 if (e.ValueKind != JsonValueKind.Object) continue;
                 var did = KtcJson.NormId(KtcJson.Str(e, "ID", "Id", "DenominationID") is { Length: > 0 } x ? x : k);
                 var name = KtcJson.Str(e, "Name", "DisplayName", "Description");
                 if (name.Length == 0)
                 {
-                    var cur = KtcJson.Str(e, "CurrencyCode", "Currency", "CurrencyName"); var val = KtcJson.Dbl(e, double.NaN, "Value", "Amount", "FaceValue");
+                    var cur = KtcJson.Str(e, "CurrencyCode", "Currency", "CurrencyName");
+                    if (cur.Length == 0) cur = currencies.GetValueOrDefault(KtcJson.NormId(KtcJson.Str(e, "CurrencyID", "CurrencyId"))) ?? "";
+                    var val = DenomValue(e);
                     name = double.IsNaN(val) ? "" : $"{cur} {val:0.##}".Trim();
                 }
                 if (did.Length > 0 && name.Length > 0) map.TryAdd(did, name);
@@ -779,15 +832,22 @@ public class KtcDataService : IKtcDataService
         });
 
     /// <summary>One transaction's KTC counters; a successful answer is cached for 12 hours (a finished transaction's counters do not change).</summary>
-    private async Task<JsonElement?> TransactionCountersAsync(string route, string atmId, string txId, CancellationToken ct)
+    private async Task<JsonElement?> TxCountersJsonAsync(string route, string atmId, string txId, CancellationToken ct) =>
+        (await TransactionCountersAsync(route, atmId, txId, ct)).Json;
+
+    private async Task<(bool Ok, int Status, JsonElement? Json)> TransactionCountersAsync(string route, string atmId, string txId, CancellationToken ct)
     {
         var key = $"txc|{Scope}|{atmId}|{txId}";
-        if (_cache.TryGetValue(key, out JsonElement cached)) return cached;
+        if (_cache.TryGetValue(key, out (bool, int, JsonElement?) cached)) return cached;
         var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(atmId), StringComparison.OrdinalIgnoreCase)
                        .Replace("{transactionId}", Uri.EscapeDataString(txId), StringComparison.OrdinalIgnoreCase);
-        var raw = await Quiet(url, ct);
-        if (raw is { } r) _cache.Set(key, r.Clone(), TimeSpan.FromHours(12));
-        return raw;
+        await HwGate.WaitAsync(ct);
+        KtcResponse r;
+        try { r = await _api.SendAsync(HttpMethod.Get, url, null, new KtcCallOptions(), ct); }
+        finally { HwGate.Release(); }
+        var res = (r.Success, r.StatusCode, r.Success ? r.Json?.Clone() : null);
+        if (r.Success) _cache.Set(key, res, TimeSpan.FromHours(12));
+        return res;
     }
 
     private sealed record PropInfo(string Name, Dictionary<string, string> Values);
@@ -1189,7 +1249,7 @@ public class KtcDataService : IKtcDataService
         var tStx = StxFieldNamesAsync(ct);
         var tEj = TransactionEjAsync(atm, tx, ct);
         var route = _opt.TransactionCountersEndpoint?.Trim() ?? "";
-        var tCounters = route.Length > 0 && long.TryParse(tx.Id, out _) && atm.Length > 0 ? TransactionCountersAsync(route, atm, tx.Id, ct) : Task.FromResult<JsonElement?>(null);
+        var tCounters = route.Length > 0 && long.TryParse(tx.Id, out _) && atm.Length > 0 ? TxCountersJsonAsync(route, atm, tx.Id, ct) : Task.FromResult<JsonElement?>(null);
         await Task.WhenAll(tSession, tSessionTx, tSessionFields, tFields, tStx, tEj, tCounters);
 
         // STX lookup values (LookupString fields) not in the cached STXFieldLookup list: one batch call.
