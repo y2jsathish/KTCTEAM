@@ -54,6 +54,8 @@ public class KtcOptions
     /// Set as Ktc:DenominationValues:28 = 100 (environment: Ktc__DenominationValues__28=100).
     /// </summary>
     public Dictionary<string, decimal> DenominationValues { get; set; } = new();
+    /// <summary>EJ counter reports: read DATE-TIME / LAST CLEARED as dd/MM/yy instead of MM/dd/yy (a date in the future always falls back to the other).</summary>
+    public bool EjDayFirst { get; set; }
     /// <summary>
     /// XFS counter thresholds: a counter whose name contains the key (case-insensitive) is flagged Warning at or above the value.
     /// The longest matching key wins. KTC sends no thresholds, so these are the portal's.

@@ -6,6 +6,7 @@
   <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-overview" data-tab="overview" type="button" role="tab" aria-controls="tab-overview" aria-selected="true"><i class="bi bi-info-circle"></i> Overview</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-hardware" data-tab="hardware" type="button" role="tab" aria-controls="tab-hardware" aria-selected="false"><i class="bi bi-cpu"></i> Hardware Status <span id="hwFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Devices not OK"></span></button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-replenishment" data-tab="replenishment" type="button" role="tab" aria-controls="tab-replenishment" aria-selected="false"><i class="bi bi-cash-coin"></i> Replenishment</button></li>
+  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-ej-counters" data-tab="ej-counters" type="button" role="tab" aria-controls="tab-ej-counters" aria-selected="false"><i class="bi bi-journal-text"></i> EJ Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-app-counters" data-tab="app-counters" type="button" role="tab" aria-controls="tab-app-counters" aria-selected="false"><i class="bi bi-calculator"></i> Application Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-xfs-counters" data-tab="xfs-counters" type="button" role="tab" aria-controls="tab-xfs-counters" aria-selected="false"><i class="bi bi-gear-wide-connected"></i> XFS Counters <span id="xfsFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Counters at or over threshold"></span></button></li>
 </ul>
@@ -42,6 +43,14 @@
   <div id="repKpis" class="kpis"></div>
   <div id="repBody" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
+<div class="tab-pane fade" id="tab-ej-counters" role="tabpanel">
+  <div class="counter-bar"><span class="small text-muted" id="ejcMeta"></span>
+    <select class="form-select form-select-sm w-auto ms-auto" id="ejcDays" aria-label="Range"><option value="1">Last 24 hours</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="14">Last 14 days</option><option value="31">Last 31 days</option></select>
+    <button class="btn btn-sm btn-outline-secondary" data-ejcrefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div id="ejcMsg"></div>
+  <div id="ejcKpis" class="kpis"></div>
+  <div id="ejcBody" class="row g-3"><div class="col-12 text-muted small">Open this tab to read the EJ.</div></div>
+</div>
 <div class="tab-pane fade" id="tab-app-counters" role="tabpanel">
   <div class="counter-bar"><span class="small text-muted" id="appMeta"></span>
     <span class="ms-auto btn-group btn-group-sm" role="group" aria-label="Export counters"><button class="btn btn-outline-secondary" data-cx="csv"><i class="bi bi-filetype-csv"></i> CSV</button><button class="btn btn-outline-secondary" data-cx="xlsx"><i class="bi bi-file-earmark-excel"></i> Excel</button><button class="btn btn-outline-secondary" data-cx="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF</button></span>
@@ -59,4 +68,4 @@
   <div id="xfsCounters" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
 </div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script> }
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script> }

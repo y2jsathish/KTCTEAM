@@ -282,3 +282,29 @@ public record KtcRecordSet(string Title, string Route, string? Error, IReadOnlyL
     /// <summary>Id fields no KTC list names, so they show the id.</summary>
     public IReadOnlyList<string> UnnamedIds { get; init; } = Array.Empty<string>();
 }
+
+/// <summary>
+/// One cash counter report the ATM printed to its EJ (on restart): machine number, the report's own date and time (ATM local),
+/// the last-cleared time, and one entry per cassette type. EjTimeUtc / EjSequence are the EJ row the report starts in.
+/// </summary>
+public record EjCounterReport(DateTime EjTimeUtc, string EjSequence, string? MachineNo, DateTime? ReportTime, string? ReportTimeText,
+    DateTime? LastCleared, string? LastClearedText, IReadOnlyList<EjCassetteCounter> Types)
+{
+    public long NotesDispensed => Types.Sum(t => t.Dispensed ?? 0);
+    public long NotesInCassettes => Types.Sum(t => t.Cassette ?? 0);
+    public decimal AmountInCassettes => Types.Sum(t => (t.Denomination ?? 0) * (t.Cassette ?? 0));
+}
+
+/// <summary>
+/// One cassette type of an EJ counter report (TYPE1-1000: type 1, note value 1000). Balanced: cassette + rejected + dispensed - deposited = total.
+/// Other holds rows the report prints besides the five standard ones (e.g. RETRACTED).
+/// </summary>
+public record EjCassetteCounter(string Type, decimal? Denomination, long? Cassette, long? Rejected, long? Dispensed, long? Deposited, long? Total,
+    IReadOnlyDictionary<string, long> Other)
+{
+    public bool? Balanced => Total is { } t && Cassette is { } c ? c + (Rejected ?? 0) + (Dispensed ?? 0) - (Deposited ?? 0) == t : null;
+}
+
+/// <summary>EJ Counters tab: the counter reports found in the EJ of the range, newest first, and what was read.</summary>
+public record AtmEjCounters(string AtmId, string AtmName, DateTime FromUtc, DateTime ToUtc, int EjRows, IReadOnlyList<EjCounterReport> Reports,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Diagnostics);

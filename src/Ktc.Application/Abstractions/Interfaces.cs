@@ -71,6 +71,8 @@ public interface IKtcDataService
     Task<AtmGeneral?> GetAtmGeneralAsync(string atmId, CancellationToken ct = default);
     /// <summary>Replenishment tab of one ATM; null when no ATM matches.</summary>
     Task<AtmReplenishment?> GetReplenishmentAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Cash counter reports the ATM printed to its EJ (on restart) in the last <paramref name="days"/> days; null when no ATM matches.</summary>
+    Task<AtmEjCounters?> GetEjCountersAsync(string atmId, int days, CancellationToken ct = default);
     /// <summary>Transaction details for the popup: the record, session, STX fields, EJ lines and dispense counters. Null when the transaction is not found.</summary>
     Task<TransactionDetails?> GetTransactionDetailsAsync(string id, string? atmId, DateTime? timeUtc, CancellationToken ct = default);
     Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery query, CancellationToken ct = default);

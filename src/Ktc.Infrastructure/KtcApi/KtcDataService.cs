@@ -1671,6 +1671,49 @@ public class KtcDataService : IKtcDataService
     }
 
     // ---------------- EJ ----------------
+    /// <summary>
+    /// EJ Counters tab: reads the ATM's EJ (POST Client/{id}/EJRow) one day at a time over the range, newest day first, and parses the
+    /// cash counter reports in it (MACHINE NO / DATE-TIME / TYPEn-value columns / LAST CLEARED). Ktc:EjDayFirst reads dates as dd/MM/yy.
+    /// </summary>
+    public async Task<AtmEjCounters?> GetEjCountersAsync(string atmId, int days, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+        var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
+        var now = DateTime.UtcNow; var from = now.AddDays(-days);
+        // One EJRow call per day (a month of journal in one call is too large for KTC), at most 4 at a time.
+        var gate = new SemaphoreSlim(4, 4);
+        var dayTasks = Enumerable.Range(0, days).Select(async d =>
+        {
+            var to = now.AddDays(-d); var start = to.AddDays(-1);
+            await gate.WaitAsync(ct);
+            try
+            {
+                var key = $"ejc|{Scope}|{id}|{start:yyyyMMddHH}";
+                if (d > 0 && _cache.TryGetValue(key, out IReadOnlyList<EjEntryDto>? hit) && hit != null) return hit;
+                var rows = await SearchEjAsync(new EjQuery(id, start, to), ct);
+                if (d > 0) _cache.Set(key, rows, TimeSpan.FromHours(6));   // past days do not change
+                return rows;
+            }
+            finally { gate.Release(); }
+        }).ToList();
+        var all = (await Task.WhenAll(dayTasks)).SelectMany(x => x).GroupBy(e => (e.Sequence, e.TimeUtc)).Select(g => g.First()).ToList();
+        var reports = EjCounterRules.Parse(all.Select(e => (e.Sequence, e.TimeUtc, e.Text)), now, _opt.EjDayFirst);
+        var diag = new List<string>
+        {
+            $"EJ (POST api/v1/Client/{id}/EJRow, {days} day(s)): {all.Count} rows; {all.Count(e => Regex.IsMatch(e.Text, @"MACHINE\s*NO", RegexOptions.IgnoreCase))} with MACHINE NO, " +
+            $"{all.Count(e => Regex.IsMatch(e.Text, @"TYPE\s*\d+\s*-\s*\d+", RegexOptions.IgnoreCase))} with TYPEn-value headers, {all.Count(e => Regex.IsMatch(e.Text, "LAST\\s+CLEAR", RegexOptions.IgnoreCase))} with LAST CLEARED; {reports.Count} counter report(s) read."
+        };
+        var unbalanced = reports.SelectMany(r => r.Types.Where(t => t.Balanced == false).Select(t => $"{r.ReportTimeText ?? r.EjTimeUtc.ToString("u")} {t.Type}")).Take(10).ToList();
+        if (unbalanced.Count > 0) diag.Add("Types where cassette + rejected + dispensed - deposited is not the total: " + string.Join("; ", unbalanced) + ".");
+        if (all.Count == 0) w.Add($"EJ counters: KTC returned no EJ rows for this ATM in the last {days} day(s).");
+        else if (reports.Count == 0) w.Add($"EJ counters: no counter report (MACHINE NO ... TYPEn-value ... LAST CLEARED) in the {all.Count} EJ rows of the last {days} day(s). The ATM prints it when it restarts; pick a longer range or check the ATM's EJ for it.");
+        return new AtmEjCounters(id, name, from, now, all.Count, reports, w.ToList(), diag);
+    }
+
     public async Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery q, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);
