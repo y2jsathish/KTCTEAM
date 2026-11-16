@@ -179,6 +179,19 @@ public class DataController : ControllerBase
         return Ok(hw);
     }
 
+    // ---------- counters ----------
+    /// <summary>Application counters (today / since reset) and CEN/XFS device counters of one ATM, for the ATM 360 counter tabs.</summary>
+    [HttpGet("atm/{id}/counters")]
+    [Audit("AtmView", "ATM counters")]
+    public async Task<IActionResult> Counters(string id, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Select an ATM." });
+        var c = await _data.GetCountersAsync(id.Trim(), ct);
+        if (c == null) return NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." });
+        _log.LogInformation("Counters atm={Atm} -> {Id}: {App} application, {Xfs} XFS ({Flagged} at or over threshold)", id, c.AtmId, c.Application.Count, c.Xfs.Count, c.Xfs.Count(x => x.Status != CounterRules.Ok));
+        return Ok(c);
+    }
+
     // ---------- EJ ----------
     [HttpGet("ej")]
     [Audit("Search", "EJ search")]

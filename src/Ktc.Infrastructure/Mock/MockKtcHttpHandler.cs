@@ -62,6 +62,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Top5UnavailableReasons")).Success)
             return Ok(Codes.Take(5).Select((c, k) => new { Reason = c.Name, Hours = Math.Round(Hash(Idx(r), k, 7) % 900 / 100.0 + 0.5, 1) }).OrderByDescending(x => x.Hours));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(Counters(Idx(r), now));
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
         if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
@@ -101,6 +102,92 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             yield return new { CID = Id(i), CompId = k + 1, PropId = 2, VID = -1, ManualValue = "", NumericValue = bad ? 1 + h % 3 : 0, UseNumeric = true, Timestamp = t };
             yield return new { CID = Id(i), CompId = k + 1, PropId = 3, VID = -1, ManualValue = $"v{1 + h % 4}.{h % 10}", NumericValue = 0, UseNumeric = false, Timestamp = t.AddDays(-3) };
         }
+    }
+
+    /// <summary>Same "bad component" rule as <see cref="HardwareStatus"/>, so counters and hardware status agree.</summary>
+    private static bool HwBad(int i, string component)
+    {
+        var k = Array.FindIndex(HwComponents, c => c.Name == component); if (k < 0) return false;
+        var h = Hash(i, k, 91); return Chronic.Contains(i) ? h % 100 < 45 : h % 100 < 10;
+    }
+
+    // Counters (Ktc:CountersEndpoint): application counters (today / since reset) and CEN/XFS device counters with thresholds.
+    // Plausible and stable per ATM and day: "today" grows through the day, "since reset" covers the days since the last replenishment.
+    private static object Counters(int i, DateTime now)
+    {
+        var rng = new Random(Hash(i, now.DayOfYear, 77));
+        var daysSinceReset = 1 + Hash(i, 13) % 9;
+        var dayFraction = Math.Max(0.05, now.TimeOfDay.TotalHours / 24);
+        var activity = IsOffline(i, now) ? 0.15 : 1.0;
+        (long Today, long SinceReset) Count(double perDay)
+        {
+            var today = (long)Math.Round(perDay * dayFraction * activity * (0.75 + rng.NextDouble() * 0.5));
+            var earlier = (long)Math.Round(perDay * daysSinceReset * (0.8 + rng.NextDouble() * 0.4));
+            return (today, today + earlier);
+        }
+        var app = new List<object>();
+        (long Today, long SinceReset) App(string category, string name, double perDay)
+        { var c = Count(perDay); app.Add(new { Category = category, Name = name, c.Today, c.SinceReset }); return c; }
+
+        App("Transactions", "Customer sessions", 260);
+        var withdrawals = App("Transactions", "Cash withdrawals", 180);
+        App("Transactions", "Balance inquiries", 55);
+        App("Transactions", "Mini statements", 18);
+        App("Transactions", "Fund transfers", 12);
+        App("Transactions", "PIN changes", 4);
+        App("Transactions", "Cash deposits", 35);
+        App("Exceptions", "Declined by host", 21);
+        App("Exceptions", "Host timeouts", HostDown(i, now) || IsOffline(i, now) ? 6 : 1.5);
+        App("Exceptions", "Reversals", 2.5);
+        App("Exceptions", "Cards captured", 0.8);
+        App("Exceptions", "Cash retracts", 0.6);
+        App("Operations", "Supervisor entries", 0.4);
+        App("Operations", "Application restarts", Chronic.Contains(i) ? 2 : 0.2);
+
+        var xfs = new List<object>();
+        void Xfs(string device, string cls, string logical, string counter, long value, long? threshold = null) =>
+            xfs.Add(new { Device = device, ServiceClass = cls, LogicalName = logical, Counter = counter, Value = value, Threshold = threshold });
+        long N(double perDay) => Count(perDay).SinceReset;
+        long Jams(string component) => HwBad(i, component) ? 1 + rng.Next(0, 3) : 0;
+
+        Xfs("Card Reader", "IDC", "CardReader1", "Cards inserted", N(250));
+        Xfs("Card Reader", "IDC", "CardReader1", "Read failures", N(HwBad(i, "Card Reader") ? 9 : 2.5), 50);
+        Xfs("Card Reader", "IDC", "CardReader1", "Cards retained", N(0.8), 20);
+        Xfs("Card Reader", "IDC", "CardReader1", "Media jams", Jams("Card Reader"), 3);
+
+        var dispensed = (long)(withdrawals.SinceReset * 3.2);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Dispense operations", withdrawals.SinceReset);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes dispensed", dispensed);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes rejected", (long)(dispensed * (0.006 + rng.NextDouble() * 0.01)), 200);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Pick failures", N(HwBad(i, "Cash Dispenser") ? 6 : 1.2), 40);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Retract operations", N(0.6), 10);
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes retracted", N(1.4));
+        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Purges", N(0.3));
+
+        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Cash-in transactions", N(35));
+        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Notes accepted", N(140));
+        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Notes refused", N(Chronic.Contains(i) ? 25 : 6), 150);
+        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Suspect / counterfeit notes", N(0.2), 5);
+
+        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Receipts printed", N(170));
+        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Paper low events", N(0.3));
+        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Media jams", Jams("Receipt Printer"), 3);
+        Xfs("Journal Printer", "PTR", "JournalPrinter1", "Lines printed", N(2600));
+        Xfs("Journal Printer", "PTR", "JournalPrinter1", "Media jams", Jams("Journal Printer"), 3);
+
+        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "PIN entries", N(240));
+        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "PIN block failures", N(HwBad(i, "PIN Pad") ? 4 : 0.3), 10);
+        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "Tamper events", HwBad(i, "PIN Pad") ? 1 : 0, 1);
+
+        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Safe door opens", daysSinceReset / 3 + 1);
+        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Cabinet door opens", N(0.5));
+        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Tamper alarms", HwBad(i, "Sensors") ? 1 : 0, 1);
+
+        return new
+        {
+            ClientID = Id(i), CollectedUtc = LastContact(i, now), LastResetUtc = now.Date.AddDays(-daysSinceReset).AddHours(6),
+            Application = app, Xfs = xfs
+        };
     }
 
     private static int Hash(int a, int b = 0, int c = 0) { unchecked { var h = 17; h = h * 31 + a; h = h * 31 + b; h = h * 31 + c; h ^= h >> 15; h *= 0x2c1b3c6d; h ^= h >> 12; return Math.Abs(h); } }

@@ -33,6 +33,11 @@ public class KtcOptions
     public int NearBreachMinutes { get; set; } = 60;
     /// <summary>EJ application names to leave out of EJ search (KTC's EJRow Value3). Empty = all.</summary>
     public string[] EjExcludeApps { get; set; } = Array.Empty<string>();
+    /// <summary>
+    /// KTC route that returns the application and CEN/XFS counters of one ATM; {atmId} is replaced by the KTC client id.
+    /// Change it to the route your KTC server exposes. Empty turns the counter tabs off ("not configured").
+    /// </summary>
+    public string CountersEndpoint { get; set; } = "api/v1/Client/{atmId}/Counters";
     public int AvailabilityLookbackDays { get; set; } = 7;
     public int MaxParallelCalls { get; set; } = 8;
     /// <summary>Ticket and transaction searches run once per KTC business (KTC requires a BusinessID); at most this many businesses.</summary>

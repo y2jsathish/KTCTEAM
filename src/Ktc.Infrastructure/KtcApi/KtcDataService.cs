@@ -409,6 +409,35 @@ public class KtcDataService : IKtcDataService
         return new AtmHardware(id, atm?.Name ?? id, HardwareStatusRules.Worst(modules.Select(m => m.Status)), compTime.Values.Where(v => v.HasValue).DefaultIfEmpty().Max(), modules, warnings);
     }
 
+    // ---------------- counters ----------------
+    /// <summary>
+    /// Application and CEN/XFS device counters of one ATM from the route in Ktc:CountersEndpoint ({atmId} = KTC client id).
+    /// A failing or unconfigured route gives empty counter lists with a warning, so the ATM page still loads.
+    /// </summary>
+    public async Task<AtmCounters?> GetCountersAsync(string atmId, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+        var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
+
+        var route = _opt.CountersEndpoint?.Trim() ?? "";
+        if (route.Length == 0)
+        {
+            w.Add("Counters are not configured: set Ktc:CountersEndpoint to the KTC route that returns ATM counters.");
+            return new AtmCounters(id, name, null, null, Array.Empty<ApplicationCounter>(), Array.Empty<XfsCounter>(), w.ToList());
+        }
+        var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase).Replace("{id}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase);
+        var json = await Fetch(url, w, ct: ct);
+        var (collected, reset, app, xfs) = CounterRules.Parse(json);
+        if (json != null && app.Count == 0 && xfs.Count == 0) w.Add("KTC returned no counters for this ATM.");
+        return new AtmCounters(id, name, collected, reset,
+            app.OrderBy(a => CounterRules.CategoryRank(a.Category)).ToList(),
+            xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ToList(), w.ToList());
+    }
+
     private sealed record PropInfo(string Name, Dictionary<string, string> Values);
     private sealed record HwNames(Dictionary<string, string> Components, Dictionary<string, PropInfo> Properties, Dictionary<string, string> Values);
 

@@ -169,3 +169,17 @@ public record HardwareProperty(string Name, string Value, string Status, DateTim
 public record HardwareModule(string Id, string Name, string Status, DateTime? UpdatedUtc, IReadOnlyList<HardwareProperty> Properties, IReadOnlyList<string> Errors);
 
 public record AtmHardware(string AtmId, string AtmName, string Status, DateTime? UpdatedUtc, IReadOnlyList<HardwareModule> Modules, IReadOnlyList<string> Warnings);
+
+// ---- Counters (per ATM): KTC application counters and CEN/XFS device counters ----
+/// <summary>One application (KTC) counter, e.g. Transactions / Cash withdrawals, for today and since the last counter reset.</summary>
+public record ApplicationCounter(string Category, string Name, long Today, long SinceReset);
+
+/// <summary>One CEN/XFS device counter reported by a service provider (IDC, CDM, CIM, PTR, PIN, SIU).</summary>
+public record XfsCounter(string Device, string ServiceClass, string? LogicalName, string Counter, long Value, long? Threshold)
+{
+    /// <summary>"Warning" when the value is at or above its threshold, otherwise "OK".</summary>
+    public string Status => Ktc.Application.Logic.CounterRules.Status(Value, Threshold);
+}
+
+public record AtmCounters(string AtmId, string AtmName, DateTime? CollectedUtc, DateTime? LastResetUtc,
+    IReadOnlyList<ApplicationCounter> Application, IReadOnlyList<XfsCounter> Xfs, IReadOnlyList<string> Warnings);
