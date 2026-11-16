@@ -15,6 +15,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     private static readonly string[] Banks = { "Brinks", "ADCB", "Emirates NBD" };
     private static readonly (string Region, string City)[] Places =
         { ("Abu Dhabi", "Abu Dhabi"), ("Abu Dhabi", "Al Ain"), ("Dubai", "Dubai"), ("Dubai", "Jebel Ali"), ("Northern Emirates", "Sharjah"), ("Northern Emirates", "Ajman"), ("Northern Emirates", "Ras Al Khaimah") };
+    private static readonly (double Lat, double Lon)[] Coords = { (24.4539, 54.3773), (24.2075, 55.7447), (25.2048, 55.2708), (25.0118, 55.1121), (25.3463, 55.4209), (25.4052, 55.5136), (25.8007, 55.9762) };
     private static readonly string[] Types = { "NCR SelfServ 84", "Diebold Nixdorf CS 5550", "Hyosung MX8800", "GRG P2700" };
     // code id, name, level, text
     private static readonly (int Id, string Name, int Level)[] Codes =
@@ -53,7 +54,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if (Is(path, "api/v1/Business")) return Ok(Banks.Select((b, i) => new { ID = i + 1, Name = b }));
         if (Is(path, "api/v1/Region")) return Ok(Places.Select(p => p.Region).Distinct().Select((x, i) => new { ID = i + 1, Name = x }));
         if (Is(path, "api/v1/Group")) return Ok(new[] { new { ID = 1, Name = "Unknown Clients" }, new { ID = 2, Name = "All Clients" } });
-        if (Is(path, "api/v1/Branch")) return Ok(Places.Select((p, i) => new { ID = i + 1, Name = p.City + " Branch", City = p.City, RegionID = Array.IndexOf(Places.Select(z => z.Region).Distinct().ToArray(), p.Region) + 1 }));
+        if (Is(path, "api/v1/Branch")) return Ok(Places.Select((p, i) => new { ID = i + 1, Name = p.City + " Branch", City = p.City, Address = $"{10 + i} Main Street", PostCode = i % 2 == 0 ? $"P.O. Box {1000 + i * 7}" : "", RegionID = Array.IndexOf(Places.Select(z => z.Region).Distinct().ToArray(), p.Region) + 1 }));
         if (Is(path, "api/v1/LastClientContact")) return Ok(Enumerable.Range(0, AtmCount).Select(i => new { ClientID = Id(i), LastContact = LastContact(i, now) }));
         if (Is(path, "api/v1/ActiveErrorExtra") || Is(path, "api/v1/ActiveError")) return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => OpenIncidents(i, now)));
         if (Is(path, "api/v1/HistoricalError")) return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => History(i, now)));
@@ -228,7 +229,12 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ID = Id(i), Name = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}", Alias = $"{Places[i % Places.Length].City} Mall #{i + 1}",
         Address = $"10.{20 + i % 3}.{i / 3}.{10 + i}", BusinessID = i % 3 + 1, BranchID = i % Places.Length + 1,
         RegionID = Array.IndexOf(Places.Select(p => p.Region).Distinct().ToArray(), Places[i % Places.Length].Region) + 1,
-        HardwareTypeName = Types[i % Types.Length], Active = true, Deleted = false
+        HardwareTypeName = Types[i % Types.Length], Active = true, Deleted = false,
+        GUID = new Guid(Hash(i, 501), 0, 0, new byte[8]).ToString("D").ToUpperInvariant(), Subnet = i % 4 == 0 ? $"10.{20 + i % 3}.{i / 3}.0/24" : "",
+        Latitude = i % 5 == 4 ? 0.0 : Math.Round(Coords[i % Places.Length].Lat + Hash(i, 502) % 200 / 10000.0, 6),
+        Longitude = i % 5 == 4 ? 0.0 : Math.Round(Coords[i % Places.Length].Lon + Hash(i, 503) % 200 / 10000.0, 6),
+        TimeZone = "Arabian Standard Time", Level1RegionID = Array.IndexOf(Places.Select(p => p.Region).Distinct().ToArray(), Places[i % Places.Length].Region) + 1,
+        Level2RegionID = 0, HardwareID = 100 + i % Types.Length, ConnectableByte = 1, TypeByte = 1, Salt = "mock-salt", AuthHash = "mock-hash", FeatureFlagsString = "UMTB|TRRI|ENBL"
     };
     private static int Bucket(DateTime now) => (int)(now.Ticks / TimeSpan.TicksPerHour / 3);       // state changes every 3 hours
     private static bool IsOffline(int i, DateTime now) => Hash(i, Bucket(now), 1) % 100 < 7;
