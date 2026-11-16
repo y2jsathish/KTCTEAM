@@ -67,7 +67,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(KtcCounters(Idx(r), now));
         if (Is(path, "api/v1/HistoricalCounter/ClientTransactionCounters")) return Ok(long.TryParse(q["transactionid"], out var txc) ? TransactionCounters(txc).ToList() : new List<object>());
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
-        if (Is(path, "api/v1/Denomination")) return Ok(Notes.Select((v, k) => new { ID = k + 1, CurrencyCode = "AED", Value = (decimal)v }));
+        if (Is(path, "api/v1/Currency")) return Ok(new[] { new { ID = 1, Code = "AED", Description = "UAE Dirham" } });
+        if (Is(path, "api/v1/Denomination")) return Ok(Notes.Select((v, k) => new { ID = k + 1, CurrencyID = 1, CurrencyValue = (decimal)v }));
         if (Is(path, "api/v1/PropertyList")) return Ok(AllProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)")).Success && m == "GET") return Ok(ClientJson(Idx(r)));

@@ -50,6 +50,11 @@ public class KtcOptions
     /// <summary>At most this many cash transactions (the latest since the reset) are read per page load; answers are cached.</summary>
     public int TransactionNotesMax { get; set; } = 300;
     /// <summary>
+    /// Note value per KTC DenominationID (e.g. "28": 100), used before KTC's Denomination list, for ids KTC has no value for.
+    /// Set as Ktc:DenominationValues:28 = 100 (environment: Ktc__DenominationValues__28=100).
+    /// </summary>
+    public Dictionary<string, decimal> DenominationValues { get; set; } = new();
+    /// <summary>
     /// XFS counter thresholds: a counter whose name contains the key (case-insensitive) is flagged Warning at or above the value.
     /// The longest matching key wins. KTC sends no thresholds, so these are the portal's.
     /// </summary>

@@ -341,6 +341,43 @@ public class CounterTests
         Assert.Contains(CounterRules.ToReport(c, DateTime.UtcNow).Rows, r => r[0] == "Notes by denomination" && r[1] == "2000" && r[4] == "0 dispensed / 4 accepted");
     }
 
+    // Live ATM 19: Denomination records are {ID, CurrencyID, CurrencyValue}; ids missing from the list are read from Denomination/{id},
+    // then from Ktc:DenominationValues.
+    [Fact]
+    public async Task Denomination_ids_are_valued_from_currency_value_the_id_route_and_settings()
+    {
+        var api = new RealShapes
+        {
+            Denominations = """[{"ID":28,"CurrencyID":1,"CurrencyValue":100.0}]""",
+            DenominationById = new() { ["29"] = """{"ID":29,"CurrencyID":1,"CurrencyValue":500.0}""" },
+            TxCounters = new()
+            {
+                ["1"] = """[{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":28,"Value":900,"Delta":3,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":29,"Value":400,"Delta":2,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":30,"Value":60,"Delta":1,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":31,"Value":60,"Delta":1,"TransactionID":1}]""",
+                // The declined withdrawal: KTC reports only the Remaining counter, so no notes moved.
+                ["2"] = """[{"ClientID":19,"ComponentID":7,"PropertyID":321,"DenominationID":0,"Value":2100,"Delta":0,"TransactionID":2}]""",
+            }
+        };
+        var c = await Service(api, new KtcOptions { DenominationValues = new() { ["30"] = 1000 } }).GetCountersAsync("19");
+        NotesByDenomination R(string n) => c!.NotesByDenomination!.Single(x => x.Denomination == n);
+        Assert.Equal((3L, "28"), (R("100").NotesDispensed, R("100").DenominationId));
+        Assert.Equal((2L, "29"), (R("500").NotesDispensed, R("500").DenominationId));
+        Assert.Equal((1L, "30"), (R("1000").NotesDispensed, R("1000").DenominationId));
+        Assert.Equal(1, R("unknown (id 31)").NotesDispensed);
+        Assert.Contains(c!.Warnings, w => w.Contains("id(s) 31 have no note value") && w.Contains("Ktc__DenominationValues__31=100"));
+        Assert.DoesNotContain(c.Warnings, w => w.Contains("notes are counted for"));   // the declined withdrawal counts as 0 notes
+        Assert.Equal(7, c.Application.Single(a => a.Name == "Notes dispensed").SinceReset);
+    }
+
+    [Fact]
+    public async Task Transactions_without_note_counts_are_listed_with_the_reason()
+    {
+        var api = new RealShapes { TxCounters = new() { ["2"] = "null" } };   // 1: HTTP 404; 2: an empty answer
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Contains(c!.Warnings, w => w.StartsWith("Application counters: notes are counted for 1 of the 2 cash transactions since the reset. KTC's per-transaction counters route gave no note counts for the others: 1 HTTP 404"));
+        Assert.Contains(c.Diagnostics!, d => d.Contains("(1 with an empty answer, counted as no notes)") && d.Contains("1 not answered (HTTP 404 x1)"));
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("Cash transactions without note counts: 1 ") && d.Contains("success: HTTP 404"));
+    }
+
     [Fact]
     public async Task Without_per_transaction_counters_notes_come_from_the_device_counters()
     {
@@ -406,6 +443,8 @@ public class CounterTests
         /// <summary>HistoricalCounter/ClientTransactionCounters answers by transaction id; null answers 404.</summary>
         public Dictionary<string, string>? TxCounters { get; init; }
         public string? Denominations { get; init; }
+        /// <summary>GET Denomination/{id} answers by id; others answer 404.</summary>
+        public Dictionary<string, string>? DenominationById { get; init; }
         public List<string> Urls { get; } = new();
         public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
         {
@@ -442,6 +481,7 @@ public class CounterTests
                      "4":{"transactionID":4,"sessionID":102,"timestampUTC":"{{{D(now.AddHours(-1))}}}","typeID":17,"completionID":18,"reasonID":0,"ClientID":19},
                      "5":{"transactionID":5,"sessionID":200,"timestampUTC":"{{{D(now.AddHours(-1))}}}","typeID":4,"completionID":6,"reasonID":3,"ClientID":5}}
                     """,
+                _ when path.StartsWith("api/v1/Denomination/") => DenominationById?.GetValueOrDefault(path["api/v1/Denomination/".Length..]),
                 _ => null
             };
             if (json == null) return Task.FromResult(KtcResponse.Fail("HTTP 404 Not Found", 404));
