@@ -430,14 +430,21 @@ public class KtcDataService : IKtcDataService
         // 1. KTC's counters route (GET Client/{id}/Counters, what KTC's own UI reads): device counters per component.
         var route = _opt.CountersEndpoint?.Trim() ?? "";
         List<ApplicationCounter> routeApp = new(); List<XfsCounter> routeXfs = new(); DateTime? routeReset = null, routeAt = null;
+        var idRecs = new List<JsonElement>(); var routePath = ""; var routeDiag = -1;
         if (route.Length > 0)
         {
             var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase).Replace("{id}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase);
             var rw = new Warn();
             var raw = await Fetch(url, rw, ct: ct);
             (routeAt, routeReset, routeApp, routeXfs) = CounterRules.Parse(raw);
-            var path = url.Split('?')[0];
+            var path = routePath = url.Split('?')[0];
+            // KTC's Counters records as the live server sends them: {ClientID, DBComponentID, DBPropertyID, DenominationID, CounterValue,
+            // Timestamp, LastResetTimestamp, LastMismatchSize} - ids only, named below through ComponentList / PropertyList / Denomination.
+            if (routeApp.Count == 0 && routeXfs.Count == 0)
+                idRecs = KtcJson.Items(raw).Where(e => e.ValueKind == JsonValueKind.Object && KtcJson.Str(e, CompIdFields).Length > 0 && KtcJson.Str(e, PropIdFields).Length > 0).ToList();
+            routeDiag = diag.Count;
             if (raw == null) diag.Add($"{path}: {rw.ToList().FirstOrDefault() ?? "no answer"}.");
+            else if (routeApp.Count == 0 && routeXfs.Count == 0 && idRecs.Count > 0) diag.Add($"{path}: {idRecs.Count} records.");   // replaced once named
             else if (routeApp.Count == 0 && routeXfs.Count == 0)
             {
                 var shape = CounterRules.Shape(raw);
@@ -458,10 +465,29 @@ public class KtcDataService : IKtcDataService
 
         // ---- XFS ----
         var rows = KtcJson.Rows(tStatus.Result).Where(r => r.Value.ValueKind == JsonValueKind.Object).Select(r => r.Value).ToList();
-        var names = await HardwareNamesAsync(rows, ct);
+        var names = await HardwareNamesAsync(rows.Concat(idRecs).ToList(), ct);
         var xfs = new List<XfsCounter>(); DateTime? collected = null;
         var comps = new HashSet<string>(); var xfsComps = new HashSet<string>(); var other = new HashSet<string>();
         string CompName(string cid) => names.Components.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
+        if (idRecs.Count > 0)
+        {
+            var denoms = await DenominationNamesAsync(ct);
+            DateTime? lastReset = null;
+            foreach (var e in idRecs)
+            {
+                var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields)); var pid = KtcJson.NormId(KtcJson.Str(e, PropIdFields));
+                var comp = CompName(cid);
+                var prop = names.Properties.GetValueOrDefault(pid)?.Name ?? "Property " + pid;
+                var did = KtcJson.NormId(KtcJson.Str(e, "DenominationID", "DenominationId"));
+                var counter = CounterRules.SplitWords(prop) + (did is "" or "0" ? "" : $" ({denoms.GetValueOrDefault(did) ?? "denomination " + did})");
+                var value = (long)Math.Round(KtcJson.Dbl(e, 0, "CounterValue", "Value", "Count"));
+                routeXfs.Add(new XfsCounter(comp, CounterRules.XfsClass(comp) ?? "", $"component {cid}", counter, value, CounterRules.ThresholdFor(CounterRules.SplitWords(prop), _opt.CounterThresholds)));
+                if (KtcJson.Date(e, "Timestamp", "TimeStamp") is { } t && t > (routeAt ?? DateTime.MinValue)) routeAt = t;
+                if (KtcJson.Date(e, "LastResetTimestamp", "LastReset") is { } lr && lr > (lastReset ?? DateTime.MinValue)) lastReset = lr;
+            }
+            diag[routeDiag] = $"{routePath}: {idRecs.Count} counters named through ComponentList / PropertyList: " +
+                string.Join("; ", idRecs.Take(12).Select((e, i) => $"{routeXfs[i].Device} [{routeXfs[i].LogicalName}] / {routeXfs[i].Counter} [property {KtcJson.NormId(KtcJson.Str(e, PropIdFields))}] = {routeXfs[i].Value}")) + (lastReset is { } r0 ? $"; last reset {r0:yyyy-MM-dd HH:mm}" : "") + ".";
+        }
         foreach (var e in rows)
         {
             var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields));
@@ -544,17 +570,40 @@ public class KtcDataService : IKtcDataService
             var pick = cashTx.Where(t => long.TryParse(t.Id, out _)).Take(max).ToList();
             asked = pick.Count;
             var res = await Task.WhenAll(pick.Select(async t => (t, raw: await TransactionCountersAsync(route, id, t.Id, ct))));
+            // KTC's records are {ClientID, ComponentID, PropertyID, DenominationID, Value, Delta, TransactionID, ...}: name the ids first.
+            var recs = res.Where(r => r.raw != null).SelectMany(r => KtcJson.Items(r.raw)).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+            var names = recs.Any(e => KtcJson.Str(e, PropIdFields).Length > 0) ? await HardwareNamesAsync(recs, ct) : null;
+            (string?, string?) Resolve(JsonElement e)
+            {
+                if (names == null) return (null, null);
+                var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields)); var pid = KtcJson.NormId(KtcJson.Str(e, PropIdFields));
+                return (cid.Length > 0 ? names.Components.GetValueOrDefault(cid) ?? "Component " + cid : null, pid.Length > 0 ? names.Properties.GetValueOrDefault(pid)?.Name : null);
+            }
             foreach (var (t, raw) in res)
             {
                 if (raw == null) continue;
                 answered++;
-                if (CounterRules.ReadTransactionNotes(raw) is { } n) read.Add((t, n));
+                if (CounterRules.ReadTransactionNotes(raw, names == null ? null : Resolve) is { } n) read.Add((t, n));
                 else { unreadable++; sample ??= raw.Value.GetRawText(); }
             }
             var path = route.Split('?')[0];
             var s = sample == null ? "" : sample.Length > 300 ? sample[..300] + "…" : sample;
             if (sample != null) _log.LogInformation("KTC {Route} answered without note counts the portal can read; shape: {Shape}; start: {Sample}", path, CounterRules.Shape(JsonDocument.Parse(sample).RootElement.Clone()), s);
             diag.Add($"{path}: {cashTx.Count} cash transactions since the reset, {asked} asked, {answered} answered, {read.Count} with note counts{(unreadable > 0 ? $", {unreadable} without note counts the portal can read (first answer: {s})" : "")}.");
+            // Which component / property ids KTC reported for these transactions, with their names and the sum of their Delta:
+            // shows which counters are the notes dispensed / accepted (or why none matched).
+            if (names != null)
+            {
+                var seen = recs.GroupBy(e => (C: KtcJson.NormId(KtcJson.Str(e, CompIdFields)), P: KtcJson.NormId(KtcJson.Str(e, PropIdFields))))
+                    .Select(g =>
+                    {
+                        var (cn, pn) = Resolve(g.First());
+                        var kind = CounterRules.NoteKind(g.First(), Resolve, out _, out _, out _);
+                        var delta = g.Sum(e => (long)Math.Round(KtcJson.Dbl(e, 0, "Delta")));
+                        return $"{cn ?? "?"} [component {g.Key.C}] / {pn ?? "?"} [property {g.Key.P}]: delta {delta} in {g.Select(e => KtcJson.Str(e, "TransactionID")).Distinct().Count()} tx{(kind == 1 ? " = NOTES DISPENSED" : kind == 2 ? " = NOTES ACCEPTED" : "")}";
+                    }).Take(20).ToList();
+                diag.Add("Per-transaction counters reported: " + string.Join("; ", seen) + ".");
+            }
         }
         else if (cashTx.Count > 0 && route.Length == 0) diag.Add("Notes per transaction: Ktc:TransactionCountersEndpoint is empty, so per-transaction counters are not read.");
 
@@ -584,6 +633,26 @@ public class KtcDataService : IKtcDataService
         }, null, "the dispenser and acceptor device counters (no per-transaction counters from KTC)");
     }
 
+    /// <summary>KTC denomination id -> name ("AED 100"), from GET Denomination: a name field, else currency and value. Cached.</summary>
+    private Task<Dictionary<string, string>> DenominationNamesAsync(CancellationToken ct) =>
+        Cached("denominations", TimeSpan.FromMinutes(30), async () =>
+        {
+            var map = new Dictionary<string, string>();
+            foreach (var (k, e) in KtcJson.Rows(await Quiet("api/v1/Denomination", ct)))
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var did = KtcJson.NormId(KtcJson.Str(e, "ID", "Id", "DenominationID") is { Length: > 0 } x ? x : k);
+                var name = KtcJson.Str(e, "Name", "DisplayName", "Description");
+                if (name.Length == 0)
+                {
+                    var cur = KtcJson.Str(e, "CurrencyCode", "Currency", "CurrencyName"); var val = KtcJson.Dbl(e, double.NaN, "Value", "Amount", "FaceValue");
+                    name = double.IsNaN(val) ? "" : $"{cur} {val:0.##}".Trim();
+                }
+                if (did.Length > 0 && name.Length > 0) map.TryAdd(did, name);
+            }
+            return map;
+        });
+
     /// <summary>One transaction's KTC counters; a successful answer is cached for 12 hours (a finished transaction's counters do not change).</summary>
     private async Task<JsonElement?> TransactionCountersAsync(string route, string atmId, string txId, CancellationToken ct)
     {
@@ -599,8 +668,8 @@ public class KtcDataService : IKtcDataService
     private sealed record PropInfo(string Name, Dictionary<string, string> Values);
     private sealed record HwNames(Dictionary<string, string> Components, Dictionary<string, PropInfo> Properties, Dictionary<string, string> Values);
 
-    private static readonly string[] CompIdFields = { "CompId", "ComponentID", "ComponentId", "CompID" };
-    private static readonly string[] PropIdFields = { "PropId", "PropertyID", "PropertyId", "PropID" };
+    private static readonly string[] CompIdFields = { "CompId", "ComponentID", "ComponentId", "CompID", "DBComponentID", "DBComponentId" };
+    private static readonly string[] PropIdFields = { "PropId", "PropertyID", "PropertyId", "PropID", "DBPropertyID", "DBPropertyId" };
     private static readonly string[] ValueIdFields = { "VID", "ValueID", "ValueId" };
     private static readonly string[] NameFields = { "Name", "DisplayName", "Description", "ComponentName", "PropertyName", "Text" };
     private static readonly SemaphoreSlim HwGate = new(6, 6);

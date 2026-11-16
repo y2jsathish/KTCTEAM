@@ -66,7 +66,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(KtcCounters(Idx(r), now));
         if (Is(path, "api/v1/HistoricalCounter/ClientTransactionCounters")) return Ok(long.TryParse(q["transactionid"], out var txc) ? TransactionCounters(txc).ToList() : new List<object>());
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
-        if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
+        if (Is(path, "api/v1/Denomination")) return Ok(Notes.Select((v, k) => new { ID = k + 1, CurrencyCode = "AED", Value = (decimal)v }));
+        if (Is(path, "api/v1/PropertyList")) return Ok(AllProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)")).Success && m == "GET") return Ok(ClientJson(Idx(r)));
         if (Is(path, "api/v1/Ticket/Search") && m == "POST") return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => Tickets(i, now)));
@@ -93,6 +94,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ("PIN Pad", new[] { "Online" }, new[] { "Offline" }),
         ("Cash Acceptor", new[] { "Online" }, new[] { "Notes refused - cassette full" }),
         ("Sensors", new[] { "OK" }, new[] { "Safe door open" }),
+        ("Cheque Scanner", new[] { "Online" }, new[] { "Item jam" }),
     };
     // Counter properties per component (name, per-day rate, rate when the component is faulty). Like KTC, the device reports them
     // as numeric CurrentStatus properties; the portal reads them as XFS counters.
@@ -152,8 +154,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ("KXDevice.KXBundleCheckScanner", "ItemsRetracted", 0.2, 2), ("KXDevice.KXBundleCheckScanner", "ItemsReturned", 1, 4),
     };
 
-    // KTC GET HistoricalCounter/ClientTransactionCounters?clientid=&transactionid=: the notes one transaction moved, per denomination
-    // (the real JSON field names are not known; the portal reads the records by content). Decoded from the mock transaction id.
+    // KTC GET HistoricalCounter/ClientTransactionCounters?clientid=&transactionid=, as the live KTC answers: {ClientID, ComponentID, PropertyID,
+    // DenominationID, Timestamp, Value (running), Delta (this transaction), Reset, TransactionID}, here per denomination. Decoded from the mock transaction id.
     private static readonly int[] Notes = { 1000, 500, 200, 100 };
     private static IEnumerable<object> TransactionCounters(long txId)
     {
@@ -171,9 +173,19 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         for (int d = 0; d < Notes.Length; d++)
         {
             int count = left / Notes[d]; left -= count * Notes[d];
-            if (count > 0) yield return new { ClientID = Id(i), TransactionID = txId, ComponentName = comp, CounterName = name, DenominationID = d + 1, Value = count, Timestamp = hour };
+            if (count > 0) yield return new { ClientID = Id(i), ComponentID = CompId(comp), PropertyID = PropId(name), DenominationID = d + 1, Timestamp = hour,
+                Value = 500 + Hash(i, d, 77) % 400, Delta = count, Reset = false, TransactionID = txId };
         }
     }
+    // Property ids of KTC's counter names (Dispensed, Deposited, ...) follow the CurrentStatus properties in PropertyList.
+    private static string[] AllProps => HwProps.Concat(KtcCounterDefs.Select(d => d.Name)).Distinct().ToArray();
+    private static int PropId(string name) => Array.IndexOf(AllProps, name) + 1;
+    private static int CompId(string dbName) => Array.FindIndex(HwComponents, c => c.Name == dbName switch
+    {
+        "KXDevice.KXCardReader" => "Card Reader", "KXDevice.KXCashDispenser" => "Cash Dispenser", "KXDevice.KXCashAcceptor" => "Cash Acceptor",
+        "KXDevice.KXReceiptPrinter" => "Receipt Printer", "KXDevice.KXBundleCheckScanner" => "Cheque Scanner", _ => dbName
+    }) + 1;
+    // As the live KTC answers: {ClientID, DBComponentID, DBPropertyID, DenominationID, CounterValue, Timestamp, LastResetTimestamp, LastMismatchSize}.
     private static IEnumerable<object> KtcCounters(int i, DateTime now)
     {
         var days = Math.Max(0.1, (now - LastReplenish(i, now)).TotalDays);
@@ -183,7 +195,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         {
             var d = KtcCounterDefs[k];
             var v = d.Name == "Remaining" ? Math.Max(0, 8000 - 560 * days) : Math.Round((Bad(d.Comp) ? d.Bad : d.PerDay) * days * (0.8 + Hash(i, k, 400) % 40 / 100.0));
-            yield return new { ClientID = Id(i), ComponentName = d.Comp, CounterName = d.Name, Value = (long)v, Delta = 0 };
+            yield return new { ClientID = Id(i), DBComponentID = CompId(d.Comp), DBPropertyID = PropId(d.Name), DenominationID = 0, CounterValue = (long)v,
+                Timestamp = now.AddMinutes(-(Hash(i, k) % 60)), LastResetTimestamp = LastReplenish(i, now), LastMismatchSize = 0 };
         }
     }
 

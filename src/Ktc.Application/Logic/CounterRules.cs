@@ -304,47 +304,77 @@ public static class CounterRules
     /// denomination, and a whole-number value. Returns null when there is no answer or the records hold no note counter
     /// the portal recognises; an empty list means the transaction moved no notes.
     /// </summary>
-    public static TxNotes? ReadTransactionNotes(JsonElement? root)
+    public static TxNotes? ReadTransactionNotes(JsonElement? root, Func<JsonElement, (string? Component, string? Property)>? names = null)
     {
         if (root is not { } r) return null;
         if (r.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
         var recs = KtcJson.Items(r).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
         if (recs.Count == 0) return r.ValueKind == JsonValueKind.Array ? new TxNotes(0, 0) : null;
-        var disp = new List<(bool Exact, string Denom, long V)>(); var acc = new List<(bool Exact, string Denom, long V)>();
+        var disp = new List<NoteRec>(); var acc = new List<NoteRec>();
         foreach (var e in recs)
         {
-            var (name, value) = ReadNamedCount(e);
-            if (name == null || value is not { } v || v < 0) continue;
-            var f = Flat(name);
+            var kind = NoteKind(e, names, out var comp, out var exact, out var v);
+            if (kind == 0) continue;
             var denom = KtcJson.Str(e, "DenominationID", "DenominationId", "DenomID", "Denomination", "CashUnitNumber", "UnitNumber", "CashUnitID");
-            if (DispensedExact.IsMatch(f)) disp.Add((true, denom, v));
-            else if (AcceptedExact.IsMatch(f)) acc.Add((true, denom, v));
-            else if (NotMoved.IsMatch(f)) continue;
-            else if (f.StartsWith("dispens") || f.StartsWith("present")) disp.Add((false, denom, v));
-            else if (f.StartsWith("deposit") || f.StartsWith("accept") || f.StartsWith("cashin")) acc.Add((false, denom, v));
+            (kind == 1 ? disp : acc).Add(new NoteRec(comp, exact, denom, v));
         }
         if (disp.Count == 0 && acc.Count == 0) return null;
         return new TxNotes(SumNotes(disp), SumNotes(acc));
     }
 
+    private sealed record NoteRec(string Comp, bool Exact, string Denom, long V);
+
+    /// <summary>
+    /// 1 when a per-transaction counter record counts notes dispensed, 2 notes accepted, 0 otherwise. The counter name is the record's
+    /// property name (PropertyID looked up through <paramref name="names"/>) or its name field; the amount is the record's Delta (the
+    /// change this transaction made) when it has one, else its value.
+    /// </summary>
+    public static int NoteKind(JsonElement e, Func<JsonElement, (string? Component, string? Property)>? names, out string component, out bool exact, out long amount)
+    {
+        component = ""; exact = false; amount = 0;
+        var (name, value) = ReadNamedCount(e, names, out component);
+        if (name == null || value is not { } v || v < 0) return 0;
+        amount = v;
+        var f = Regex.Replace(Flat(name), @"[^a-z0-9]", "");
+        if (DispensedExact.IsMatch(f)) { exact = true; return 1; }
+        if (AcceptedExact.IsMatch(f)) { exact = true; return 2; }
+        if (NotMoved.IsMatch(f)) return 0;
+        if (f.StartsWith("dispens") || f.StartsWith("present") || f.StartsWith("notesdispens")) return 1;
+        if (f.StartsWith("deposit") || f.StartsWith("accept") || f.StartsWith("cashin") || f.StartsWith("notesdeposit") || f.StartsWith("notesaccept")) return 2;
+        return 0;
+    }
+
     // Exact counter names win over variants (Deposited_L2 / _L3 / _L4 are breakdowns of Deposited). Records per denomination are
     // summed; a record without a denomination (id 0) next to per-denomination records is taken as their total, not added to them.
-    private static long SumNotes(List<(bool Exact, string Denom, long V)> l)
+    // When a device and its sub-device (Cash Dispenser and Cash Dispenser (DN_CdmRm4V)) both report the transaction, the larger is used, not both.
+    private static long SumNotes(List<NoteRec> l)
     {
         if (l.Count == 0) return 0;
         var use = l.Any(x => x.Exact) ? l.Where(x => x.Exact).ToList() : l;
-        long zero = use.Where(x => x.Denom is "" or "0").Sum(x => x.V), per = use.Where(x => x.Denom is not ("" or "0")).Sum(x => x.V);
-        return Math.Max(zero, per);
+        return use.GroupBy(x => x.Comp).Max(g =>
+        {
+            long zero = g.Where(x => x.Denom is "" or "0").Sum(x => x.V), per = g.Where(x => x.Denom is not ("" or "0")).Sum(x => x.V);
+            return Math.Max(zero, per);
+        });
     }
 
-    private static (string? Name, long? Value) ReadNamedCount(JsonElement e)
+    private static (string? Name, long? Value) ReadNamedCount(JsonElement e, Func<JsonElement, (string? Component, string? Property)>? names, out string component)
     {
-        string? name = null;
-        foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.String && !Regex.IsMatch(p.Name, "comp|device|currency|uuid|time|date", Ci))
-                     .OrderBy(p => Regex.IsMatch(p.Name, "counter|name|type|key", Ci) ? 0 : 1))
-            if ((p.Value.GetString() ?? "").Trim() is { Length: > 0 } v && !v.StartsWith("KXDevice", StringComparison.OrdinalIgnoreCase)
-                && !double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _) && !DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) { name = v; break; }
-        var value = Long(e, "Value", "Count", "CounterValue", "NoteCount", "Notes", "Total", "Current");
+        string? name = null; component = "";
+        if (names != null)
+        {
+            var (c, p) = names(e);
+            component = c ?? ""; if (p is { Length: > 0 }) name = p;
+        }
+        if (component.Length == 0)
+            component = KtcJson.Str(e, "ComponentName", "Component", "DBComponentName", "Device", "ComponentID", "DBComponentID", "CompId");
+        if (name == null)
+            foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.String && !Regex.IsMatch(p.Name, "comp|device|currency|uuid|time|date", Ci))
+                         .OrderBy(p => Regex.IsMatch(p.Name, "counter|name|type|key", Ci) ? 0 : 1))
+                if ((p.Value.GetString() ?? "").Trim() is { Length: > 0 } v && !v.StartsWith("KXDevice", StringComparison.OrdinalIgnoreCase)
+                    && !double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _) && !DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) { name = v; break; }
+        // KTC's HistoricalCounter records carry the running value and the Delta this transaction added: the Delta is the transaction's notes.
+        var value = Long(e, "Delta", "Change", "Difference") ?? Long(e, "Value", "Count", "CounterValue", "NoteCount", "Notes", "Total", "Current");
         if (value == null)
             foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Number && !Regex.IsMatch(p.Name, @"id$|^id|client|component|comp$|denom|currency|unit|delta", Ci)))
             { value = p.Value.TryGetInt64(out var l) ? l : (long)Math.Round(p.Value.GetDouble()); break; }
