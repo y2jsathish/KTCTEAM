@@ -50,7 +50,9 @@ public static class CounterRules
             // A flat list: records with a device / service class are XFS counters, the others application counters.
             foreach (var e in KtcJson.Items(body).Where(e => e.ValueKind == JsonValueKind.Object))
             {
-                if (KtcJson.Str(e, "ServiceClass", "Class", "XfsClass", "Device", "DeviceName").Length > 0) { if (ReadXfs(e) is { } c) xfs.Add(c); }
+                if (KtcJson.Str(e, "ServiceClass", "Class", "XfsClass").Length > 0) { if (ReadXfs(e) is { } c) xfs.Add(c); }
+                else if (ReadKtcCounter(e) is { } k) { xfs.Add(k); collected ??= KtcJson.AnyDate(e); }
+                else if (KtcJson.Str(e, "Device", "DeviceName").Length > 0) { if (ReadXfs(e) is { } c) xfs.Add(c); }
                 else if (ReadApp(e) is { } c) app.Add(c);
                 collected ??= KtcJson.Date(e, "CollectedUtc", "Timestamp", "TimeStamp");
                 reset ??= KtcJson.Date(e, "LastResetUtc", "LastReset", "ResetTime");
@@ -62,6 +64,55 @@ public static class CounterRules
     private static readonly string[] AppListNames = { "Application", "ApplicationCounters", "AppCounters" };
     private static readonly string[] XfsListNames = { "Xfs", "XfsCounters", "DeviceCounters", "Devices" };
     private static bool HasLists(JsonElement o) => KtcJson.TryProp(o, out _, AppListNames) || KtcJson.TryProp(o, out _, XfsListNames);
+
+    /// <summary>
+    /// One record of KTC's GET Client/{id}/Counters (List&lt;KTCCounter&gt;: client id, component DBName such as
+    /// "KXDevice.KXCardReader", counter name such as "GoodReads", value, ...). The field names are not documented, so the
+    /// record is read by content: the component is the string that names a KXDevice (or a field called component / device),
+    /// the counter is the other name-like string, and the value is the first whole number that is not an id.
+    /// </summary>
+    public static XfsCounter? ReadKtcCounter(JsonElement e)
+    {
+        string? comp = null, compField = null;
+        foreach (var p in e.EnumerateObject())
+            if (p.Value.ValueKind == JsonValueKind.String && (p.Value.GetString() ?? "").StartsWith("KXDevice", StringComparison.OrdinalIgnoreCase)) { comp = p.Value.GetString(); compField = p.Name; break; }
+        if (comp == null)
+            foreach (var p in e.EnumerateObject())
+                if (p.Value.ValueKind == JsonValueKind.String && Regex.IsMatch(p.Name, "comp|device", Ci) && !Regex.IsMatch(p.Name, "id$", Ci) && (p.Value.GetString() ?? "").Length > 0)
+                { comp = p.Value.GetString(); compField = p.Name; break; }
+        if (comp == null) return null;
+        string? name = null;
+        foreach (var p in e.EnumerateObject().Where(p => p.Name != compField && p.Value.ValueKind == JsonValueKind.String).OrderBy(p => Regex.IsMatch(p.Name, "counter|name|key|type", Ci) ? 0 : 1))
+            if ((p.Value.GetString() ?? "").Trim() is { Length: > 0 } v && !double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _) && !DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) { name = v; break; }
+        if (name == null) return null;
+        long? value = null;
+        foreach (var p in e.EnumerateObject().Where(p => !Regex.IsMatch(p.Name, @"id$|^id|client|component|comp$", Ci)).OrderBy(p => Regex.IsMatch(p.Name, "^(value|count|total|current|counter.?value)$", Ci) ? 0 : 1))
+            if (p.Value.ValueKind == JsonValueKind.Number && p.Value.TryGetInt64(out var l)) { value = l; break; }
+            else if (p.Value.ValueKind == JsonValueKind.Number) { value = (long)Math.Round(p.Value.GetDouble()); break; }
+            else if (p.Value.ValueKind == JsonValueKind.String && Regex.IsMatch(p.Name, "value|count|total", Ci) && long.TryParse(p.Value.GetString(), out l)) { value = l; break; }
+        if (value == null) return null;
+        var device = DeviceName(comp);
+        return new XfsCounter(device, XfsClass(comp) ?? XfsClass(device) ?? "", comp, SplitWords(name), value.Value, null);
+    }
+
+    /// <summary>"KXDevice.KXCardReader.ContactlessICCardReader" -> "Contactless IC Card Reader"; "KXDevice.KXCashDispenser" -> "Cash Dispenser".</summary>
+    public static string DeviceName(string dbName)
+    {
+        var last = (dbName ?? "").Split('.', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        if (last.StartsWith("KX") && last.Length > 2 && char.IsUpper(last[2])) last = last[2..];
+        return SplitWords(last, keepCase: true);
+    }
+
+    /// <summary>"GoodChipReads" -> "Good chip reads"; "Deposited_L4A_Recycle" -> "Deposited L4A recycle"; "RetainedND" -> "Retained ND".</summary>
+    public static string SplitWords(string s, bool keepCase = false)
+    {
+        var w = Regex.Replace((s ?? "").Replace('_', ' '), @"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ").Trim();
+        w = Regex.Replace(w, @"\s+", " ");
+        if (keepCase) return w;
+        var parts = w.Split(' ');
+        for (int i = 1; i < parts.Length; i++) if (parts[i].Length > 1 && parts[i].Skip(1).All(char.IsLower)) parts[i] = parts[i].ToLowerInvariant();
+        return string.Join(' ', parts);
+    }
 
     private static ApplicationCounter? ReadApp(JsonElement e)
     {

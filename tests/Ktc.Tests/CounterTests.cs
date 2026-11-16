@@ -151,13 +151,56 @@ public class CounterTests
         Assert.Contains(c.Diagnostics!, d => d.Contains("4 for this ATM"));
     }
 
+    // Records as KTC's own UI logged them for client 19: client;component;counter;value;delta. The JSON field names are not
+    // documented, so the same record is read with several plausible spellings.
+    [Theory]
+    [InlineData("""{"ClientID":19,"ComponentName":"KXDevice.KXCardReader","CounterName":"BadReads","Value":233,"Delta":0}""")]
+    [InlineData("""{"CID":19,"Component":"KXDevice.KXCardReader","Name":"BadReads","Count":233,"Difference":0}""")]
+    [InlineData("""{"clientId":19,"dbComponentName":"KXDevice.KXCardReader","counter":"BadReads","currentValue":233,"previousValue":0}""")]
+    [InlineData("""{"Client":19,"Device":"KXDevice.KXCardReader","Key":"BadReads","Total":"233"}""")]
+    public void Reads_ktc_counter_records_by_content(string json)
+    {
+        var c = CounterRules.ReadKtcCounter(Json(json));
+        Assert.NotNull(c);
+        Assert.Equal(("Card Reader", "IDC", "Bad reads", 233L), (c!.Device, c.ServiceClass, c.Counter, c.Value));
+    }
+
+    [Theory]
+    [InlineData("KXDevice.KXCardReader.ContactlessICCardReader", "Contactless IC Card Reader")]
+    [InlineData("KXDevice.KXCashDispenser", "Cash Dispenser")]
+    [InlineData("KXDevice.KXBundleCheckScanner", "Bundle Check Scanner")]
+    public void Names_ktc_devices(string db, string expected) => Assert.Equal(expected, CounterRules.DeviceName(db));
+
+    [Fact]
+    public async Task Uses_ktc_counters_route_when_it_answers()
+    {
+        var api = new RealShapes { Counters = """
+            [{"ClientID":19,"ComponentName":"KXDevice.KXCardReader","CounterName":"GoodReads","Value":185,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXCardReader","CounterName":"BadReads","Value":233,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXCardReader.ContactlessICCardReader","CounterName":"GoodChipReads","Value":230,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXCashAcceptor","CounterName":"RetainedND","Value":1,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXCashDispenser","CounterName":"Dispensed","Value":44,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXBundleCheckScanner","CounterName":"ItemsReturned","Value":3,"Delta":0}]
+            """ };
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Contains("api/v1/Client/19/Counters", api.Urls);
+        Assert.Contains(c!.Xfs, x => x.Device == "Card Reader" && x.ServiceClass == "IDC" && x.Counter == "Bad reads" && x.Value == 233 && x.Status == "Warning");   // over the 50 threshold
+        Assert.Contains(c.Xfs, x => x.Device == "Contactless IC Card Reader" && x.ServiceClass == "IDC");
+        Assert.Contains(c.Xfs, x => x.ServiceClass == "CDM" && x.Counter == "Dispensed" && x.Value == 44);
+        Assert.Contains(c.Xfs, x => x.ServiceClass == "CIM" && x.Counter == "Retained ND");
+        Assert.DoesNotContain(c.Xfs, x => x.Counter == "Cards retained");          // CurrentStatus not used for a device the route covers
+        Assert.Contains(c.Xfs, x => x.Counter == "Cash unit 1 notes");               // cash units still added
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("api/v1/Client/19/Counters: 6 device counters"));
+        Assert.Equal(2, c.Application.Single(a => a.Name == "Cash withdrawals").SinceReset);   // application still from transactions
+    }
+
     [Fact]
     public async Task Empty_ktc_data_gives_reasons_instead_of_null()
     {
         var c = await Service(new RealShapes { Empty = true }).GetCountersAsync("19");
         Assert.NotNull(c);
         Assert.Empty(c!.Xfs); Assert.Empty(c.Application);
-        Assert.Contains(c.Warnings, w => w.StartsWith("XFS counters: KTC returned no CurrentStatus rows"));
+        Assert.Contains(c.Warnings, w => w.StartsWith("XFS counters: KTC returned no counters and no CurrentStatus rows"));
         Assert.Contains(c.Warnings, w => w.StartsWith("Application counters: KTC returned no transactions"));
         Assert.Null(await Service(new RealShapes()).GetCountersAsync("NO-SUCH-ATM"));
     }
@@ -172,7 +215,7 @@ public class CounterTests
 
         var failing = await Service(new RealShapes(), new KtcOptions { CountersEndpoint = "api/v2/Atm/{atmId}/Counters" }).GetCountersAsync("19");
         Assert.Contains(failing!.Xfs, x => x.Counter == "Cards retained");          // falls back to CurrentStatus
-        Assert.Contains(failing.Diagnostics!, d => d.Contains("gave no counters"));
+        Assert.Contains(failing.Diagnostics!, d => d.StartsWith("api/v2/Atm/19/Counters: "));
     }
 
     [Fact]
@@ -195,6 +238,7 @@ public class CounterTests
     private sealed class RealShapes : IKtcApiClient
     {
         public bool Empty { get; init; }
+        public string? Counters { get; init; }
         public string? Override { get; init; }
         public List<string> Urls { get; } = new();
         public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
@@ -206,6 +250,7 @@ public class CounterTests
             {
                 "api/v1/Client" => """[{"ID":19,"Name":"ATM-NINETEEN","BusinessID":0},{"ID":5,"Name":"ATM-FIVE","BusinessID":0}]""",
                 "api/v2/Atm/19/Counters" => Override,
+                "api/v1/Client/19/Counters" => Counters,
                 "api/v1/Client/19/CurrentStatus" => Empty ? "[]" : """
                     [{"CID":19,"CompId":1,"PropId":70,"VID":0,"NumericValue":81.0,"UseNumeric":true,"Timestamp":"2026-11-10T11:58:33.903"},
                      {"CID":19,"CompId":5,"PropId":71,"VID":6,"UseNumeric":false,"Timestamp":"2026-11-16T06:55:51.27"},

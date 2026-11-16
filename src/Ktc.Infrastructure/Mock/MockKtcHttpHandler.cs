@@ -63,6 +63,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             return Ok(Codes.Take(5).Select((c, k) => new { Reason = c.Name, Hours = Math.Round(Hash(Idx(r), k, 7) % 900 / 100.0 + 0.5, 1) }).OrderByDescending(x => x.Hours));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentCashUnitStatus")).Success) return Ok(CashUnits(Idx(r), now));
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(KtcCounters(Idx(r), now));
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
         if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
@@ -134,6 +135,30 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     {
         var k = Array.FindIndex(HwComponents, c => c.Name == component); if (k < 0) return false;
         var h = Hash(i, k, 91); return Chronic.Contains(i) ? h % 100 < 45 : h % 100 < 10;
+    }
+
+    // KTC GET Client/{id}/Counters: List<KTCCounter> - client id, component DBName, counter name, value, (delta). Names as the real
+    // KTC reports them (seen in KTC UI logs). The JSON field names are a guess; the portal reads the record by content.
+    private static readonly (string Comp, string Name, double PerDay, double Bad)[] KtcCounterDefs =
+    {
+        ("KXDevice.KXCardReader", "GoodReads", 120, 120), ("KXDevice.KXCardReader", "GoodChipReads", 200, 200), ("KXDevice.KXCardReader", "BadReads", 3, 12),
+        ("KXDevice.KXCardReader", "BadChipReads", 1, 6), ("KXDevice.KXCardReader", "Captured", 0.3, 4),
+        ("KXDevice.KXCashDispenser", "Dispensed", 560, 560), ("KXDevice.KXCashDispenser", "Rejected", 5, 40), ("KXDevice.KXCashDispenser", "Retracted", 1, 4),
+        ("KXDevice.KXCashDispenser", "RetractOperations", 0.5, 3), ("KXDevice.KXCashDispenser", "Remaining", 0, 0),
+        ("KXDevice.KXCashAcceptor", "Deposited", 140, 140), ("KXDevice.KXCashAcceptor", "Retained", 1, 6), ("KXDevice.KXCashAcceptor", "Returned", 6, 25), ("KXDevice.KXCashAcceptor", "RetainedOperations", 0.3, 2),
+        ("KXDevice.KXReceiptPrinter", "GoodPrints", 170, 170), ("KXDevice.KXReceiptPrinter", "PrintErrors", 0.5, 6),
+    };
+    private static IEnumerable<object> KtcCounters(int i, DateTime now)
+    {
+        var days = Math.Max(0.1, (now - LastReplenish(i, now)).TotalDays);
+        bool Bad(string comp) => comp switch { "KXDevice.KXCardReader" => HwBad(i, "Card Reader"), "KXDevice.KXCashDispenser" => HwBad(i, "Cash Dispenser"),
+            "KXDevice.KXCashAcceptor" => HwBad(i, "Cash Acceptor"), "KXDevice.KXReceiptPrinter" => HwBad(i, "Receipt Printer"), _ => false };
+        for (int k = 0; k < KtcCounterDefs.Length; k++)
+        {
+            var d = KtcCounterDefs[k];
+            var v = d.Name == "Remaining" ? Math.Max(0, 8000 - 560 * days) : Math.Round((Bad(d.Comp) ? d.Bad : d.PerDay) * days * (0.8 + Hash(i, k, 400) % 40 / 100.0));
+            yield return new { ClientID = Id(i), ComponentName = d.Comp, CounterName = d.Name, Value = (long)v, Delta = 0 };
+        }
     }
 
     // KTC CurrentCashUnitStatus: {ClientID, DBComponentID, TypeID, StatusID, CurrencyID, CashUnitNumber, Value, Count, Total, Timestamp}.

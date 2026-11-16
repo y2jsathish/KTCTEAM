@@ -31,7 +31,7 @@
   const flagged=c.xfs.filter(x=>x.status!=='OK');const fb=$id('xfsFlagged');fb.textContent=flagged.length;fb.classList.toggle('d-none',!flagged.length);
   if(!c.xfs.length){$id('xfsKpis').innerHTML='';$id('xfsCounters').innerHTML='<div class="col-12"><div class="alert alert-secondary small mb-0">No XFS counters for this ATM (see the reason above).</div></div>';return;}
   // One card per XFS device (service class + logical service), in the style of the Hardware Status cards.
-  const devs=[];const by={};c.xfs.forEach(x=>{const k=x.serviceClass+'|'+(x.logicalName||x.device);if(!by[k]){by[k]={device:x.device,cls:x.serviceClass,logical:x.logicalName,rows:[]};devs.push(by[k]);}by[k].rows.push(x);});
+  const devs=[];const by={};c.xfs.forEach(x=>{const k=x.serviceClass+'|'+x.device.toLowerCase();if(!by[k]){by[k]={device:x.device,cls:x.serviceClass,logical:x.logicalName,rows:[]};devs.push(by[k]);}by[k].logical=by[k].logical||x.logicalName;by[k].rows.push(x);});
   devs.forEach(d=>d.status=d.rows.some(x=>x.status!=='OK')?'Warning':'OK');
   devs.sort((a,b)=>(a.status==='OK')-(b.status==='OK')||rank(CLASSES,a.cls)-rank(CLASSES,b.cls));
   const warnDevs=devs.filter(d=>d.status!=='OK').length;
