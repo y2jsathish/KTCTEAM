@@ -221,10 +221,32 @@ public record XfsCounter(string Device, string ServiceClass, string? LogicalName
 public record AtmCounters(string AtmId, string AtmName, DateTime? CollectedUtc, DateTime? LastResetUtc,
     IReadOnlyList<ApplicationCounter> Application, IReadOnlyList<XfsCounter> Xfs, IReadOnlyList<string> Warnings,
     string? ResetSource = null, IReadOnlyList<string>? Diagnostics = null,
-    IReadOnlyList<NotesByType>? NotesByType = null, string? NotesSource = null);
+    IReadOnlyList<NotesByType>? NotesByType = null, string? NotesSource = null,
+    IReadOnlyList<NotesByDenomination>? NotesByDenomination = null);
 
 /// <summary>Notes moved by one transaction (KTC per-transaction counters).</summary>
-public record TxNotes(long Dispensed, long Accepted);
+/// <remarks>The per-denomination split is keyed by KTC DenominationID ("" = notes KTC did not split by denomination).</remarks>
+public record TxNotes(long Dispensed, long Accepted)
+{
+    public IReadOnlyDictionary<string, long> DispensedByDenomination { get; init; } = new Dictionary<string, long>();
+    public IReadOnlyDictionary<string, long> AcceptedByDenomination { get; init; } = new Dictionary<string, long>();
+    public virtual bool Equals(TxNotes? o) => o is not null && o.Dispensed == Dispensed && o.Accepted == Accepted;
+    public override int GetHashCode() => HashCode.Combine(Dispensed, Accepted);
+}
 
 /// <summary>Notes dispensed and accepted since the reset by one transaction type.</summary>
-public record NotesByType(string Type, long Transactions, long NotesDispensed, long NotesAccepted);
+public record NotesByType(string Type, long Transactions, long NotesDispensed, long NotesAccepted)
+{
+    /// <summary>The same notes split by note value (only the denominations this type moved).</summary>
+    public IReadOnlyList<NotesByDenomination>? Denominations { get; init; }
+}
+
+/// <summary>
+/// Notes dispensed and accepted since the reset for one note value. Denomination is the note value ("100"),
+/// "unknown (id 7)" when KTC's Denomination list has no value for the id, or "Not split by denomination".
+/// </summary>
+public record NotesByDenomination(string Denomination, decimal? Value, string? DenominationId, long NotesDispensed, long NotesAccepted)
+{
+    public decimal? AmountDispensed => Value * NotesDispensed;
+    public decimal? AmountAccepted => Value * NotesAccepted;
+}

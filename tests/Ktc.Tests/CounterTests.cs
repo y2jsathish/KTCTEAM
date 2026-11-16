@@ -309,6 +309,39 @@ public class CounterTests
     }
 
     [Fact]
+    public async Task Notes_are_split_by_denomination_with_the_standard_values_always_listed()
+    {
+        var api = new RealShapes
+        {
+            // KTC's Denomination list: id 1 = 100, id 2 = 500 (value field), id 4 = 2000 (value only in the name); id 9 is not in it.
+            Denominations = """[{"ID":1,"CurrencyCode":"AED","Value":100.0},{"ID":2,"CurrencyCode":"AED","Value":500.0},{"ID":4,"Name":"AED 2000"}]""",
+            TxCounters = new()
+            {
+                ["1"] = """[{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":1,"Value":900,"Delta":3,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":2,"Value":400,"Delta":2,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":9,"Value":50,"Delta":1,"TransactionID":1}]""",
+                ["2"] = """[{"ClientID":19,"ComponentID":8,"PropertyID":320,"DenominationID":4,"Value":10,"Delta":4,"TransactionID":2},{"ClientID":19,"ComponentID":8,"PropertyID":320,"DenominationID":0,"Value":16,"Delta":6,"TransactionID":2}]""",
+            }
+        };
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Equal(6, c!.Application.Single(a => a.Name == "Notes dispensed").SinceReset);
+        Assert.Equal(6, c.Application.Single(a => a.Name == "Notes accepted").SinceReset);
+        var d = c.NotesByDenomination!;
+        Assert.Equal(new[] { "50", "100", "200", "500", "1000", "2000", "unknown (id 9)", "Not split by denomination" }, d.Select(x => x.Denomination));
+        NotesByDenomination R(string n) => d.Single(x => x.Denomination == n);
+        Assert.Equal((0L, 0L), (R("50").NotesDispensed, R("50").NotesAccepted));
+        Assert.Equal((3L, 300m), (R("100").NotesDispensed, R("100").AmountDispensed!.Value));
+        Assert.Equal((2L, 1000m), (R("500").NotesDispensed, R("500").AmountDispensed!.Value));
+        Assert.Equal((4L, 8000m), (R("2000").NotesAccepted, R("2000").AmountAccepted!.Value));
+        Assert.Equal((1L, (decimal?)null), (R("unknown (id 9)").NotesDispensed, R("unknown (id 9)").AmountDispensed));
+        Assert.Equal(2, R("Not split by denomination").NotesAccepted);   // the total record (6) counts 2 more than the per-denomination one
+        Assert.Equal(c.Application.Single(a => a.Name == "Notes dispensed").SinceReset, d.Sum(x => x.NotesDispensed));
+        Assert.Contains(c.Warnings, w => w.Contains("denomination id(s) 9 have no note value"));
+        Assert.Contains(c.Diagnostics!, x => x.StartsWith("Denominations: KTC Denomination list id 1 = 100, id 2 = 500, id 4 = 2000; ids in these transactions: 1, 2, 4, 9"));
+        var w = c.NotesByType!.Single(t => t.Type == "CashWithdrawal").Denominations!;
+        Assert.Equal(new[] { "100", "500", "2000", "unknown (id 9)", "Not split by denomination" }, w.Select(x => x.Denomination));   // both test transactions are withdrawals
+        Assert.Contains(CounterRules.ToReport(c, DateTime.UtcNow).Rows, r => r[0] == "Notes by denomination" && r[1] == "2000" && r[4] == "0 dispensed / 4 accepted");
+    }
+
+    [Fact]
     public async Task Without_per_transaction_counters_notes_come_from_the_device_counters()
     {
         var api = new RealShapes { Counters = """
@@ -372,6 +405,7 @@ public class CounterTests
         public string? Override { get; init; }
         /// <summary>HistoricalCounter/ClientTransactionCounters answers by transaction id; null answers 404.</summary>
         public Dictionary<string, string>? TxCounters { get; init; }
+        public string? Denominations { get; init; }
         public List<string> Urls { get; } = new();
         public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
         {
@@ -382,6 +416,7 @@ public class CounterTests
             string? json = path switch
             {
                 "api/v1/HistoricalCounter/ClientTransactionCounters" => TxCounters?.GetValueOrDefault(txId),
+                "api/v1/Denomination" => Denominations,
                 "api/v1/Client" => """[{"ID":19,"Name":"ATM-NINETEEN","BusinessID":0},{"ID":5,"Name":"ATM-FIVE","BusinessID":0}]""",
                 "api/v2/Atm/19/Counters" => Override,
                 "api/v1/Client/19/Counters" => Counters,
