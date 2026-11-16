@@ -69,6 +69,39 @@ public class ReplenishmentTests
         Assert.Null(await new KtcDataService(api, Microsoft.Extensions.Options.Options.Create(new KtcOptions()), new MemoryCache(new MemoryCacheOptions()), new HttpContextAccessor(), NullLogger<KtcDataService>.Instance).GetReplenishmentAsync("NO-SUCH-ATM"));
     }
 
+    // Live ATM 19: ReplenishmentsByTimeRange answered records of ids only; each is named through KTC's lists, the id kept for the tooltip.
+    [Fact]
+    public async Task Ktc_replenishment_records_show_names_for_their_ids()
+    {
+        var api = new Fake(new()
+        {
+            ["api/v1/Client"] = """[{"ID":19,"Name":"ATM-NINETEEN","BusinessID":1}]""",
+            ["api/v1/Client/19/ReplenishmentsByTimeRange"] = """[{"ID":7,"ClientID":19,"BranchID":3,"DenominationID":28,"CurrencyID":1,"ReplenishmentProviderID":2,"SupervisorUserID":5,"DBComponentID":7,"ReasonTypeID":4,"GroupID":0,"Count":200,"Timestamp":"2026-11-15T08:00:00"}]""",
+            ["api/v1/Branch"] = """[{"ID":3,"Name":"Corniche Branch"}]""",
+            ["api/v1/Denomination"] = """[{"ID":28,"CurrencyID":1,"CurrencyValue":100.0}]""",
+            ["api/v1/Currency"] = """[{"ID":1,"Code":"AED","Description":"UAE Dirham"}]""",
+            ["api/v1/ReplenishmentProvider"] = """[{"ID":2,"Name":"G4S"}]""",
+            ["api/v1/SupervisorUser"] = """[{"ID":5,"UserName":"cit.operator"}]""",
+            ["api/v1/ComponentList"] = """{"7":{"ID":7,"DisplayName":"Cash Dispenser"}}""",
+        });
+        var r = await new KtcDataService(api, Microsoft.Extensions.Options.Options.Create(new KtcOptions()), new MemoryCache(new MemoryCacheOptions()), new HttpContextAccessor(), NullLogger<KtcDataService>.Instance)
+            .GetReplenishmentAsync("19");
+        var set = r!.KtcRecords.Single(s => s.Title == "KTC replenishments");
+        var f = set.Records[0].ToDictionary(x => x.Name);
+        Assert.Equal(("ATM-NINETEEN", "19"), (f["Client"].Value, f["Client"].Id));
+        Assert.Equal(("Corniche Branch", "3"), (f["Branch"].Value, f["Branch"].Id));
+        Assert.Equal(("AED 100", "28"), (f["Denomination"].Value, f["Denomination"].Id));
+        Assert.Equal("AED", f["Currency"].Value);
+        Assert.Equal("G4S", f["Replenishment Provider"].Value);
+        Assert.Equal("cit.operator", f["Supervisor User"].Value);
+        Assert.Equal("Cash Dispenser", f["Component"].Value);
+        Assert.Equal("none", f["Group"].Value);
+        Assert.Equal("7", f["ID"].Value);   // the record's own id stays
+        Assert.Equal("4", f["Reason Type ID"].Value);
+        Assert.Equal(new[] { "ReasonTypeID" }, set.UnnamedIds);
+        Assert.Contains(r.Diagnostics, d => d.StartsWith("KTC replenishments: no KTC list names these id fields") && d.Contains("ReasonTypeID"));
+    }
+
     // Live ATM 19: ReplenishmentsByTimeRange answered 500 SqlDateTime overflow (its date fields were not filled) and ReplenishmentOrders
     // 500 FormatException (ISO dates in the query). This KTC takes yyyyMMddHHmmssfff query dates and, here, a {StartDate, EndDate} body.
     [Fact]

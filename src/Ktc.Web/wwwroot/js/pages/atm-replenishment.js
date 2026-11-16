@@ -24,7 +24,8 @@
   if(s.error)body=(s.hint?`<div class="small mb-1"><i class="bi bi-lightbulb"></i> ${K.esc(s.hint)}</div>`:'')+`<details class="small text-muted"><summary>KTC's answer</summary>${K.esc(s.error)}${s.sent?`<div class="mt-1">Sent: <code>${K.esc(s.sent)}</code></div>`:''}</details>`;
   else if(!s.records.length)body='<div class="small text-muted">KTC answered with no records for the last 30 days.</div>';
   else{const cols=[];s.records.forEach(r=>r.forEach(f=>{if(!cols.includes(f.name)&&cols.length<12)cols.push(f.name);}));
-   body=`<div class="table-responsive"><table class="table table-sm small mb-0 counter-table"><thead><tr>${cols.map(c=>`<th>${K.esc(c)}</th>`).join('')}</tr></thead><tbody>${s.records.map(r=>`<tr>${cols.map(c=>{const f=r.find(x=>x.name===c);return `<td>${f?K.esc(f.value):''}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>`;}
+   body=`<div class="table-responsive"><table class="table table-sm small mb-0 counter-table"><thead><tr>${cols.map(c=>`<th>${K.esc(c)}</th>`).join('')}</tr></thead><tbody>${s.records.map(r=>`<tr>${cols.map(c=>{const f=r.find(x=>x.name===c);return `<td>${!f?'':f.id&&f.id!==f.value?`<span title="KTC id ${K.esc(f.id)}">${K.esc(f.value)}</span> <span class="text-muted small">#${K.esc(f.id)}</span>`:K.esc(f.value)}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>`
+   +(s.unnamedIds&&s.unnamedIds.length?`<div class="small text-muted mt-1">Shown as ids (KTC has no list that names them): ${s.unnamedIds.map(K.esc).join(', ')}</div>`:'');}
   return card('bi-database',`${K.esc(s.title)} <span class="small text-muted text-none">${K.esc(s.route)}</span>`,body);
  }
  function render(r){

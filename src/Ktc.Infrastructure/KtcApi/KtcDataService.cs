@@ -478,17 +478,99 @@ public class KtcDataService : IKtcDataService
 
         // ---- KTC's own replenishment routes ----
         var sets = new List<KtcRecordSet>();
+        // KTC sends ids (ClientID, DenominationID, ProviderID, ...): name them through KTC's lists, keeping the id for the tooltip.
+        var allRecs = tRoutes.SelectMany(t => KtcJson.Items(t.Result.res.Json).Take(50)).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        var namer = allRecs.Count > 0 ? await IdNamerAsync(allRecs, lookup, ct) : null;
         foreach (var t in tRoutes)
         {
             var (r, res) = t.Result;
             var (j, err, sent) = res;
             var path = r.Path;
-            var recs = j == null ? new List<IReadOnlyList<DetailField>>() : KtcJson.Items(j).Take(50).Select(e => (IReadOnlyList<DetailField>)TxDetailRules.Flatten(e)).Where(f => f.Count > 0).ToList();
+            var unnamed = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            var recs = j == null ? new List<IReadOnlyList<DetailField>>() : KtcJson.Items(j).Take(50).Where(e => e.ValueKind == JsonValueKind.Object)
+                .Select(e => (IReadOnlyList<DetailField>)NamedFields(e, namer, r.Title == "Physical cassettes", unnamed)).Where(f => f.Count > 0).ToList();
+            if (j != null && recs.Count == 0) recs = KtcJson.Items(j).Take(50).Select(e => (IReadOnlyList<DetailField>)TxDetailRules.Flatten(e)).Where(f => f.Count > 0).ToList();
             var hint = j == null ? ReplenishmentHint(err, sent) : null;
-            sets.Add(new KtcRecordSet(r.Title, $"{r.M.Method} {path}", j == null ? err ?? "no answer" : null, recs) { Hint = hint, Sent = sent });
+            sets.Add(new KtcRecordSet(r.Title, $"{r.M.Method} {path}", j == null ? err ?? "no answer" : null, recs) { Hint = hint, Sent = sent, UnnamedIds = unnamed.ToList() });
+            if (unnamed.Count > 0) diag.Add($"{r.Title}: no KTC list names these id fields, so they show the id: {string.Join(", ", unnamed)}.");
             diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
         return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag);
+    }
+
+    private static readonly Regex IdField = new(@"^(.*?)(ID|Id|id)$");
+    private static readonly Regex NotAnId = new(@"^(id|uuid|guid|transactionid|sessionid|.*uniqueid|txid|ejid|.*rowid|orderid|replenishmentid|replenishmentorderid)$", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// One record's fields with KTC ids replaced by names: the field shows the name ("Branch": "Corniche Branch") and keeps the id
+    /// (DetailField.Id) for the tooltip. Id fields no list names are kept as they are and collected in <paramref name="unnamed"/>.
+    /// </summary>
+    private static List<DetailField> NamedFields(JsonElement e, Func<string, string, bool, string?>? namer, bool cashUnits, ISet<string> unnamed)
+    {
+        var res = new List<DetailField>();
+        foreach (var (path, value) in SchemaInferer.Leaves(e))
+        {
+            if (value.Length == 0) continue;
+            var key = path.Split('.').Last().Replace("[]", "");
+            var m = IdField.Match(key);
+            if (m.Success && !NotAnId.IsMatch(key) && namer != null)
+            {
+                var stem = Regex.Replace(m.Groups[1].Value, "^DB(?=[A-Z])", "");
+                var label = TxDetailRules.Pretty(stem.Length > 0 ? stem : key);
+                if (value is "0" or "-1") { res.Add(new DetailField(label, "none", value)); continue; }
+                if (namer(key, value, cashUnits) is { Length: > 0 } n) { res.Add(new DetailField(label, n, value)); continue; }
+                if (Regex.IsMatch(value, @"^\d+$")) unnamed.Add(key);
+            }
+            var v = Guid.TryParse(value, out _) ? value : PanMasker.Mask(value);
+            res.Add(new DetailField(TxDetailRules.Pretty(path), v, v));
+        }
+        return res;
+    }
+
+    /// <summary>
+    /// Names for the id fields of KTC records, by field name: ClientID (ATM), Business / Branch / Region / Group, component and property
+    /// (ComponentList / PropertyList), denomination, currency, replenishment provider, supervisor / user, and cash unit type / status.
+    /// Only the lists the records need are read; every list is cached.
+    /// </summary>
+    private async Task<Func<string, string, bool, string?>> IdNamerAsync(List<JsonElement> recs, Dictionary<string, ClientRec> clients, CancellationToken ct)
+    {
+        var keys = recs.SelectMany(r => SchemaInferer.Leaves(r)).Select(l => l.Path.Split('.').Last().Replace("[]", "").ToLowerInvariant()).ToHashSet();
+        bool Has(string rx) => keys.Any(k => Regex.IsMatch(k, rx));
+        Task<Dictionary<string, string>> L(string rx, string route, params string[] fields) =>
+            Has(rx) ? NamedListAsync(route, ct, fields) : Task.FromResult(new Dictionary<string, string>());
+        var tBiz = L("^businessid$", "api/v1/Business"); var tBr = L("^branchid$", "api/v1/Branch"); var tReg = L(@"^(level\d)?regionid$", "api/v1/Region");
+        var tGrp = L("groupid$", "api/v1/Group"); var tCur = L("^currencyid$", "api/v1/Currency", "Code", "CurrencyCode", "ISOCode", "Name", "Description");
+        var tProv = L("providerid$", "api/v1/ReplenishmentProvider?includeDefault=true");
+        var tUsr = L("(user|supervisor|operator|technician|createdby|modifiedby|requestedby|approvedby).*id$", "api/v1/SupervisorUser", "UserName", "Username", "Name", "Login", "DisplayName");
+        var tOnl = L("(user|supervisor|operator|technician|createdby|modifiedby|requestedby|approvedby).*id$", "api/v1/OnlineSupervisorUser", "UserName", "Username", "Name", "Login", "DisplayName");
+        var tUt = L("typeid$", "api/v1/CashUnitType"); var tUs = L("statusid$", "api/v1/CashUnitStatus");
+        var tDen = Has("^denom(ination)?id$") ? DenominationNamesAsync(ct) : Task.FromResult(new Dictionary<string, string>());
+        var tHw = Has("^(db)?comp(onent)?id$|^(db)?prop(erty)?id$") ? HardwareNamesAsync(recs, ct) : Task.FromResult<HwNames?>(null)!;
+        await Task.WhenAll(tBiz, tBr, tReg, tGrp, tCur, tProv, tUsr, tOnl, tUt, tUs, tDen, tHw);
+        var hw = tHw.Result;
+        return (key, value, cashUnits) =>
+        {
+            var k = key.ToLowerInvariant(); var v = KtcJson.NormId(value);
+            string? G(Dictionary<string, string> d) => d.GetValueOrDefault(v);
+            return k switch
+            {
+                "clientid" or "dbclientid" or "atmid" => clients.TryGetValue(v, out var c) ? c.Name : null,
+                "businessid" => G(tBiz.Result),
+                "branchid" => G(tBr.Result),
+                _ when Regex.IsMatch(k, @"^(level\d)?regionid$") => G(tReg.Result),
+                _ when k.EndsWith("groupid") => G(tGrp.Result),
+                "currencyid" => G(tCur.Result),
+                _ when k.EndsWith("providerid") => G(tProv.Result),
+                _ when Regex.IsMatch(k, "^denom(ination)?id$") => G(tDen.Result),
+                _ when Regex.IsMatch(k, "^(db)?comp(onent)?id$") => hw?.Components.GetValueOrDefault(v),
+                _ when Regex.IsMatch(k, "^(db)?prop(erty)?id$") => hw?.Properties.GetValueOrDefault(v)?.Name,
+                _ when Regex.IsMatch(k, "(user|supervisor|operator|technician|createdby|modifiedby|requestedby|approvedby).*id$") => G(tUsr.Result) ?? G(tOnl.Result),
+                // TypeID / StatusID are cash unit types / statuses on cash unit records only; elsewhere they mean something else.
+                _ when k is "cashunittypeid" or "unittypeid" || (cashUnits && k == "typeid") => G(tUt.Result),
+                _ when k is "cashunitstatusid" or "unitstatusid" || (cashUnits && k == "statusid") => G(tUs.Result),
+                _ => null,
+            };
+        };
     }
 
     /// <summary>A KTC route's answer: the records, or the error, and what was sent (the date body / query that was used or last tried).</summary>
@@ -559,8 +641,8 @@ public class KtcDataService : IKtcDataService
     }
 
     /// <summary>id -> name of a KTC list route (Name / DisplayName / Description); empty when the route does not answer. Cached.</summary>
-    private Task<Dictionary<string, string>> NamedListAsync(string route, CancellationToken ct) =>
-        Cached("named|" + route, TimeSpan.FromMinutes(30), async () =>
+    private Task<Dictionary<string, string>> NamedListAsync(string route, CancellationToken ct, params string[] fields) =>
+        Cached("named|" + route + "|" + string.Join(",", fields), TimeSpan.FromMinutes(30), async () =>
         {
             var map = new Dictionary<string, string>();
             foreach (var (k, e) in KtcJson.Rows(await Quiet(route, ct)))
@@ -568,7 +650,7 @@ public class KtcDataService : IKtcDataService
                 if (e.ValueKind == JsonValueKind.String) { if (e.GetString() is { Length: > 0 } s) map.TryAdd(KtcJson.NormId(k), s); continue; }
                 if (e.ValueKind != JsonValueKind.Object) continue;
                 var nid = KtcJson.NormId(KtcJson.Str(e, "ID", "Id") is { Length: > 0 } x ? x : k);
-                if (KtcJson.Str(e, NameFields) is { Length: > 0 } n && nid.Length > 0) map.TryAdd(nid, n);
+                if (KtcJson.Str(e, fields.Length > 0 ? fields : NameFields) is { Length: > 0 } n && nid.Length > 0) map.TryAdd(nid, n);
             }
             return map;
         });
