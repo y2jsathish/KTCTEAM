@@ -639,10 +639,10 @@ public class KtcDataService : IKtcDataService
         if (routeAt > (collected ?? DateTime.MinValue)) collected = routeAt;
 
         // ---- notes dispensed / accepted: KTC's per-transaction counters of each cash transaction since the reset ----
-        var (notes, notesByType, notesSource) = await NotesAsync(id, tx, resetUtc ?? now.AddDays(-days), now, routeXfs, w, diag, ct);
+        var (notes, notesByType, notesSource, notesByDenom) = await NotesAsync(id, tx, resetUtc ?? now.AddDays(-days), now, routeXfs, w, diag, ct);
         app = app.Concat(notes).ToList();
         return new AtmCounters(id, name, collected, resetUtc, app, xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ThenBy(x => x.Device).ToList(), w.ToList(), resetSource, diag,
-            notesByType, notesSource);
+            notesByType, notesSource, notesByDenom);
     }
 
     /// <summary>
@@ -651,7 +651,7 @@ public class KtcDataService : IKtcDataService
     /// transaction type. When KTC has no per-transaction counters, the totals come from the dispenser "Dispensed" and acceptor "Deposited"
     /// device counters, with Today shown as not available.
     /// </summary>
-    private async Task<(List<ApplicationCounter> Counters, List<NotesByType>? ByType, string? Source)> NotesAsync(string id, List<TransactionDto> tx, DateTime sinceUtc, DateTime now,
+    private async Task<(List<ApplicationCounter> Counters, List<NotesByType>? ByType, string? Source, List<NotesByDenomination>? ByDenomination)> NotesAsync(string id, List<TransactionDto> tx, DateTime sinceUtc, DateTime now,
         List<XfsCounter> deviceCounters, Warn w, List<string> diag, CancellationToken ct)
     {
         var cashTx = tx.Where(t => t.TimeUtc >= sinceUtc && CounterRules.IsCashTransaction(t)).OrderByDescending(t => t.TimeUtc).ToList();
@@ -703,10 +703,25 @@ public class KtcDataService : IKtcDataService
         if (read.Count > 0)
         {
             var (counters, byType, running) = CounterRules.NotesFromTransactions(read, now.Date);
+            // Split by note value: KTC DenominationID -> value through GET Denomination. Running totals can't be split per transaction.
+            List<NotesByDenomination>? byDenom = null;
+            if (!running)
+            {
+                var values = await DenominationValuesAsync(ct);
+                byDenom = CounterRules.ByDenomination(read.Select(r => r.Notes), values, standard: true);
+                static string TypeOf(TransactionDto t) => t.Type.Length > 0 ? t.Type : "Unknown";
+                byType = byType.Select(t => t with { Denominations = CounterRules.ByDenomination(read.Where(r => TypeOf(r.Tx).Equals(t.Type, StringComparison.OrdinalIgnoreCase)).Select(r => r.Notes), values, standard: false) }).ToList();
+                var ids = read.SelectMany(r => r.Notes.DispensedByDenomination.Keys.Concat(r.Notes.AcceptedByDenomination.Keys)).Where(k => k.Length > 0).Distinct().OrderBy(k => k.Length).ThenBy(k => k, StringComparer.Ordinal).ToList();
+                var unknown = ids.Where(k => !values.ContainsKey(k)).ToList();
+                var list = values.Count == 0 ? "returned no note values" : string.Join(", ", values.OrderBy(v => v.Key.Length).ThenBy(v => v.Key, StringComparer.Ordinal).Select(v => $"id {v.Key} = {v.Value:0.##}"));
+                diag.Add($"Denominations: KTC Denomination list {list}; ids in these transactions: {(ids.Count == 0 ? "none" : string.Join(", ", ids))}{(unknown.Count > 0 ? "; without a note value: " + string.Join(", ", unknown) : "")}.");
+                if (unknown.Count > 0) w.Add($"Application counters: KTC denomination id(s) {string.Join(", ", unknown)} have no note value in KTC's Denomination list, so they show as unknown.");
+            }
+            else w.Add("Application counters: KTC reports running note totals, so the notes can't be split by denomination per transaction.");
             if (read.Count < cashTx.Count)
                 w.Add($"Application counters: notes are counted for {read.Count} of the {cashTx.Count} cash transactions since the reset" +
                       (asked < cashTx.Count ? $" (the latest {asked}, Ktc:TransactionNotesMax)." : " (KTC had no per-transaction counters for the others)."));
-            return (counters, byType, $"KTC per-transaction counters of {read.Count} cash transaction(s){(running ? ", counted as the change from one transaction to the next" : "")}");
+            return (counters, byType, $"KTC per-transaction counters of {read.Count} cash transaction(s){(running ? ", counted as the change from one transaction to the next" : "")}", byDenom);
         }
 
         // No per-transaction counters: totals from the device counters (since those counters were last reset), Today not available.
@@ -716,15 +731,32 @@ public class KtcDataService : IKtcDataService
         {
             if (cashTx.Count > 0 || tx.Count > 0)
                 w.Add("Application counters: notes dispensed and accepted are not available. KTC returned no per-transaction counters and no Dispensed / Deposited device counters for this ATM.");
-            return (new List<ApplicationCounter>(), null, null);
+            return (new List<ApplicationCounter>(), null, null, null);
         }
         w.Add("Application counters: KTC returned no per-transaction note counts, so Notes dispensed / accepted show the dispenser and acceptor counters (since those were last reset) and Today is not available.");
         return (new List<ApplicationCounter>
         {
             new("Cash", "Notes dispensed", CounterRules.Unknown, disp ?? CounterRules.Unknown),
             new("Cash", "Notes accepted", CounterRules.Unknown, dep ?? CounterRules.Unknown),
-        }, null, "the dispenser and acceptor device counters (no per-transaction counters from KTC)");
+        }, null, "the dispenser and acceptor device counters (no per-transaction counters from KTC)", null);
     }
+
+    /// <summary>KTC denomination id -> note value (100), from GET Denomination: a value field, else the number in its name. Cached.</summary>
+    private Task<Dictionary<string, decimal>> DenominationValuesAsync(CancellationToken ct) =>
+        Cached("denomination-values", TimeSpan.FromMinutes(30), async () =>
+        {
+            var map = new Dictionary<string, decimal>();
+            foreach (var (k, e) in KtcJson.Rows(await Quiet("api/v1/Denomination", ct)))
+            {
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var did = KtcJson.NormId(KtcJson.Str(e, "ID", "Id", "DenominationID") is { Length: > 0 } x ? x : k);
+                var val = KtcJson.Dbl(e, double.NaN, "Value", "Amount", "FaceValue", "DenominationValue", "NoteValue");
+                if (double.IsNaN(val) && Regex.Match(KtcJson.Str(e, "Name", "DisplayName", "Description"), @"\d+(\.\d+)?") is { Success: true } mm)
+                    val = double.Parse(mm.Value, System.Globalization.CultureInfo.InvariantCulture);
+                if (did.Length > 0 && !double.IsNaN(val) && val > 0) map.TryAdd(did, (decimal)val);
+            }
+            return map;
+        });
 
     /// <summary>KTC denomination id -> name ("AED 100"), from GET Denomination: a name field, else currency and value. Cached.</summary>
     private Task<Dictionary<string, string>> DenominationNamesAsync(CancellationToken ct) =>

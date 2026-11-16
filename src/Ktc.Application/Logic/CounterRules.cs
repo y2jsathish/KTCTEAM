@@ -319,7 +319,8 @@ public static class CounterRules
             (kind == 1 ? disp : acc).Add(new NoteRec(comp, exact, denom, v));
         }
         if (disp.Count == 0 && acc.Count == 0) return null;
-        return new TxNotes(SumNotes(disp), SumNotes(acc));
+        var (d, dd) = SplitNotes(disp); var (a, ad) = SplitNotes(acc);
+        return new TxNotes(d, a) { DispensedByDenomination = dd, AcceptedByDenomination = ad };
     }
 
     private sealed record NoteRec(string Comp, bool Exact, string Denom, long V);
@@ -347,15 +348,57 @@ public static class CounterRules
     // Exact counter names win over variants (Deposited_L2 / _L3 / _L4 are breakdowns of Deposited). Records per denomination are
     // summed; a record without a denomination (id 0) next to per-denomination records is taken as their total, not added to them.
     // When a device and its sub-device (Cash Dispenser and Cash Dispenser (DN_CdmRm4V)) both report the transaction, the larger is used, not both.
-    private static long SumNotes(List<NoteRec> l)
+    // The split by denomination comes from the same device: its per-denomination records, plus what a total-only record counts beyond them ("").
+    private static (long Total, Dictionary<string, long> ByDenomination) SplitNotes(List<NoteRec> l)
     {
-        if (l.Count == 0) return 0;
+        var split = new Dictionary<string, long>();
+        if (l.Count == 0) return (0, split);
         var use = l.Any(x => x.Exact) ? l.Where(x => x.Exact).ToList() : l;
-        return use.GroupBy(x => x.Comp).Max(g =>
+        var best = use.GroupBy(x => x.Comp).Select(g =>
         {
             long zero = g.Where(x => x.Denom is "" or "0").Sum(x => x.V), per = g.Where(x => x.Denom is not ("" or "0")).Sum(x => x.V);
-            return Math.Max(zero, per);
-        });
+            return (Total: Math.Max(zero, per), Group: g.ToList(), Extra: zero - per);
+        }).MaxBy(x => x.Total);
+        foreach (var x in best.Group.Where(x => x.Denom is not ("" or "0") && x.V > 0))
+        { var k = KtcJson.NormId(x.Denom); split[k] = split.GetValueOrDefault(k) + x.V; }
+        if (best.Extra > 0) split[""] = best.Extra;
+        return (best.Total, split);
+    }
+
+    /// <summary>The note values always listed in "Notes by denomination", with 0 when no note of that value moved.</summary>
+    public static readonly decimal[] StandardDenominations = { 50, 100, 200, 500, 1000, 2000 };
+
+    /// <summary>
+    /// Notes dispensed / accepted per note value. <paramref name="values"/> maps KTC DenominationID to the note value. With
+    /// <paramref name="standard"/> every standard value is listed (0 when none moved); ids without a value are listed as "unknown (id N)".
+    /// </summary>
+    public static List<NotesByDenomination> ByDenomination(IEnumerable<TxNotes> notes, IReadOnlyDictionary<string, decimal> values, bool standard)
+    {
+        var d = new Dictionary<string, long>(); var a = new Dictionary<string, long>();
+        foreach (var n in notes)
+        {
+            foreach (var (k, v) in n.DispensedByDenomination) d[k] = d.GetValueOrDefault(k) + v;
+            foreach (var (k, v) in n.AcceptedByDenomination) a[k] = a.GetValueOrDefault(k) + v;
+        }
+        var byValue = new Dictionary<decimal, (long D, long A, List<string> Ids)>();
+        if (standard) foreach (var s in StandardDenominations) byValue[s] = (0, 0, new List<string>());
+        var unknown = new List<NotesByDenomination>(); NotesByDenomination? notSplit = null;
+        foreach (var k in d.Keys.Union(a.Keys).OrderBy(k => k.Length).ThenBy(k => k, StringComparer.Ordinal))
+        {
+            long dk = d.GetValueOrDefault(k), ak = a.GetValueOrDefault(k);
+            if (k == "") { notSplit = new NotesByDenomination("Not split by denomination", null, null, dk, ak); continue; }
+            if (values.TryGetValue(k, out var val))
+            {
+                var c = byValue.TryGetValue(val, out var cur) ? cur : (0, 0, new List<string>());
+                c.Ids.Add(k); byValue[val] = (c.D + dk, c.A + ak, c.Ids);
+            }
+            else unknown.Add(new NotesByDenomination($"unknown (id {k})", null, k, dk, ak));
+        }
+        var res = byValue.OrderBy(kv => kv.Key)
+            .Select(kv => new NotesByDenomination(kv.Key.ToString("0.##", CultureInfo.InvariantCulture), kv.Key, kv.Value.Ids.Count == 0 ? null : string.Join(",", kv.Value.Ids), kv.Value.D, kv.Value.A))
+            .Concat(unknown).ToList();
+        if (notSplit != null) res.Add(notSplit);
+        return res;
     }
 
     private static (string? Name, long? Value) ReadNamedCount(JsonElement e, Func<JsonElement, (string? Component, string? Property)>? names, out string component)
@@ -430,6 +473,8 @@ public static class CounterRules
         var rows = new List<IReadOnlyList<string>>();
         foreach (var a in c.Application.OrderBy(a => CategoryRank(a.Category)))
             rows.Add(new[] { "Application", a.Category, a.Name, N(a.Today), N(a.SinceReset), "", "" });
+        foreach (var x in c.NotesByDenomination ?? Array.Empty<NotesByDenomination>())
+            rows.Add(new[] { "Notes by denomination", x.Denomination, x.DenominationId is { } di ? $"KTC id {di}" : "", "", $"{N(x.NotesDispensed)} dispensed / {N(x.NotesAccepted)} accepted", "", "" });
         foreach (var t in c.NotesByType ?? Array.Empty<NotesByType>())
             rows.Add(new[] { "Notes by type", t.Type, $"{N(t.Transactions)} transactions", "", $"{N(t.NotesDispensed)} dispensed / {N(t.NotesAccepted)} accepted", "", "" });
         foreach (var x in c.Xfs.OrderBy(x => ClassRank(x.ServiceClass)))

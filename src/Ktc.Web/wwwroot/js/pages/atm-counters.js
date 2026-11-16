@@ -30,11 +30,21 @@
     <table class="table table-sm small mb-0 counter-table"><thead><tr><th>Counter</th><th class="text-end">Today</th><th class="text-end">Since reset</th></tr></thead>
     <tbody>${rows.map(x=>`<tr><td>${K.esc(x.name)}</td><td class="text-end num">${n(x.today)}</td><td class="text-end num">${n(x.sinceReset)}</td></tr>`).join('')}</tbody>
     ${g==='Cash'?'':`<tfoot><tr><th>Total</th><th class="text-end num">${n(sum(rows,'today'))}</th><th class="text-end num">${n(sum(rows,'sinceReset'))}</th></tr></tfoot>`}</table></div></div>`;}).join('');
+  // Notes by denomination: 50, 100, 200, 500, 1000 and 2000 always listed (0 when none moved), then ids KTC has no note value for.
+  const bd=c.notesByDenomination||[];
+  const amt=v=>v==null?'<span class="text-muted">–</span>':Number(v).toLocaleString();
+  const amtSum=(rows,f)=>rows.some(x=>x[f]!=null)?rows.reduce((s,x)=>s+(x[f]||0),0):null;
+  if(bd.length)html+=`<div class="col-xl-6 col-12"><div class="cardx"><h6><i class="bi bi-cash-coin"></i> Notes by denomination (since reset)</h6>
+    <table class="table table-sm small mb-0 counter-table"><thead><tr><th>Denomination</th><th class="text-end">Notes dispensed</th><th class="text-end">Amount dispensed</th><th class="text-end">Notes accepted</th><th class="text-end">Amount accepted</th></tr></thead>
+    <tbody>${bd.map(x=>`<tr${x.value==null?' class="table-warning-soft"':''}><td>${K.esc(x.denomination)}${x.denominationId&&x.value!=null?` <span class="text-muted" title="KTC denomination id">#${K.esc(x.denominationId)}</span>`:''}</td><td class="text-end num">${n(x.notesDispensed)}</td><td class="text-end num">${amt(x.amountDispensed)}</td><td class="text-end num">${n(x.notesAccepted)}</td><td class="text-end num">${amt(x.amountAccepted)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><th>Total</th><th class="text-end num">${n(sum(bd,'notesDispensed'))}</th><th class="text-end num">${amt(amtSum(bd,'amountDispensed'))}</th><th class="text-end num">${n(sum(bd,'notesAccepted'))}</th><th class="text-end num">${amt(amtSum(bd,'amountAccepted'))}</th></tr></tfoot></table></div></div>`;
   const bt=c.notesByType||[];
+  const split=(l,f)=>(l||[]).filter(x=>x[f]>0).map(x=>`${K.esc(x.denomination)}×${Number(x[f]).toLocaleString()}`).join(' · ');
+  const splitCell=x=>{const d=split(x.denominations,'notesDispensed'),a=split(x.denominations,'notesAccepted');return [d&&`<span title="Dispensed">↑ ${d}</span>`,a&&`<span title="Accepted">↓ ${a}</span>`].filter(Boolean).join('<br>')||'<span class="text-muted">–</span>';};
   if(bt.length)html+=`<div class="col-12"><div class="cardx"><h6><i class="bi bi-cash-stack"></i> Notes by transaction type (since reset)</h6>
-    <table class="table table-sm small mb-0 counter-table"><thead><tr><th>Transaction type</th><th class="text-end">Transactions</th><th class="text-end">Notes dispensed</th><th class="text-end">Notes accepted</th><th class="text-end">Notes per transaction</th></tr></thead>
-    <tbody>${bt.map(x=>`<tr><td>${K.esc(x.type)}</td><td class="text-end num">${n(x.transactions)}</td><td class="text-end num">${n(x.notesDispensed)}</td><td class="text-end num">${n(x.notesAccepted)}</td><td class="text-end num">${x.transactions?((x.notesDispensed+x.notesAccepted)/x.transactions).toFixed(1):'–'}</td></tr>`).join('')}</tbody>
-    <tfoot><tr><th>Total</th><th class="text-end num">${n(sum(bt,'transactions'))}</th><th class="text-end num">${n(sum(bt,'notesDispensed'))}</th><th class="text-end num">${n(sum(bt,'notesAccepted'))}</th><th></th></tr></tfoot></table></div></div>`;
+    <table class="table table-sm small mb-0 counter-table"><thead><tr><th>Transaction type</th><th class="text-end">Transactions</th><th class="text-end">Notes dispensed</th><th class="text-end">Notes accepted</th><th class="text-end">Notes per transaction</th><th>By denomination</th></tr></thead>
+    <tbody>${bt.map(x=>`<tr><td>${K.esc(x.type)}</td><td class="text-end num">${n(x.transactions)}</td><td class="text-end num">${n(x.notesDispensed)}</td><td class="text-end num">${n(x.notesAccepted)}</td><td class="text-end num">${x.transactions?((x.notesDispensed+x.notesAccepted)/x.transactions).toFixed(1):'–'}</td><td class="num">${splitCell(x)}</td></tr>`).join('')}</tbody>
+    <tfoot><tr><th>Total</th><th class="text-end num">${n(sum(bt,'transactions'))}</th><th class="text-end num">${n(sum(bt,'notesDispensed'))}</th><th class="text-end num">${n(sum(bt,'notesAccepted'))}</th><th></th><th></th></tr></tfoot></table></div></div>`;
   $id('appCounters').innerHTML=html;
  }
 
