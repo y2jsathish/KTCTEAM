@@ -71,6 +71,8 @@ public interface IKtcDataService
     Task<AtmAvailability> GetAvailabilityAsync(string atmId, DateTime from, DateTime to, CancellationToken ct = default);
     /// <summary>Current status of each hardware component (card reader, dispenser, printers, ...) of one ATM.</summary>
     Task<AtmHardware?> GetHardwareAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Application and CEN/XFS device counters of one ATM, read from the configurable Ktc:CountersEndpoint. Null when no ATM matches.</summary>
+    Task<AtmCounters?> GetCountersAsync(string atmId, CancellationToken ct = default);
 }
 
 // ---- Services ----

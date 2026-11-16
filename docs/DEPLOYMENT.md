@@ -18,6 +18,7 @@ Settings bind from `appsettings.json` → environment variables (`__` = section 
 | `Ktc__ServiceAccount__Username/Password/AuthMode` | enables background refresh + alerting + scheduled reports |
 | `Ktc__SeverityMap__{level}` / `Ktc__TicketStatusMap__{statusByte}` | map KTC levels / status bytes → P1–P4 / Open·Assigned·InProgress·Resolved·Closed |
 | `Ktc__TicketSearchGroupId` / `TransactionSearchGroupId` | `GroupID` used in the search bodies (sample values 2 / 1) |
+| `Ktc__CountersEndpoint` | KTC route for the ATM 360 **Application Counters** / **XFS Counters** tabs, default `api/v1/Client/{atmId}/Counters` (`{atmId}` = KTC client id). Expected JSON: `{ "CollectedUtc", "LastResetUtc", "Application": [{ "Category", "Name", "Today", "SinceReset" }], "Xfs": [{ "Device", "ServiceClass", "LogicalName", "Counter", "Value", "Threshold" }] }`; a flat list of counter records also works. Empty turns the tabs off. The mock KTC serves demo data on the default route |
 | `Portal__AdminUsers__0`, `Portal__OperatorUsers__0` | usernames as typed at login; everyone else is Viewer |
 | `Portal__TimeZoneId` | `Asia/Dubai` — defines "today" and hourly buckets |
 | `Notifications__Smtp__*`, `Notifications__TeamsWebhookUrl`, `Notifications__DefaultRecipients__0`, `Notifications__PortalBaseUrl` | alert/report delivery |
