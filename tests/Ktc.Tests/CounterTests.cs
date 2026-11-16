@@ -324,6 +324,35 @@ public class CounterTests
         Assert.Equal("n/a", csv[3]);
     }
 
+    // The shapes the live KTC sent for ATM 19 (Client/19/Counters and HistoricalCounter/ClientTransactionCounters): ids only, no names.
+    [Fact]
+    public async Task Reads_live_ktc_id_records_for_device_counters_and_notes()
+    {
+        var api = new RealShapes
+        {
+            Counters = """
+                [{"ClientID":19,"DBComponentID":7,"DBPropertyID":319,"DenominationID":0,"CounterValue":440,"Timestamp":"2026-11-16T07:22:34","LastResetTimestamp":"2026-11-16T06:50:00","LastMismatchSize":0},
+                 {"ClientID":19,"DBComponentID":7,"DBPropertyID":321,"DenominationID":0,"CounterValue":2100,"Timestamp":"2026-11-16T07:22:34","LastResetTimestamp":"2026-11-16T06:50:00","LastMismatchSize":0},
+                 {"ClientID":19,"DBComponentID":8,"DBPropertyID":320,"DenominationID":0,"CounterValue":120,"Timestamp":"2026-11-16T07:22:34","LastResetTimestamp":"2026-11-16T06:50:00","LastMismatchSize":0},
+                 {"ClientID":19,"DBComponentID":5,"DBPropertyID":322,"DenominationID":0,"CounterValue":233,"Timestamp":"2026-11-16T07:22:34","LastResetTimestamp":"2026-11-16T06:50:00","LastMismatchSize":0}]
+                """,
+            TxCounters = new()
+            {
+                // Dispenser and its sub-device both report the transaction: counted once. Remaining goes down: not notes.
+                ["1"] = """[{"ClientID":19,"ComponentID":16,"PropertyID":319,"DenominationID":0,"Timestamp":"2026-11-16T07:22:34","Value":839,"Delta":2,"Reset":false,"UntilTimestamp":"0001-01-01T00:00:00","TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":319,"DenominationID":0,"Value":440,"Delta":2,"TransactionID":1},{"ClientID":19,"ComponentID":7,"PropertyID":321,"DenominationID":0,"Value":2100,"Delta":-2,"TransactionID":1}]""",
+                ["2"] = """[{"ClientID":19,"ComponentID":8,"PropertyID":320,"DenominationID":0,"Value":120,"Delta":5,"TransactionID":2}]""",
+            }
+        };
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Contains(c!.Xfs, x => x.Device == "Cash Dispenser" && x.ServiceClass == "CDM" && x.Counter == "Dispensed" && x.Value == 440 && x.LogicalName == "component 7");
+        Assert.Contains(c.Xfs, x => x.Device == "Cash Acceptor" && x.ServiceClass == "CIM" && x.Counter == "Deposited" && x.Value == 120);
+        Assert.Contains(c.Xfs, x => x.Device == "Card Reader" && x.Counter == "Bad reads" && x.Status == "Warning");
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("api/v1/Client/19/Counters: 4 counters named") && d.Contains("[property 319]"));
+        Assert.Equal(2, c.Application.Single(a => a.Name == "Notes dispensed").SinceReset);
+        Assert.Equal(5, c.Application.Single(a => a.Name == "Notes accepted").SinceReset);
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("Per-transaction counters reported: ") && d.Contains("Cash Dispenser [component 7] / Dispensed [property 319]: delta 2 in 1 tx = NOTES DISPENSED"));
+    }
+
     [Fact]
     public void Device_selection_filters_the_xfs_counters()
     {
@@ -365,8 +394,8 @@ public class CounterTests
                      {"CID":19,"CompId":4,"PropId":303,"VID":-1,"NumericValue":9.0,"UseNumeric":true,"Timestamp":"2026-11-16T06:55:51.27"}]
                     """,
                 "api/v1/Client/19/CurrentCashUnitStatus" => Empty ? "[]" : """[{"ClientID":19,"DBComponentID":7,"TypeID":21,"StatusID":1,"CashUnitNumber":1,"Value":100.0,"Count":812,"Total":0,"Timestamp":"2026-11-16T05:37:39.823"}]""",
-                "api/v1/ComponentList" => """{"1":{"ID":1,"DBName":"Application","DisplayName":"Application"},"4":{"ID":4,"DBName":"KXDevice.KXCamera","DisplayName":"Camera"},"5":{"ID":5,"DBName":"KXDevice.KXCardReader","DisplayName":"Card Reader"},"7":{"ID":7,"DBName":"KXDevice.KXCashDispenser","DisplayName":"Cash Dispenser"}}""",
-                "api/v1/PropertyList" => """{"70":{"ID":70,"DisplayName":"ShutdownDuration"},"71":{"ID":71,"DisplayName":"Device status"},"300":{"ID":300,"DisplayName":"Cards retained"},"301":{"ID":301,"DisplayName":"Fatal error count"},"302":{"ID":302,"DisplayName":"Firmware version"},"303":{"ID":303,"DisplayName":"Pictures taken"}}""",
+                "api/v1/ComponentList" => """{"1":{"ID":1,"DBName":"Application","DisplayName":"Application"},"4":{"ID":4,"DBName":"KXDevice.KXCamera","DisplayName":"Camera"},"5":{"ID":5,"DBName":"KXDevice.KXCardReader","DisplayName":"Card Reader"},"7":{"ID":7,"DBName":"KXDevice.KXCashDispenser","DisplayName":"Cash Dispenser"},"8":{"ID":8,"DBName":"KXDevice.KXCashAcceptor","DisplayName":"Cash Acceptor"},"16":{"ID":16,"DBName":"KXDevice.KXCashDispenser.DN_CdmRm4V","DisplayName":"Cash Dispenser (DN_CdmRm4V)"}}""",
+                "api/v1/PropertyList" => """{"70":{"ID":70,"DisplayName":"ShutdownDuration"},"71":{"ID":71,"DisplayName":"Device status"},"300":{"ID":300,"DisplayName":"Cards retained"},"301":{"ID":301,"DisplayName":"Fatal error count"},"302":{"ID":302,"DisplayName":"Firmware version"},"303":{"ID":303,"DisplayName":"Pictures taken"},"319":{"ID":319,"DisplayName":"Dispensed"},"320":{"ID":320,"DisplayName":"Deposited"},"321":{"ID":321,"DisplayName":"Remaining"},"322":{"ID":322,"DisplayName":"BadReads"}}""",
                 "api/v1/ValueList" => """{"6":"IDLE"}""",
                 "api/v1/Group" => """[{"ID":1,"Name":"Unknown Clients"},{"ID":2,"Name":"All Clients"}]""",
                 "api/v1/TransactionType" => """{"1":{"ID":1,"Name":"CashWithdrawal","STXFieldLookupIDs":[4]}}""",
