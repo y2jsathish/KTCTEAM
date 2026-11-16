@@ -18,11 +18,21 @@ public static class CounterRules
     public const string Warning = "Warning";
 
     /// <summary>Order of the application counter categories on the page and in exports.</summary>
-    public static readonly string[] Categories = { "Transactions", "Exceptions", "Operations" };
+    public static readonly string[] Categories = { "Transactions", "Cash", "Exceptions", "Operations" };
 
     /// <summary>XFS service classes and their device names, in the order the cards are shown.</summary>
     public static readonly (string Class, string Device)[] ServiceClasses =
-        { ("IDC", "Card Reader"), ("CDM", "Cash Dispenser"), ("CIM", "Cash Acceptor"), ("PTR", "Printer"), ("PIN", "EPP / PIN Pad"), ("SIU", "Sensors") };
+        { ("IDC", "Card Reader"), ("CDM", "Cash Dispenser"), ("CIM", "Cash Acceptor"), ("IPM", "Cheque Scanner"), ("PTR", "Printer"), ("PIN", "EPP / PIN Pad"), ("SIU", "Sensors") };
+
+    /// <summary>Value of an application counter that KTC cannot provide (shown as "n/a").</summary>
+    public const long Unknown = -1;
+
+    /// <summary>Keeps only the XFS counters of the given service classes (comma separated, e.g. "CDM,CIM,IPM"); empty or null keeps all.</summary>
+    public static IReadOnlyList<XfsCounter> FilterClasses(IReadOnlyList<XfsCounter> xfs, string? classes)
+    {
+        var set = (classes ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return set.Count == 0 ? xfs : xfs.Where(x => set.Contains(x.ServiceClass)).ToList();
+    }
 
     /// <summary>A counter is flagged when its value is at or above its threshold.</summary>
     public static string Status(long value, long? threshold) => threshold is { } t && value >= t ? Warning : Ok;
@@ -173,7 +183,8 @@ public static class CounterRules
         if (c.Length == 0) return null;
         if (c.Contains("cardreader") || c.Contains("idc") || c.Contains("chipcard") || c.Contains("contactless")) return "IDC";
         if (c.Contains("dispenser") || c.Contains("cdm") || c.Contains("recycler")) return "CDM";
-        if (c.Contains("cashacceptor") || c.Contains("cashin") || c.Contains("cim") || c.Contains("depository") || c.Contains("chequ") || c.Contains("check")) return "CIM";
+        if (c.Contains("chequ") || c.Contains("check") || c.Contains("bundle") || c.Contains("ipm") || c.Contains("itemprocess")) return "IPM";
+        if (c.Contains("cashacceptor") || c.Contains("cashin") || c.Contains("cim") || c.Contains("depository")) return "CIM";
         if (c.Contains("printer") || c.Contains("ptr") || c.Contains("passbook")) return "PTR";
         if (c.Contains("pinpad") || c.Contains("epp") || c.Contains("pin")) return "PIN";
         if (c.Contains("sensor") || c.Contains("door") || c.Contains("indicator") || c.Contains("siu") || c.Contains("guidelight") || c.Contains("alarm") || c.Contains("safe")) return "SIU";
@@ -275,13 +286,122 @@ public static class CounterRules
         return (list, since, last == null ? null : (reset != null && IsResetType(reset.Type) ? reset.Type : last.Type));
     }
 
+    // ------------------------------------------------------------------------------------------------------------
+    // Notes dispensed / accepted per transaction (GET HistoricalCounter/ClientTransactionCounters?clientid=&transactionid=).
+    // ------------------------------------------------------------------------------------------------------------
+
+    /// <summary>True for a customer transaction that moves notes (cash withdrawal or cash deposit).</summary>
+    public static bool IsCashTransaction(TransactionDto t) =>
+        !IsSupervisorType(t.Type) && CountersFor(t).Any(n => n is "Cash withdrawals" or "Cash deposits");
+
+    private static readonly Regex DispensedExact = new(@"^(dispensed|dispense|notesdispensed|cashdispensed|presented|notespresented)$", Ci);
+    private static readonly Regex AcceptedExact = new(@"^(deposited|notesdeposited|cashdeposited|accepted|notesaccepted|cashin|cashinnotes|stored|notesstored)$", Ci);
+    private static readonly Regex NotMoved = new(@"remov|reject|retract|retain|return|remain|loaded|initial|recycl|operation|item|cheque|check|capture", Ci);
+
+    /// <summary>
+    /// Notes moved by one transaction from KTC's per-transaction counters (List&lt;HistoricalCounter&gt;). The field names are not
+    /// documented, so each record is read by content: a counter name (Dispensed, Deposited, ...), an optional component and
+    /// denomination, and a whole-number value. Returns null when there is no answer or the records hold no note counter
+    /// the portal recognises; an empty list means the transaction moved no notes.
+    /// </summary>
+    public static TxNotes? ReadTransactionNotes(JsonElement? root)
+    {
+        if (root is not { } r) return null;
+        if (r.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) return null;
+        var recs = KtcJson.Items(r).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        if (recs.Count == 0) return r.ValueKind == JsonValueKind.Array ? new TxNotes(0, 0) : null;
+        var disp = new List<(bool Exact, string Denom, long V)>(); var acc = new List<(bool Exact, string Denom, long V)>();
+        foreach (var e in recs)
+        {
+            var (name, value) = ReadNamedCount(e);
+            if (name == null || value is not { } v || v < 0) continue;
+            var f = Flat(name);
+            var denom = KtcJson.Str(e, "DenominationID", "DenominationId", "DenomID", "Denomination", "CashUnitNumber", "UnitNumber", "CashUnitID");
+            if (DispensedExact.IsMatch(f)) disp.Add((true, denom, v));
+            else if (AcceptedExact.IsMatch(f)) acc.Add((true, denom, v));
+            else if (NotMoved.IsMatch(f)) continue;
+            else if (f.StartsWith("dispens") || f.StartsWith("present")) disp.Add((false, denom, v));
+            else if (f.StartsWith("deposit") || f.StartsWith("accept") || f.StartsWith("cashin")) acc.Add((false, denom, v));
+        }
+        if (disp.Count == 0 && acc.Count == 0) return null;
+        return new TxNotes(SumNotes(disp), SumNotes(acc));
+    }
+
+    // Exact counter names win over variants (Deposited_L2 / _L3 / _L4 are breakdowns of Deposited). Records per denomination are
+    // summed; a record without a denomination (id 0) next to per-denomination records is taken as their total, not added to them.
+    private static long SumNotes(List<(bool Exact, string Denom, long V)> l)
+    {
+        if (l.Count == 0) return 0;
+        var use = l.Any(x => x.Exact) ? l.Where(x => x.Exact).ToList() : l;
+        long zero = use.Where(x => x.Denom is "" or "0").Sum(x => x.V), per = use.Where(x => x.Denom is not ("" or "0")).Sum(x => x.V);
+        return Math.Max(zero, per);
+    }
+
+    private static (string? Name, long? Value) ReadNamedCount(JsonElement e)
+    {
+        string? name = null;
+        foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.String && !Regex.IsMatch(p.Name, "comp|device|currency|uuid|time|date", Ci))
+                     .OrderBy(p => Regex.IsMatch(p.Name, "counter|name|type|key", Ci) ? 0 : 1))
+            if ((p.Value.GetString() ?? "").Trim() is { Length: > 0 } v && !v.StartsWith("KXDevice", StringComparison.OrdinalIgnoreCase)
+                && !double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out _) && !DateTime.TryParse(v, CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) { name = v; break; }
+        var value = Long(e, "Value", "Count", "CounterValue", "NoteCount", "Notes", "Total", "Current");
+        if (value == null)
+            foreach (var p in e.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Number && !Regex.IsMatch(p.Name, @"id$|^id|client|component|comp$|denom|currency|unit|delta", Ci)))
+            { value = p.Value.TryGetInt64(out var l) ? l : (long)Math.Round(p.Value.GetDouble()); break; }
+        return (name, value);
+    }
+
+    /// <summary>
+    /// "Notes dispensed" and "Notes accepted" (today and since the reset) and the notes per transaction type, from the notes of each
+    /// cash transaction since the reset. When KTC's values grow from one transaction to the next (running totals rather than the
+    /// transaction's own notes), the difference to the previous transaction is used.
+    /// </summary>
+    public static (List<ApplicationCounter> Counters, List<NotesByType> ByType, bool RunningTotals) NotesFromTransactions(
+        IReadOnlyList<(TransactionDto Tx, TxNotes Notes)> rows, DateTime todayStartUtc)
+    {
+        var list = rows.OrderBy(r => r.Tx.TimeUtc).ToList();
+        var d = Own(list.Select(r => r.Notes.Dispensed).ToList(), 100, out var runD);
+        var a = Own(list.Select(r => r.Notes.Accepted).ToList(), 300, out var runA);
+        long dt = 0, at = 0, ds = 0, as_ = 0;
+        var byType = new Dictionary<string, (long N, long D, long A)>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < list.Count; i++)
+        {
+            ds += d[i]; as_ += a[i];
+            if (list[i].Tx.TimeUtc >= todayStartUtc) { dt += d[i]; at += a[i]; }
+            var type = list[i].Tx.Type.Length > 0 ? list[i].Tx.Type : "Unknown";
+            var c = byType.GetValueOrDefault(type); byType[type] = (c.N + 1, c.D + d[i], c.A + a[i]);
+        }
+        var counters = new List<ApplicationCounter> { new("Cash", "Notes dispensed", dt, ds), new("Cash", "Notes accepted", at, as_) };
+        var types = byType.Select(kv => new NotesByType(kv.Key, kv.Value.N, kv.Value.D, kv.Value.A))
+                          .OrderByDescending(x => x.NotesDispensed + x.NotesAccepted).ThenBy(x => x.Type).ToList();
+        return (counters, types, runD || runA);
+    }
+
+    // The transaction's own notes: the values as they are, or, when they never go down and are larger than one transaction can move,
+    // the difference to the previous transaction (the first one then counts 0).
+    private static List<long> Own(List<long> v, long maxPerTx, out bool running)
+    {
+        var nz = v.Where(x => x > 0).OrderBy(x => x).ToList();
+        running = nz.Count >= 3 && nz[nz.Count / 2] > maxPerTx && v.Zip(v.Skip(1)).All(p => p.Second >= p.First || p.Second == 0);
+        if (!running) return v;
+        var res = new List<long>(v.Count); long prev = -1;
+        foreach (var x in v)
+        {
+            if (x == 0) { res.Add(0); continue; }
+            res.Add(prev < 0 ? 0 : Math.Max(0, x - prev)); prev = x;
+        }
+        return res;
+    }
+
     /// <summary>The counters of one ATM as a report (CSV / Excel / PDF): application counters first, then XFS counters.</summary>
     public static ReportData ToReport(AtmCounters c, DateTime generatedUtc)
     {
-        static string N(long v) => v.ToString("N0", CultureInfo.InvariantCulture);
+        static string N(long v) => v < 0 ? "n/a" : v.ToString("N0", CultureInfo.InvariantCulture);
         var rows = new List<IReadOnlyList<string>>();
         foreach (var a in c.Application.OrderBy(a => CategoryRank(a.Category)))
             rows.Add(new[] { "Application", a.Category, a.Name, N(a.Today), N(a.SinceReset), "", "" });
+        foreach (var t in c.NotesByType ?? Array.Empty<NotesByType>())
+            rows.Add(new[] { "Notes by type", t.Type, $"{N(t.Transactions)} transactions", "", $"{N(t.NotesDispensed)} dispensed / {N(t.NotesAccepted)} accepted", "", "" });
         foreach (var x in c.Xfs.OrderBy(x => ClassRank(x.ServiceClass)))
             rows.Add(new[] { "XFS", $"{x.Device} ({x.ServiceClass}{(x.LogicalName is { } l ? " / " + l : "")})", x.Counter, "", N(x.Value), x.Threshold is { } t ? N(t) : "", x.Status });
         var flagged = c.Xfs.Count(x => x.Status != Ok);

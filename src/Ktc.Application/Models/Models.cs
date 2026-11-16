@@ -189,4 +189,11 @@ public record XfsCounter(string Device, string ServiceClass, string? LogicalName
 /// <param name="Diagnostics">What KTC returned (rows, components, transactions), so an empty tab says why.</param>
 public record AtmCounters(string AtmId, string AtmName, DateTime? CollectedUtc, DateTime? LastResetUtc,
     IReadOnlyList<ApplicationCounter> Application, IReadOnlyList<XfsCounter> Xfs, IReadOnlyList<string> Warnings,
-    string? ResetSource = null, IReadOnlyList<string>? Diagnostics = null);
+    string? ResetSource = null, IReadOnlyList<string>? Diagnostics = null,
+    IReadOnlyList<NotesByType>? NotesByType = null, string? NotesSource = null);
+
+/// <summary>Notes moved by one transaction (KTC per-transaction counters).</summary>
+public record TxNotes(long Dispensed, long Accepted);
+
+/// <summary>Notes dispensed and accepted since the reset by one transaction type.</summary>
+public record NotesByType(string Type, long Transactions, long NotesDispensed, long NotesAccepted);

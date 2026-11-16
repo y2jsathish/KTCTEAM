@@ -227,11 +227,112 @@ public class CounterTests
         Assert.Empty(c.Warnings);
         Assert.NotNull(c.LastResetUtc);
         Assert.True(c.ResetSource!.StartsWith("last "), c.ResetSource + " | " + string.Join(" | ", c.Diagnostics!));
-        Assert.Equal(CounterRules.ApplicationCounters.Select(a => a.Name), c.Application.Select(a => a.Name));
+        Assert.Equal(CounterRules.ApplicationCounters.Select(a => a.Name).Concat(new[] { "Notes dispensed", "Notes accepted" }), c.Application.Select(a => a.Name));
         Assert.True(c.Application.Single(a => a.Name == "Cash withdrawals").SinceReset > 0);
+        Assert.True(c.Application.Single(a => a.Name == "Notes dispensed").SinceReset > 0, string.Join(" | ", c.Diagnostics!));
+        Assert.True(c.Application.Single(a => a.Name == "Notes accepted").SinceReset > 0);
+        Assert.Contains(c.NotesByType!, t => t.Type == "Cash Withdrawal" && t.NotesDispensed > 0 && t.NotesAccepted == 0);
+        Assert.Contains(c.NotesByType!, t => t.Type == "Deposit" && t.NotesAccepted > 0);
         Assert.All(c.Application, a => Assert.True(a.SinceReset >= a.Today));
-        Assert.Equal(new[] { "IDC", "CDM", "CIM", "PTR", "PIN", "SIU" }, c.Xfs.Select(x => x.ServiceClass).Distinct());
+        Assert.All(c.Warnings, w => Assert.StartsWith("Application counters: notes are counted for", w));   // only the Ktc:TransactionNotesMax note
+        Assert.Equal(new[] { "IDC", "CDM", "CIM", "IPM", "PTR", "PIN", "SIU" }, c.Xfs.Select(x => x.ServiceClass).Distinct());
         Assert.Contains(c.Xfs, x => x.Threshold != null);
+    }
+
+    // ---------------- notes dispensed / accepted ----------------
+
+    [Theory]
+    // Per denomination, as KTC's UI looks the denominations up: 2 + 3 notes.
+    [InlineData("""[{"ClientID":19,"TransactionID":7,"ComponentName":"KXDevice.KXCashDispenser","CounterName":"Dispensed","DenominationID":1,"Value":2},{"ClientID":19,"TransactionID":7,"ComponentName":"KXDevice.KXCashDispenser","CounterName":"Dispensed","DenominationID":2,"Value":3}]""", 5, 0)]
+    // A total row (denomination 0) next to the per-denomination rows is not added twice; Rejected / Retracted are not dispensed notes.
+    [InlineData("""[{"Name":"Dispensed","DenominationID":0,"Count":5},{"Name":"Dispensed","DenominationID":1,"Count":2},{"Name":"Dispensed","DenominationID":2,"Count":3},{"Name":"Rejected","DenominationID":0,"Count":1},{"Name":"Retracted","Count":4}]""", 5, 0)]
+    // Deposited wins over its Deposited_L2 / _L4 breakdown; Returned / Retained do not count.
+    [InlineData("""[{"Counter":"Deposited","Value":12},{"Counter":"Deposited_L2","Value":2},{"Counter":"Deposited_L4","Value":10},{"Counter":"Returned","Value":3}]""", 0, 12)]
+    [InlineData("""[]""", 0, 0)]
+    public void Reads_notes_of_one_transaction(string json, long dispensed, long accepted)
+    {
+        var n = CounterRules.ReadTransactionNotes(Json(json));
+        Assert.Equal(new TxNotes(dispensed, accepted), n);
+    }
+
+    [Fact]
+    public void Transaction_without_note_counters_is_unreadable()
+    {
+        Assert.Null(CounterRules.ReadTransactionNotes(Json("""[{"CounterName":"GoodReads","Value":3}]""")));
+        Assert.Null(CounterRules.ReadTransactionNotes(null));
+    }
+
+    [Fact]
+    public void Notes_counters_count_today_since_reset_and_per_type()
+    {
+        var day = new DateTime(2026, 11, 16, 0, 0, 0, DateTimeKind.Utc);
+        (TransactionDto, TxNotes) R(string type, DateTime at, long d, long a) => (new TransactionDto { Id = at.Ticks.ToString(), Type = type, TimeUtc = at, Success = true }, new TxNotes(d, a));
+        var (c, byType, running) = CounterRules.NotesFromTransactions(new[]
+        {
+            R("CashWithdrawal", day.AddHours(-5), 10, 0), R("CashWithdrawal", day.AddHours(2), 4, 0),
+            R("CashDepositToAccount", day.AddHours(3), 0, 25), R("FastCash", day.AddHours(4), 2, 0),
+        }, day);
+        Assert.False(running);
+        Assert.Equal(new ApplicationCounter("Cash", "Notes dispensed", 6, 16), c[0]);
+        Assert.Equal(new ApplicationCounter("Cash", "Notes accepted", 25, 25), c[1]);
+        Assert.Equal(new NotesByType("CashDepositToAccount", 1, 0, 25), byType[0]);
+        Assert.Equal(new NotesByType("CashWithdrawal", 2, 14, 0), byType[1]);
+    }
+
+    [Fact]
+    public void Running_note_totals_are_counted_as_the_change_per_transaction()
+    {
+        var day = new DateTime(2026, 11, 16, 0, 0, 0, DateTimeKind.Utc);
+        var rows = new[] { 1000L, 1010, 1014, 1030 }.Select((v, i) => (new TransactionDto { Id = i.ToString(), Type = "CashWithdrawal", TimeUtc = day.AddHours(i + 1) }, new TxNotes(v, 0))).ToList();
+        var (c, _, running) = CounterRules.NotesFromTransactions(rows, day);
+        Assert.True(running);
+        Assert.Equal(30, c[0].SinceReset);   // 10 + 4 + 16, the first one has no previous value
+    }
+
+    [Fact]
+    public async Task Notes_come_from_ktc_per_transaction_counters()
+    {
+        var api = new RealShapes
+        {
+            TxCounters = new()
+            {
+                ["1"] = """[{"ClientID":19,"ComponentName":"KXDevice.KXCashDispenser","CounterName":"Dispensed","DenominationID":1,"Value":3}]""",
+                ["2"] = "[]",
+            }
+        };
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Equal(3, c!.Application.Single(a => a.Name == "Notes dispensed").SinceReset);
+        Assert.Equal(0, c.Application.Single(a => a.Name == "Notes accepted").SinceReset);
+        Assert.Contains(c.NotesByType!, t => t.Type == "CashWithdrawal" && t.Transactions == 2 && t.NotesDispensed == 3);
+        Assert.StartsWith("KTC per-transaction counters of 2", c.NotesSource);
+        Assert.Contains(c.Diagnostics!, d => d.StartsWith("api/v1/HistoricalCounter/ClientTransactionCounters: 2 cash transactions since the reset, 2 asked, 2 answered"));
+    }
+
+    [Fact]
+    public async Task Without_per_transaction_counters_notes_come_from_the_device_counters()
+    {
+        var api = new RealShapes { Counters = """
+            [{"ClientID":19,"ComponentName":"KXDevice.KXCashDispenser","CounterName":"Dispensed","Value":440,"Delta":0},
+             {"ClientID":19,"ComponentName":"KXDevice.KXCashAcceptor","CounterName":"Deposited","Value":120,"Delta":0}]
+            """ };
+        var c = await Service(api).GetCountersAsync("19");
+        Assert.Equal(new ApplicationCounter("Cash", "Notes dispensed", CounterRules.Unknown, 440), c!.Application.Single(a => a.Name == "Notes dispensed"));
+        Assert.Equal(120, c.Application.Single(a => a.Name == "Notes accepted").SinceReset);
+        Assert.Null(c.NotesByType);
+        Assert.Contains(c.Warnings, w => w.StartsWith("Application counters: KTC returned no per-transaction note counts"));
+        var csv = CounterRules.ToReport(c, DateTime.UtcNow).Rows.Single(r => r[2] == "Notes dispensed");
+        Assert.Equal("n/a", csv[3]);
+    }
+
+    [Fact]
+    public void Device_selection_filters_the_xfs_counters()
+    {
+        var x = new List<XfsCounter> { new("Cash Dispenser", "CDM", null, "Dispensed", 1, null), new("Card Reader", "IDC", null, "Bad reads", 1, null), new("Bundle Check Scanner", "IPM", null, "Items accepted", 1, null) };
+        Assert.Equal(new[] { "CDM", "IPM" }, CounterRules.FilterClasses(x, "cdm, IPM").Select(c => c.ServiceClass));
+        Assert.Equal(3, CounterRules.FilterClasses(x, "").Count);
+        Assert.Empty(CounterRules.FilterClasses(x, "none"));
+        Assert.Equal("IPM", CounterRules.XfsClass("KXDevice.KXBundleCheckScanner"));
+        Assert.Equal("CIM", CounterRules.XfsClass("KXDevice.KXCashAcceptor"));
     }
 
     /// <summary>A KTC server answering in the shapes the real one sends (see the /diag/ktc-token report).</summary>
@@ -240,14 +341,18 @@ public class CounterTests
         public bool Empty { get; init; }
         public string? Counters { get; init; }
         public string? Override { get; init; }
+        /// <summary>HistoricalCounter/ClientTransactionCounters answers by transaction id; null answers 404.</summary>
+        public Dictionary<string, string>? TxCounters { get; init; }
         public List<string> Urls { get; } = new();
         public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
         {
             var path = url.Split('?')[0];
             lock (Urls) Urls.Add(path);
             var now = DateTime.UtcNow; string D(DateTime d) => d.ToString("yyyy-MM-ddTHH:mm:ss");
+            var txId = System.Text.RegularExpressions.Regex.Match(url, @"transactionid=(\d+)").Groups[1].Value;
             string? json = path switch
             {
+                "api/v1/HistoricalCounter/ClientTransactionCounters" => TxCounters?.GetValueOrDefault(txId),
                 "api/v1/Client" => """[{"ID":19,"Name":"ATM-NINETEEN","BusinessID":0},{"ID":5,"Name":"ATM-FIVE","BusinessID":0}]""",
                 "api/v2/Atm/19/Counters" => Override,
                 "api/v1/Client/19/Counters" => Counters,
