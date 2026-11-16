@@ -22,7 +22,7 @@ public class AccountController : Controller
     { _auth = auth; _tokens = tokens; _users = users; _audit = audit; _dp = dp; _opt = opt.Value; }
 
     private LoginViewModel Blank(string? returnUrl) => new()
-    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = _opt.AuthModes, ReturnUrl = returnUrl, MockMode = _opt.UseMock };
+    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = new[] { _opt.DefaultAuthMode }.Concat(_opt.AuthModes).Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim().ToUpperInvariant()).Distinct().ToArray(), ReturnUrl = returnUrl, MockMode = _opt.UseMock };
 
     [AllowAnonymous, HttpGet]
     public IActionResult Login(string? returnUrl = null) => User.Identity?.IsAuthenticated == true ? RedirectToAction("Index", "Home") : View(Blank(returnUrl));
