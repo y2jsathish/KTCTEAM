@@ -518,7 +518,82 @@ public class KtcDataService : IKtcDataService
 
         if (routeApp.Count > 0) { app = routeApp; resetUtc = routeReset ?? resetUtc; resetSource = routeReset.HasValue ? "last reset reported by KTC" : resetSource; }
         if (routeAt > (collected ?? DateTime.MinValue)) collected = routeAt;
-        return new AtmCounters(id, name, collected, resetUtc, app, xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ThenBy(x => x.Device).ToList(), w.ToList(), resetSource, diag);
+
+        // ---- notes dispensed / accepted: KTC's per-transaction counters of each cash transaction since the reset ----
+        var (notes, notesByType, notesSource) = await NotesAsync(id, tx, resetUtc ?? now.AddDays(-days), now, routeXfs, w, diag, ct);
+        app = app.Concat(notes).ToList();
+        return new AtmCounters(id, name, collected, resetUtc, app, xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ThenBy(x => x.Device).ToList(), w.ToList(), resetSource, diag,
+            notesByType, notesSource);
+    }
+
+    /// <summary>
+    /// "Notes dispensed" and "Notes accepted": KTC's per-transaction counters (Ktc:TransactionCountersEndpoint, what KTC's UI reads for one
+    /// transaction) for the latest Ktc:TransactionNotesMax cash transactions since the reset, today and since the reset, plus a split per
+    /// transaction type. When KTC has no per-transaction counters, the totals come from the dispenser "Dispensed" and acceptor "Deposited"
+    /// device counters, with Today shown as not available.
+    /// </summary>
+    private async Task<(List<ApplicationCounter> Counters, List<NotesByType>? ByType, string? Source)> NotesAsync(string id, List<TransactionDto> tx, DateTime sinceUtc, DateTime now,
+        List<XfsCounter> deviceCounters, Warn w, List<string> diag, CancellationToken ct)
+    {
+        var cashTx = tx.Where(t => t.TimeUtc >= sinceUtc && CounterRules.IsCashTransaction(t)).OrderByDescending(t => t.TimeUtc).ToList();
+        var route = _opt.TransactionCountersEndpoint?.Trim() ?? "";
+        var max = Math.Clamp(_opt.TransactionNotesMax, 0, 5000);
+        var read = new List<(TransactionDto Tx, TxNotes Notes)>(); int asked = 0, answered = 0, unreadable = 0; string? sample = null;
+        if (route.Length > 0 && cashTx.Count > 0 && max > 0)
+        {
+            var pick = cashTx.Where(t => long.TryParse(t.Id, out _)).Take(max).ToList();
+            asked = pick.Count;
+            var res = await Task.WhenAll(pick.Select(async t => (t, raw: await TransactionCountersAsync(route, id, t.Id, ct))));
+            foreach (var (t, raw) in res)
+            {
+                if (raw == null) continue;
+                answered++;
+                if (CounterRules.ReadTransactionNotes(raw) is { } n) read.Add((t, n));
+                else { unreadable++; sample ??= raw.Value.GetRawText(); }
+            }
+            var path = route.Split('?')[0];
+            var s = sample == null ? "" : sample.Length > 300 ? sample[..300] + "…" : sample;
+            if (sample != null) _log.LogInformation("KTC {Route} answered without note counts the portal can read; shape: {Shape}; start: {Sample}", path, CounterRules.Shape(JsonDocument.Parse(sample).RootElement.Clone()), s);
+            diag.Add($"{path}: {cashTx.Count} cash transactions since the reset, {asked} asked, {answered} answered, {read.Count} with note counts{(unreadable > 0 ? $", {unreadable} without note counts the portal can read (first answer: {s})" : "")}.");
+        }
+        else if (cashTx.Count > 0 && route.Length == 0) diag.Add("Notes per transaction: Ktc:TransactionCountersEndpoint is empty, so per-transaction counters are not read.");
+
+        if (read.Count > 0)
+        {
+            var (counters, byType, running) = CounterRules.NotesFromTransactions(read, now.Date);
+            if (read.Count < cashTx.Count)
+                w.Add($"Application counters: notes are counted for {read.Count} of the {cashTx.Count} cash transactions since the reset" +
+                      (asked < cashTx.Count ? $" (the latest {asked}, Ktc:TransactionNotesMax)." : " (KTC had no per-transaction counters for the others)."));
+            return (counters, byType, $"KTC per-transaction counters of {read.Count} cash transaction(s){(running ? ", counted as the change from one transaction to the next" : "")}");
+        }
+
+        // No per-transaction counters: totals from the device counters (since those counters were last reset), Today not available.
+        long? Dev(string cls, string counter) { var l = deviceCounters.Where(x => x.ServiceClass == cls && x.Counter.Equals(counter, StringComparison.OrdinalIgnoreCase)).ToList(); return l.Count == 0 ? null : l.Sum(x => x.Value); }
+        var disp = Dev("CDM", "Dispensed"); var dep = Dev("CIM", "Deposited");
+        if (disp == null && dep == null)
+        {
+            if (cashTx.Count > 0 || tx.Count > 0)
+                w.Add("Application counters: notes dispensed and accepted are not available. KTC returned no per-transaction counters and no Dispensed / Deposited device counters for this ATM.");
+            return (new List<ApplicationCounter>(), null, null);
+        }
+        w.Add("Application counters: KTC returned no per-transaction note counts, so Notes dispensed / accepted show the dispenser and acceptor counters (since those were last reset) and Today is not available.");
+        return (new List<ApplicationCounter>
+        {
+            new("Cash", "Notes dispensed", CounterRules.Unknown, disp ?? CounterRules.Unknown),
+            new("Cash", "Notes accepted", CounterRules.Unknown, dep ?? CounterRules.Unknown),
+        }, null, "the dispenser and acceptor device counters (no per-transaction counters from KTC)");
+    }
+
+    /// <summary>One transaction's KTC counters; a successful answer is cached for 12 hours (a finished transaction's counters do not change).</summary>
+    private async Task<JsonElement?> TransactionCountersAsync(string route, string atmId, string txId, CancellationToken ct)
+    {
+        var key = $"txc|{Scope}|{atmId}|{txId}";
+        if (_cache.TryGetValue(key, out JsonElement cached)) return cached;
+        var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(atmId), StringComparison.OrdinalIgnoreCase)
+                       .Replace("{transactionId}", Uri.EscapeDataString(txId), StringComparison.OrdinalIgnoreCase);
+        var raw = await Quiet(url, ct);
+        if (raw is { } r) _cache.Set(key, r.Clone(), TimeSpan.FromHours(12));
+        return raw;
     }
 
     private sealed record PropInfo(string Name, Dictionary<string, string> Values);

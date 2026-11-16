@@ -61,4 +61,6 @@ table.dataTable{font-size:.82rem}table.dataTable tbody tr{cursor:pointer}
 .counter-table .num{font-variant-numeric:tabular-nums;white-space:nowrap}.counter-table tfoot th{border-bottom:0}
 .xfs-card{border-left:4px solid var(--line)}.xfs-card.ok{border-left-color:var(--ok)}.xfs-card.warn{border-left-color:var(--warn)}
 .xfs-class{font-size:.68rem;font-weight:700;letter-spacing:.04em;padding:.05rem .35rem;border-radius:4px;background:var(--panel2);color:var(--ink2);margin-left:.25rem}
+.xfs-pick{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .25rem}
+.xfs-pick .form-check-inline{margin-right:.6rem}
 .counter-table tr.table-warning-soft td{background:var(--warn-bg)}

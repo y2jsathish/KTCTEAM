@@ -17,11 +17,13 @@ public class AtmController : Controller
 
     /// <summary>Export the application and XFS counters of one ATM as CSV, Excel or PDF.</summary>
     [HttpGet, Audit("Report", "ATM counters export")]
-    public async Task<IActionResult> CountersExport(string id, string format = "csv", CancellationToken ct = default)
+    /// <param name="devices">XFS service classes to include (comma separated, e.g. "CDM,CIM,IPM", the devices ticked on the XFS tab); empty includes all.</param>
+    public async Task<IActionResult> CountersExport(string id, string format = "csv", string? devices = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(id)) return BadRequest("id is required");
         var c = await _data.GetCountersAsync(id.Trim(), ct);
         if (c == null) return NotFound($"No ATM matches \"{id.Trim()}\".");
+        if (!string.IsNullOrWhiteSpace(devices)) c = c with { Xfs = CounterRules.FilterClasses(c.Xfs, devices) };
         var f = format.ToLowerInvariant() switch { "xlsx" or "excel" => ExportFormat.Excel, "pdf" => ExportFormat.Pdf, _ => ExportFormat.Csv };
         var file = await _reports.ExportAsync(CounterRules.ToReport(c, DateTime.UtcNow), f);
         return File(file.Data, file.MimeType, file.FileName);

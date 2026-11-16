@@ -43,6 +43,13 @@ public class KtcOptions
     /// <summary>Days of transactions searched for the application counters ("Since reset" goes back at most this far).</summary>
     public int CounterLookbackDays { get; set; } = 7;
     /// <summary>
+    /// KTC's per-transaction counters (what KTC's UI reads for one transaction), used for "Notes dispensed" and "Notes accepted".
+    /// {atmId} and {transactionId} are filled in. Empty turns it off; the totals then come from the dispenser / acceptor counters.
+    /// </summary>
+    public string TransactionCountersEndpoint { get; set; } = "api/v1/HistoricalCounter/ClientTransactionCounters?clientid={atmId}&transactionid={transactionId}";
+    /// <summary>At most this many cash transactions (the latest since the reset) are read per page load; answers are cached.</summary>
+    public int TransactionNotesMax { get; set; } = 300;
+    /// <summary>
     /// XFS counter thresholds: a counter whose name contains the key (case-insensitive) is flagged Warning at or above the value.
     /// The longest matching key wins. KTC sends no thresholds, so these are the portal's.
     /// </summary>

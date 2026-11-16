@@ -64,6 +64,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentCashUnitStatus")).Success) return Ok(CashUnits(Idx(r), now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(KtcCounters(Idx(r), now));
+        if (Is(path, "api/v1/HistoricalCounter/ClientTransactionCounters")) return Ok(long.TryParse(q["transactionid"], out var txc) ? TransactionCounters(txc).ToList() : new List<object>());
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
         if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
@@ -147,7 +148,32 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ("KXDevice.KXCashDispenser", "RetractOperations", 0.5, 3), ("KXDevice.KXCashDispenser", "Remaining", 0, 0),
         ("KXDevice.KXCashAcceptor", "Deposited", 140, 140), ("KXDevice.KXCashAcceptor", "Retained", 1, 6), ("KXDevice.KXCashAcceptor", "Returned", 6, 25), ("KXDevice.KXCashAcceptor", "RetainedOperations", 0.3, 2),
         ("KXDevice.KXReceiptPrinter", "GoodPrints", 170, 170), ("KXDevice.KXReceiptPrinter", "PrintErrors", 0.5, 6),
+        ("KXDevice.KXBundleCheckScanner", "ItemsAccepted", 25, 25), ("KXDevice.KXBundleCheckScanner", "ItemsRejected", 0.5, 5),
+        ("KXDevice.KXBundleCheckScanner", "ItemsRetracted", 0.2, 2), ("KXDevice.KXBundleCheckScanner", "ItemsReturned", 1, 4),
     };
+
+    // KTC GET HistoricalCounter/ClientTransactionCounters?clientid=&transactionid=: the notes one transaction moved, per denomination
+    // (the real JSON field names are not known; the portal reads the records by content). Decoded from the mock transaction id.
+    private static readonly int[] Notes = { 1000, 500, 200, 100 };
+    private static IEnumerable<object> TransactionCounters(long txId)
+    {
+        long hi = txId / 100000; int i = (int)(txId % 100000 / 100), k = (int)(txId % 100);
+        if (i < 0 || i >= AtmCount || txId < 100_000_000_000L) yield break;   // supervisor rows (ids ~9e9) move no notes
+        var hour = new DateTime(hi * TimeSpan.TicksPerHour, DateTimeKind.Utc);
+        int h = Hash(i, (int)hi, 60 + k);
+        var types = new[] { "Cash Withdrawal", "Cash Withdrawal", "Cash Withdrawal", "Balance Inquiry", "Deposit", "Transfer", "Reversal", "Mini Statement", "Cash Withdrawal", "PIN Change" };
+        var type = types[h / 7 % types.Length];
+        bool fail = h % 100 < (Chronic.Contains(i) ? 28 : 4);
+        if (fail || type is not ("Cash Withdrawal" or "Deposit")) yield break;
+        var left = 100 * (1 + h % 20);
+        var comp = type == "Deposit" ? "KXDevice.KXCashAcceptor" : "KXDevice.KXCashDispenser";
+        var name = type == "Deposit" ? "Deposited" : "Dispensed";
+        for (int d = 0; d < Notes.Length; d++)
+        {
+            int count = left / Notes[d]; left -= count * Notes[d];
+            if (count > 0) yield return new { ClientID = Id(i), TransactionID = txId, ComponentName = comp, CounterName = name, DenominationID = d + 1, Value = count, Timestamp = hour };
+        }
+    }
     private static IEnumerable<object> KtcCounters(int i, DateTime now)
     {
         var days = Math.Max(0.1, (now - LastReplenish(i, now)).TotalDays);
