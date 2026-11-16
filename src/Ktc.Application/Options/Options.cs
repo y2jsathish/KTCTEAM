@@ -34,10 +34,22 @@ public class KtcOptions
     /// <summary>EJ application names to leave out of EJ search (KTC's EJRow Value3). Empty = all.</summary>
     public string[] EjExcludeApps { get; set; } = Array.Empty<string>();
     /// <summary>
-    /// KTC route that returns the application and CEN/XFS counters of one ATM; {atmId} is replaced by the KTC client id.
-    /// Change it to the route your KTC server exposes. Empty turns the counter tabs off ("not configured").
+    /// Optional KTC route that returns ready-made ATM counters ({atmId} = KTC client id). Empty (default): the counters are built
+    /// from KTC data that every server has: XFS counters from Client/{id}/CurrentStatus + CurrentCashUnitStatus, application
+    /// counters from TransactionData/Search. When set and it answers with counters, its answer is used instead.
     /// </summary>
-    public string CountersEndpoint { get; set; } = "api/v1/Client/{atmId}/Counters";
+    public string CountersEndpoint { get; set; } = "";
+    /// <summary>Days of transactions searched for the application counters ("Since reset" goes back at most this far).</summary>
+    public int CounterLookbackDays { get; set; } = 7;
+    /// <summary>
+    /// XFS counter thresholds: a counter whose name contains the key (case-insensitive) is flagged Warning at or above the value.
+    /// The longest matching key wins. KTC sends no thresholds, so these are the portal's.
+    /// </summary>
+    public Dictionary<string, long> CounterThresholds { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["fatal error count"] = 1, ["error count"] = 5, ["jam"] = 3, ["tamper"] = 1, ["fail"] = 50, ["retain"] = 20, ["captur"] = 20,
+        ["retract"] = 10, ["reject"] = 200, ["refused"] = 150, ["suspect"] = 5, ["counterfeit"] = 5
+    };
     public int AvailabilityLookbackDays { get; set; } = 7;
     public int MaxParallelCalls { get; set; } = 8;
     /// <summary>Ticket and transaction searches run once per KTC business (KTC requires a BusinessID); at most this many businesses.</summary>

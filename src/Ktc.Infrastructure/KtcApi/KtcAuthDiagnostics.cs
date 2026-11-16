@@ -319,6 +319,61 @@ public class KtcAuthDiagnostics
             if (p1.Length > 0) await Shape($"api/v1/PropertyList/{p1}", 3, true);
             if (v1.Length > 0) await Shape($"api/v1/ValueList/{v1}", 3, true);
         }
+        // ATM 360 counter tabs: which CurrentStatus properties each XFS device reports, and which of them the portal reads as counters.
+        L("");
+        L("--- Counters (ATM 360 Application / XFS Counters tabs: Client/{id}/CurrentStatus by component) ---");
+        {
+            var compJ = await GetJson(http, "api/v1/ComponentList", token, ct); var propJ = await GetJson(http, "api/v1/PropertyList", token, ct); var valJ = await GetJson(http, "api/v1/ValueList", token, ct);
+            Dictionary<string, string> Names(JsonElement? j)
+            {
+                var d = new Dictionary<string, string>();
+                foreach (var (k, v) in KtcJson.Rows(j))
+                {
+                    if (v.ValueKind != JsonValueKind.Object) continue;
+                    var id = KtcJson.NormId(KtcJson.Str(v, "ID") is { Length: > 0 } x ? x : k);
+                    var n = KtcJson.Str(v, "DisplayName", "Name", "DBName");
+                    if (id.Length > 0 && n.Length > 0) d[id] = n;
+                }
+                return d;
+            }
+            var compN = Names(compJ.Json); var propN = Names(propJ.Json);
+            var valN = new Dictionary<string, string>();
+            if (valJ.Json is { ValueKind: JsonValueKind.Object } vo) foreach (var p in vo.EnumerateObject()) if (p.Value.ValueKind == JsonValueKind.String) valN[p.Name] = p.Value.GetString() ?? "";
+            L($"ComponentList {compN.Count} names, PropertyList {propN.Count} names, ValueList {valN.Count} values");
+            foreach (var cc in ejClients.Append(clientId).Where(x => x != null).Distinct().Take(3))
+            {
+                var st = await GetJson(http, $"api/v1/Client/{cc}/CurrentStatus", token, ct);
+                var rows = KtcJson.Rows(st.Json).Select(r => r.Value).Where(v => v.ValueKind == JsonValueKind.Object).ToList();
+                L($"Client {cc}: CurrentStatus {st.Status}, {rows.Count} rows");
+                foreach (var g in rows.GroupBy(r => KtcJson.NormId(KtcJson.Str(r, "CompId", "ComponentID"))).OrderBy(g => int.TryParse(g.Key, out var n) ? n : 9999))
+                {
+                    var cname = compN.GetValueOrDefault(g.Key) ?? "Component " + g.Key;
+                    var cls = Ktc.Application.Logic.CounterRules.XfsClass(cname);
+                    if (cls == null) { L($"  {g.Key} {cname}: not an XFS device, {g.Count()} properties"); continue; }
+                    var parts = new List<string>(); var counters = 0;
+                    foreach (var r in g.Take(40))
+                    {
+                        var pid = KtcJson.NormId(KtcJson.Str(r, "PropId", "PropertyID"));
+                        var pname = propN.GetValueOrDefault(pid) ?? "Property " + pid;
+                        var useNum = KtcJson.Bool(r, false, "UseNumeric");
+                        var vid = KtcJson.NormId(KtcJson.Str(r, "VID"));
+                        var value = useNum ? KtcJson.Str(r, "NumericValue") : KtcJson.Str(r, "ManualValue") is { Length: > 0 } mv ? mv : valN.GetValueOrDefault(vid) ?? (vid.Length > 0 ? "VID " + vid : "");
+                        var isC = Ktc.Application.Logic.CounterRules.IsCounter(pname, useNum, value, out _);
+                        if (isC) counters++;
+                        parts.Add($"{pid} {pname}={Shorten(value)}{(useNum ? " (numeric)" : "")}{(isC ? " [COUNTER]" : "")}");
+                    }
+                    L($"  {g.Key} {cname} -> {cls}: {counters} counter(s) of {g.Count()} properties");
+                    foreach (var line in parts) L("      " + line);
+                }
+                var cr = await GetJson(http, $"api/v1/Client/{cc}/Counters", token, ct);
+                var crShape = cr.Ok ? Ktc.Application.Logic.CounterRules.Shape(cr.Json) : cr.Message;
+                L($"  Client/{cc}/Counters (Ktc:CountersEndpoint) -> {cr.Status} {crShape}");
+                if (cr.Ok && cr.Json is { } crJson) { var rawC = crJson.GetRawText(); L("    first 400 chars: " + CardMaskerSafe(rawC.Length > 400 ? rawC[..400] + "…" : rawC)); }
+                var cash = await GetJson(http, $"api/v1/Client/{cc}/CurrentCashUnitStatus", token, ct);
+                L($"  CurrentCashUnitStatus {cash.Status}: {KtcJson.Rows(cash.Json).Count()} cash units (shown as 'Cash unit N notes' counters)");
+            }
+        }
+
         foreach (var route in new[] { "api/v1/ComponentList", "api/v1/ComponentList?name=", "api/v1/ComponentList?name=%25", "api/v1/PropertyList", "api/v1/PropertyList?name=", "api/v1/PropertyList?name=%25" })
             await Shape(route, 15, true);
         await Shape("api/v1/ValueList", 15, true);

@@ -1,4 +1,4 @@
-// ATM 360: Application Counters and XFS Counters tabs. Data: GET /data/atm/{id}/counters (Ktc:CountersEndpoint); export: /Atm/CountersExport/{id}.
+// ATM 360: Application Counters and XFS Counters tabs. Data: GET /data/atm/{id}/counters (KTC CurrentStatus, cash units and transactions); export: /Atm/CountersExport/{id}.
 (function(){const K=KTC,id=window.ATM_ID,$id=s=>document.getElementById(s);
  const cls={OK:'ok',Warning:'warn'};
  const badge=s=>`<span class="sbadge ${cls[s]||'unknown'}">${K.esc(s)}</span>`;
@@ -8,12 +8,16 @@
  const CLASSES=['IDC','CDM','CIM','PTR','PIN','SIU'];
  const rank=(arr,v)=>{const i=arr.indexOf(v);return i<0?99:i;};
 
- function meta(c){return [c.lastResetUtc?`<i class="bi bi-arrow-counterclockwise"></i> Last reset ${K.local(c.lastResetUtc)}`:'',c.collectedUtc?`<i class="bi bi-clock"></i> Reported ${K.local(c.collectedUtc)}`:''].filter(Boolean).join(' <span class="mx-1">·</span> ');}
- function warn(c){return c.warnings&&c.warnings.length?`<div class="alert alert-warning py-2 small">${c.warnings.map(K.esc).join('<br>')}</div>`:'';}
+ // kind: 'app' or 'xfs' - each tab shows the reset point / report time and the warnings that concern it.
+ function meta(c,kind){return [kind==='app'&&c.lastResetUtc?`<i class="bi bi-arrow-counterclockwise"></i> Since reset = since ${c.resetSource?K.esc(c.resetSource):K.local(c.lastResetUtc)}`:'',kind==='app'?'Today = since 00:00 UTC':'',
+   kind==='xfs'&&c.collectedUtc?`<i class="bi bi-clock"></i> Last reported ${K.local(c.collectedUtc)}`:''].filter(Boolean).join(' <span class="mx-1">·</span> ');}
+ function warn(c,kind){const mine=(c.warnings||[]).filter(w=>kind==='app'?!/^XFS counters/.test(w):!/^Application counters/.test(w));
+  const d=(c.diagnostics||[]).length?`<details class="small text-muted mb-2"><summary>What KTC returned</summary><ul class="mb-0 ps-3">${c.diagnostics.map(x=>`<li>${K.esc(x)}</li>`).join('')}</ul></details>`:'';
+  return (mine.length?`<div class="alert alert-warning py-2 small">${mine.map(K.esc).join('<br>')}</div>`:'')+d;}
 
  function renderApp(c){
-  $id('appMeta').innerHTML=meta(c);$id('appMsg').innerHTML=warn(c);
-  if(!c.application.length){$id('appCounters').innerHTML='<div class="col-12"><div class="alert alert-secondary small mb-0">Application counters are not available for this ATM.</div></div>';return;}
+  $id('appMeta').innerHTML=meta(c,'app');$id('appMsg').innerHTML=warn(c,'app');
+  if(!c.application.length){$id('appCounters').innerHTML='<div class="col-12"><div class="alert alert-secondary small mb-0">No application counters for this ATM (see the reason above).</div></div>';return;}
   const groups={};c.application.forEach(x=>(groups[x.category]=groups[x.category]||[]).push(x));
   $id('appCounters').innerHTML=Object.keys(groups).sort((a,b)=>rank(CATS,a)-rank(CATS,b)).map(g=>{const rows=groups[g];
    return `<div class="col-lg-4"><div class="cardx h-100"><h6><i class="bi ${ICON[g]||'bi-list'}"></i> ${K.esc(g)}</h6>
@@ -23,9 +27,9 @@
  }
 
  function renderXfs(c){
-  $id('xfsMeta').innerHTML=meta(c);$id('xfsMsg').innerHTML=warn(c);
+  $id('xfsMeta').innerHTML=meta(c,'xfs');$id('xfsMsg').innerHTML=warn(c,'xfs');
   const flagged=c.xfs.filter(x=>x.status!=='OK');const fb=$id('xfsFlagged');fb.textContent=flagged.length;fb.classList.toggle('d-none',!flagged.length);
-  if(!c.xfs.length){$id('xfsKpis').innerHTML='';$id('xfsCounters').innerHTML='<div class="col-12"><div class="alert alert-secondary small mb-0">XFS counters are not available for this ATM.</div></div>';return;}
+  if(!c.xfs.length){$id('xfsKpis').innerHTML='';$id('xfsCounters').innerHTML='<div class="col-12"><div class="alert alert-secondary small mb-0">No XFS counters for this ATM (see the reason above).</div></div>';return;}
   // One card per XFS device (service class + logical service), in the style of the Hardware Status cards.
   const devs=[];const by={};c.xfs.forEach(x=>{const k=x.serviceClass+'|'+(x.logicalName||x.device);if(!by[k]){by[k]={device:x.device,cls:x.serviceClass,logical:x.logicalName,rows:[]};devs.push(by[k]);}by[k].rows.push(x);});
   devs.forEach(d=>d.status=d.rows.some(x=>x.status!=='OK')?'Warning':'OK');
@@ -35,7 +39,7 @@
    +kpi('Warning',flagged.length,flagged.length?'warn':'ok',flagged.length?`on ${warnDevs} device(s)`:'all within thresholds')+kpi('OK',c.xfs.length-flagged.length,'ok');
   $id('xfsCounters').innerHTML=devs.map(d=>`<div class="col-md-6 col-xl-4"><div class="cardx h-100 xfs-card ${d.status==='OK'?'ok':'warn'}">
     <div class="d-flex align-items-center mb-1"><h6 class="m-0">${K.esc(d.device)} <span class="xfs-class">${K.esc(d.cls)}</span></h6><span class="ms-auto">${badge(d.status)}</span></div>
-    <div class="small text-muted mb-2">${d.logical?K.esc(d.logical):'&nbsp;'}${c.collectedUtc?` · Last update ${K.local(c.collectedUtc)}`:''}</div>
+    <div class="small text-muted mb-2">${d.logical?K.esc(d.logical)+' · ':''}${c.collectedUtc?`Last update ${K.local(c.collectedUtc)}`:'&nbsp;'}</div>
     <table class="table table-sm small mb-0 counter-table"><thead><tr><th>Counter</th><th class="text-end">Value</th><th class="text-end">Threshold</th><th>Status</th></tr></thead>
     <tbody>${d.rows.map(x=>`<tr${x.status!=='OK'?' class="table-warning-soft"':''}><td>${K.esc(x.counter)}</td><td class="text-end num">${n(x.value)}</td><td class="text-end num text-muted">${x.threshold==null?'–':n(x.threshold)}</td><td>${badge(x.status)}</td></tr>`).join('')}</tbody></table>
    </div></div>`).join('');

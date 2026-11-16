@@ -62,7 +62,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/Top5UnavailableReasons")).Success)
             return Ok(Codes.Take(5).Select((c, k) => new { Reason = c.Name, Hours = Math.Round(Hash(Idx(r), k, 7) % 900 / 100.0 + 0.5, 1) }).OrderByDescending(x => x.Hours));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentStatus")).Success) return Ok(HardwareStatus(Idx(r), now));
-        if ((r = Rx(path, @"api/v1/Client/(\d+)/Counters")).Success) return Ok(Counters(Idx(r), now));
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/CurrentCashUnitStatus")).Success) return Ok(CashUnits(Idx(r), now));
         if (Is(path, "api/v1/ComponentList")) return Ok(HwComponents.Select((c, k) => new { ID = k + 1, Name = c.Name }));
         if (Is(path, "api/v1/PropertyList")) return Ok(HwProps.Select((p, k) => new { ID = k + 1, Name = p }));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
@@ -89,9 +89,24 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ("Receipt Printer", new[] { "Online" }, new[] { "Paper low", "Paper out" }),
         ("Journal Printer", new[] { "Online" }, new[] { "Paper low" }),
         ("PIN Pad", new[] { "Online" }, new[] { "Offline" }),
+        ("Cash Acceptor", new[] { "Online" }, new[] { "Notes refused - cassette full" }),
         ("Sensors", new[] { "OK" }, new[] { "Safe door open" }),
     };
-    private static readonly string[] HwProps = { "Device status", "Fatal error count", "Firmware version" };
+    // Counter properties per component (name, per-day rate, rate when the component is faulty). Like KTC, the device reports them
+    // as numeric CurrentStatus properties; the portal reads them as XFS counters.
+    private static readonly Dictionary<string, (string Name, double PerDay, double Bad)[]> HwCounters = new()
+    {
+        ["Card Reader"] = new[] { ("Cards inserted", 250.0, 250.0), ("Read failures", 2.5, 9), ("Cards retained", 0.8, 3), ("Media jams", 0, 0.4) },
+        ["Cash Dispenser"] = new[] { ("Dispense operations", 180.0, 180.0), ("Notes dispensed", 576, 576), ("Notes rejected", 6, 30), ("Pick failures", 1.2, 6), ("Retract operations", 0.6, 2), ("Purges", 0.3, 0.3) },
+        ["Cash Acceptor"] = new[] { ("Cash-in transactions", 35.0, 35.0), ("Notes accepted", 140, 140), ("Notes refused", 6, 25), ("Suspect notes", 0.2, 0.8) },
+        ["Receipt Printer"] = new[] { ("Receipts printed", 170.0, 170.0), ("Media jams", 0, 0.4) },
+        ["Journal Printer"] = new[] { ("Lines printed", 2600.0, 2600.0), ("Media jams", 0, 0.4) },
+        ["PIN Pad"] = new[] { ("PIN entries", 240.0, 240.0), ("PIN block failures", 0.3, 1.5), ("Tamper events", 0, 0.2) },
+        ["Sensors"] = new[] { ("Safe door opens", 0.4, 0.4), ("Cabinet door opens", 0.5, 0.5), ("Tamper alarms", 0, 0.2) },
+    };
+    private static readonly string[] HwProps = new[] { "Device status", "Fatal error count", "Firmware version" }
+        .Concat(HwCounters.Values.SelectMany(v => v.Select(c => c.Name))).Distinct().ToArray();
+    private static DateTime LastReplenish(int i, DateTime now) { var t = now.Date.AddDays(-(Hash(i, 13) % 6)).AddHours(6).AddMinutes(Hash(i, 14) % 50); return t > now ? t.AddDays(-1) : t; }
     private static IEnumerable<object> HardwareStatus(int i, DateTime now)
     {
         for (int k = 0; k < HwComponents.Length; k++)
@@ -101,6 +116,16 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             yield return new { CID = Id(i), CompId = k + 1, PropId = 1, VID = -1, ManualValue = bad ? c.Bad[h % c.Bad.Length] : c.Good[0], NumericValue = 0, UseNumeric = false, Timestamp = t };
             yield return new { CID = Id(i), CompId = k + 1, PropId = 2, VID = -1, ManualValue = "", NumericValue = bad ? 1 + h % 3 : 0, UseNumeric = true, Timestamp = t };
             yield return new { CID = Id(i), CompId = k + 1, PropId = 3, VID = -1, ManualValue = $"v{1 + h % 4}.{h % 10}", NumericValue = 0, UseNumeric = false, Timestamp = t.AddDays(-3) };
+            if (!HwCounters.TryGetValue(c.Name, out var counters)) continue;
+            var days = Math.Max(0.1, (now - LastReplenish(i, now)).TotalDays);
+            for (int j = 0; j < counters.Length; j++)
+            {
+                var (name, perDay, badRate) = counters[j];
+                var v = Math.Round((bad ? badRate : perDay) * days * (0.8 + Hash(i, k, 200 + j) % 40 / 100.0));
+                if (name == "Media jams" && bad) v = Math.Max(v, 1 + h % 3);
+                if (name.Contains("Tamper") && bad) v = Math.Max(v, 1);
+                yield return new { CID = Id(i), CompId = k + 1, PropId = Array.IndexOf(HwProps, name) + 1, VID = -1, ManualValue = "", NumericValue = v, UseNumeric = true, Timestamp = t };
+            }
         }
     }
 
@@ -111,83 +136,15 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         var h = Hash(i, k, 91); return Chronic.Contains(i) ? h % 100 < 45 : h % 100 < 10;
     }
 
-    // Counters (Ktc:CountersEndpoint): application counters (today / since reset) and CEN/XFS device counters with thresholds.
-    // Plausible and stable per ATM and day: "today" grows through the day, "since reset" covers the days since the last replenishment.
-    private static object Counters(int i, DateTime now)
+    // KTC CurrentCashUnitStatus: {ClientID, DBComponentID, TypeID, StatusID, CurrencyID, CashUnitNumber, Value, Count, Total, Timestamp}.
+    private static IEnumerable<object> CashUnits(int i, DateTime now)
     {
-        var rng = new Random(Hash(i, now.DayOfYear, 77));
-        var daysSinceReset = 1 + Hash(i, 13) % 9;
-        var dayFraction = Math.Max(0.05, now.TimeOfDay.TotalHours / 24);
-        var activity = IsOffline(i, now) ? 0.15 : 1.0;
-        (long Today, long SinceReset) Count(double perDay)
-        {
-            var today = (long)Math.Round(perDay * dayFraction * activity * (0.75 + rng.NextDouble() * 0.5));
-            var earlier = (long)Math.Round(perDay * daysSinceReset * (0.8 + rng.NextDouble() * 0.4));
-            return (today, today + earlier);
-        }
-        var app = new List<object>();
-        (long Today, long SinceReset) App(string category, string name, double perDay)
-        { var c = Count(perDay); app.Add(new { Category = category, Name = name, c.Today, c.SinceReset }); return c; }
-
-        App("Transactions", "Customer sessions", 260);
-        var withdrawals = App("Transactions", "Cash withdrawals", 180);
-        App("Transactions", "Balance inquiries", 55);
-        App("Transactions", "Mini statements", 18);
-        App("Transactions", "Fund transfers", 12);
-        App("Transactions", "PIN changes", 4);
-        App("Transactions", "Cash deposits", 35);
-        App("Exceptions", "Declined by host", 21);
-        App("Exceptions", "Host timeouts", HostDown(i, now) || IsOffline(i, now) ? 6 : 1.5);
-        App("Exceptions", "Reversals", 2.5);
-        App("Exceptions", "Cards captured", 0.8);
-        App("Exceptions", "Cash retracts", 0.6);
-        App("Operations", "Supervisor entries", 0.4);
-        App("Operations", "Application restarts", Chronic.Contains(i) ? 2 : 0.2);
-
-        var xfs = new List<object>();
-        void Xfs(string device, string cls, string logical, string counter, long value, long? threshold = null) =>
-            xfs.Add(new { Device = device, ServiceClass = cls, LogicalName = logical, Counter = counter, Value = value, Threshold = threshold });
-        long N(double perDay) => Count(perDay).SinceReset;
-        long Jams(string component) => HwBad(i, component) ? 1 + rng.Next(0, 3) : 0;
-
-        Xfs("Card Reader", "IDC", "CardReader1", "Cards inserted", N(250));
-        Xfs("Card Reader", "IDC", "CardReader1", "Read failures", N(HwBad(i, "Card Reader") ? 9 : 2.5), 50);
-        Xfs("Card Reader", "IDC", "CardReader1", "Cards retained", N(0.8), 20);
-        Xfs("Card Reader", "IDC", "CardReader1", "Media jams", Jams("Card Reader"), 3);
-
-        var dispensed = (long)(withdrawals.SinceReset * 3.2);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Dispense operations", withdrawals.SinceReset);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes dispensed", dispensed);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes rejected", (long)(dispensed * (0.006 + rng.NextDouble() * 0.01)), 200);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Pick failures", N(HwBad(i, "Cash Dispenser") ? 6 : 1.2), 40);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Retract operations", N(0.6), 10);
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Notes retracted", N(1.4));
-        Xfs("Cash Dispenser", "CDM", "CurrencyDispenser1", "Purges", N(0.3));
-
-        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Cash-in transactions", N(35));
-        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Notes accepted", N(140));
-        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Notes refused", N(Chronic.Contains(i) ? 25 : 6), 150);
-        Xfs("Cash Acceptor", "CIM", "CashAcceptor1", "Suspect / counterfeit notes", N(0.2), 5);
-
-        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Receipts printed", N(170));
-        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Paper low events", N(0.3));
-        Xfs("Receipt Printer", "PTR", "ReceiptPrinter1", "Media jams", Jams("Receipt Printer"), 3);
-        Xfs("Journal Printer", "PTR", "JournalPrinter1", "Lines printed", N(2600));
-        Xfs("Journal Printer", "PTR", "JournalPrinter1", "Media jams", Jams("Journal Printer"), 3);
-
-        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "PIN entries", N(240));
-        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "PIN block failures", N(HwBad(i, "PIN Pad") ? 4 : 0.3), 10);
-        Xfs("EPP / PIN Pad", "PIN", "Pinpad1", "Tamper events", HwBad(i, "PIN Pad") ? 1 : 0, 1);
-
-        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Safe door opens", daysSinceReset / 3 + 1);
-        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Cabinet door opens", N(0.5));
-        Xfs("Sensors", "SIU", "SensorsAndIndicators1", "Tamper alarms", HwBad(i, "Sensors") ? 1 : 0, 1);
-
-        return new
-        {
-            ClientID = Id(i), CollectedUtc = LastContact(i, now), LastResetUtc = now.Date.AddDays(-daysSinceReset).AddHours(6),
-            Application = app, Xfs = xfs
-        };
+        var disp = Array.FindIndex(HwComponents, c => c.Name == "Cash Dispenser") + 1; var acc = Array.FindIndex(HwComponents, c => c.Name == "Cash Acceptor") + 1;
+        var since = (now - LastReplenish(i, now)).TotalDays;
+        for (int u = 1; u <= 4; u++)
+            yield return new { ClientID = Id(i), DBComponentID = disp, TypeID = 21, StatusID = 1, CurrencyID = 0, CashUnitNumber = u, Value = new[] { 100m, 200m, 500m, 1000m }[u - 1],
+                Count = Math.Max(0, 2000 - (int)(since * 150 * (0.7 + Hash(i, u, 300) % 60 / 100.0))), Total = 0m, Timestamp = now.AddMinutes(-(Hash(i, u) % 90)) };
+        yield return new { ClientID = Id(i), DBComponentID = acc, TypeID = 23, StatusID = 1, CurrencyID = 0, CashUnitNumber = 5, Value = 0m, Count = (int)(since * 140), Total = 0m, Timestamp = now.AddMinutes(-(Hash(i, 5) % 90)) };
     }
 
     private static int Hash(int a, int b = 0, int c = 0) { unchecked { var h = 17; h = h * 31 + a; h = h * 31 + b; h = h * 31 + c; h ^= h >> 15; h *= 0x2c1b3c6d; h ^= h >> 12; return Math.Abs(h); } }
@@ -280,9 +237,21 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             catch { }
         if (end > now) end = now;
         if (end - start > TimeSpan.FromDays(8)) start = end.AddDays(-8);
-        var types = new[] { "Cash Withdrawal", "Cash Withdrawal", "Cash Withdrawal", "Balance Inquiry", "Deposit", "Transfer", "Reversal" };
-        var fails = new[] { "Host timeout - no response from authorization host", "Host declined - issuer unavailable", "Communication failure - connection lost", "Cash retract - note not taken by customer", "Dispense failure - cassette jam", "Card reader error" };
+        var types = new[] { "Cash Withdrawal", "Cash Withdrawal", "Cash Withdrawal", "Balance Inquiry", "Deposit", "Transfer", "Reversal", "Mini Statement", "Cash Withdrawal", "PIN Change" };
+        var fails = new[] { "Host timeout - no response from authorization host", "Host declined - issuer unavailable", "Communication failure - connection lost", "Cash retract - note not taken by customer", "Dispense failure - cassette jam", "Card reader error", "Card captured - retained by ATM" };
         var rows = new List<object>();
+        // Supervisor sessions: the replenishment that resets the counters (REPLENISH + ADD_CASH + PRNT_CNTRS in one session).
+        if (onlyId == 0)
+            for (int i = 0; i < AtmCount; i++)
+            {
+                if (business > 0 && i % 3 + 1 != business) continue;
+                var at = LastReplenish(i, now);
+                if (at < start || at > end) continue;
+                long sid = 900000000L + i * 1000 + at.DayOfYear;
+                foreach (var (op, k) in new[] { ("REPLENISH", 0), ("ADD_CASH", 1), ("PRNT_CNTRS", 2) })
+                    rows.Add(new { ID = sid * 10 + k, UUID = Guid.NewGuid().ToString("D"), sessionID = sid, ClientID = Id(i), ClientName = AtmName(i), TransactionTypeName = op,
+                        CompletionCodeName = "COMPLETED", ReasonName = (string?)null, ErrorCode = "", Amount = 0m, Currency = "AED", StartTime = at.AddMinutes(k), EndTime = at.AddMinutes(k).AddSeconds(30) });
+            }
         var hour = new DateTime(start.Year, start.Month, start.Day, start.Hour, 0, 0, DateTimeKind.Utc);
         for (; hour < end; hour = hour.AddHours(1))
         {
@@ -306,12 +275,12 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                     var f = fails[(h / 13 + (Chronic.Contains(i) ? 3 : 0)) % fails.Length];
                     rows.Add(new
                     {
-                        ID = id, UUID = Guid.NewGuid().ToString("D"), ClientID = Id(i), ClientName = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}",
+                        ID = id, UUID = Guid.NewGuid().ToString("D"), sessionID = id / 2, ClientID = Id(i), ClientName = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}",
                         TransactionTypeName = type, CompletionCodeName = fail ? f : "Completed OK", ReasonName = fail ? f : (string?)null, ErrorCode = fail ? $"E{100 + h % 60}" : "",
                         Amount = type == "Cash Withdrawal" || type == "Deposit" ? (decimal)(100 * (1 + h % 20)) : 0m, Currency = "AED",
                         StartTime = t, EndTime = t.AddMilliseconds(fail ? 4000 + h % 9000 : 900 + h % 3200)
                     });
-                    if (rows.Count > 6000) return rows;
+                    if (rows.Count > 40000) return rows;
                 }
             }
         }

@@ -411,8 +411,11 @@ public class KtcDataService : IKtcDataService
 
     // ---------------- counters ----------------
     /// <summary>
-    /// Application and CEN/XFS device counters of one ATM from the route in Ktc:CountersEndpoint ({atmId} = KTC client id).
-    /// A failing or unconfigured route gives empty counter lists with a warning, so the ATM page still loads.
+    /// Application and CEN/XFS device counters of one ATM, built from standard KTC data:
+    /// XFS counters are the counter-like properties (counts, jams, failures, retains, ...) of the XFS device components in
+    /// GET Client/{id}/CurrentStatus plus the note counts in GET Client/{id}/CurrentCashUnitStatus; application counters are counted
+    /// from POST TransactionData/Search (today and since the last replenishment). Ktc:CountersEndpoint, when set, is tried first.
+    /// Never null for a known ATM: missing data gives empty lists with warnings and diagnostics that say what KTC returned.
     /// </summary>
     public async Task<AtmCounters?> GetCountersAsync(string atmId, CancellationToken ct = default)
     {
@@ -422,20 +425,88 @@ public class KtcDataService : IKtcDataService
                  ?? (long.TryParse(norm, out _) ? norm : null);
         if (id == null) return null;
         var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
+        var diag = new List<string>();
 
+        // 1. Optional ready-made counters route.
         var route = _opt.CountersEndpoint?.Trim() ?? "";
-        if (route.Length == 0)
+        if (route.Length > 0)
         {
-            w.Add("Counters are not configured: set Ktc:CountersEndpoint to the KTC route that returns ATM counters.");
-            return new AtmCounters(id, name, null, null, Array.Empty<ApplicationCounter>(), Array.Empty<XfsCounter>(), w.ToList());
+            var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase).Replace("{id}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase);
+            var rw = new Warn();
+            var raw = await Fetch(url, rw, ct: ct);
+            var (c0, r0, a0, x0) = CounterRules.Parse(raw);
+            if (raw != null && a0.Count == 0 && x0.Count == 0)
+            {
+                var shape = CounterRules.Shape(raw);
+                _log.LogInformation("KTC {Route} answered without counters the portal can read; shape: {Shape}", url.Split('?')[0], shape);
+                diag.Add($"Ktc:CountersEndpoint answer shape: {shape}");
+            }
+            if (a0.Count > 0 || x0.Count > 0)
+                return new AtmCounters(id, name, c0, r0, a0.OrderBy(a => CounterRules.CategoryRank(a.Category)).ToList(), x0.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ToList(),
+                    w.ToList(), r0.HasValue ? "last reset reported by KTC" : null, new[] { $"Counters from Ktc:CountersEndpoint ({url.Split('?')[0]}): {a0.Count} application, {x0.Count} XFS." });
+            diag.Add($"Ktc:CountersEndpoint ({url.Split('?')[0]}) gave no counters{(rw.ToList().FirstOrDefault() is { } e ? ": " + e : "")}; using CurrentStatus and transactions instead.");
         }
-        var url = route.TrimStart('/').Replace("{atmId}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase).Replace("{id}", Uri.EscapeDataString(id), StringComparison.OrdinalIgnoreCase);
-        var json = await Fetch(url, w, ct: ct);
-        var (collected, reset, app, xfs) = CounterRules.Parse(json);
-        if (json != null && app.Count == 0 && xfs.Count == 0) w.Add("KTC returned no counters for this ATM.");
-        return new AtmCounters(id, name, collected, reset,
-            app.OrderBy(a => CounterRules.CategoryRank(a.Category)).ToList(),
-            xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ToList(), w.ToList());
+
+        // 2. XFS counters from CurrentStatus + cash units; 3. application counters from transactions. In parallel.
+        var now = DateTime.UtcNow; var days = Math.Clamp(_opt.CounterLookbackDays, 1, 31);
+        var tStatus = Fetch($"api/v1/Client/{id}/CurrentStatus", w, ct: ct);
+        var tCash = Fetch($"api/v1/Client/{id}/CurrentCashUnitStatus", new Warn(), ct: ct);   // optional route: no warning when missing
+        var tTx = SearchTransactionsAsync(new TransactionQuery(null, null, null, now.AddDays(-days), now), ct);
+        await Task.WhenAll(tStatus, tCash, tTx);
+
+        // ---- XFS ----
+        var rows = KtcJson.Rows(tStatus.Result).Where(r => r.Value.ValueKind == JsonValueKind.Object).Select(r => r.Value).ToList();
+        var names = await HardwareNamesAsync(rows, ct);
+        var xfs = new List<XfsCounter>(); DateTime? collected = null;
+        var comps = new HashSet<string>(); var xfsComps = new HashSet<string>(); var other = new HashSet<string>();
+        string CompName(string cid) => names.Components.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
+        foreach (var e in rows)
+        {
+            var cid = KtcJson.NormId(KtcJson.Str(e, CompIdFields));
+            var compName = KtcJson.Str(e, "ComponentName", "Component") is { Length: > 0 } cn ? cn : CompName(cid);
+            comps.Add(compName);
+            var cls = CounterRules.XfsClass(compName);
+            if (cls == null) { other.Add(compName); continue; }
+            xfsComps.Add(compName);
+            var pid = KtcJson.NormId(KtcJson.Str(e, PropIdFields));
+            var pinfo = names.Properties.GetValueOrDefault(pid);
+            var propName = KtcJson.Str(e, "PropertyName", "Property") is { Length: > 0 } pn ? pn : pinfo?.Name ?? (pid.Length > 0 ? "Property " + pid : "Value");
+            var useNum = KtcJson.Bool(e, false, "UseNumeric");
+            var value = useNum ? KtcJson.Str(e, "NumericValue") : HardwareValue(e, pinfo, names.Values, propName);
+            if (!CounterRules.IsCounter(propName, useNum, value, out var n)) continue;
+            xfs.Add(new XfsCounter(compName, cls, null, propName, n, CounterRules.ThresholdFor(propName, _opt.CounterThresholds)));
+            if (KtcJson.Date(e, "Timestamp", "TimeStamp", "LastUpdated", "Time") is { } t && t > (collected ?? DateTime.MinValue)) collected = t;
+        }
+        var cashRows = KtcJson.Rows(tCash.Result).Where(r => r.Value.ValueKind == JsonValueKind.Object).Select(r => r.Value).ToList();
+        foreach (var e in cashRows)
+        {
+            var cid = KtcJson.NormId(KtcJson.Str(e, "DBComponentID", "ComponentID", "CompId"));
+            var dev = CompName(cid);
+            var unit = KtcJson.Str(e, "CashUnitNumber", "UnitNumber", "Number");
+            var count = (long)Math.Max(0, KtcJson.Dbl(e, 0, "Count", "CurrentCount", "Notes"));
+            xfs.Add(new XfsCounter(dev, CounterRules.XfsClass(dev) ?? "CDM", null, $"Cash unit {(unit.Length > 0 ? unit : "?")} notes", count, null));
+            if (KtcJson.Date(e, "Timestamp", "TimeStamp") is { } t && t > (collected ?? DateTime.MinValue)) collected = t;
+        }
+        diag.Add($"CurrentStatus: {rows.Count} rows, {comps.Count} components, {xfsComps.Count} XFS devices ({string.Join(", ", xfsComps.OrderBy(x => x))}), {xfs.Count - cashRows.Count} counter properties; CurrentCashUnitStatus: {cashRows.Count} cash units.");
+        if (tStatus.Result == null) w.Add("XFS counters: KTC did not answer Client/" + id + "/CurrentStatus.");
+        else if (rows.Count == 0) w.Add("XFS counters: KTC returned no CurrentStatus rows for this ATM.");
+        else if (xfsComps.Count == 0) w.Add($"XFS counters: none of this ATM's {comps.Count} components is an XFS device (card reader, dispenser, acceptor, printer, PIN pad, sensors).");
+        else if (xfs.Count == 0) w.Add("XFS counters: no counter properties reported by this ATM (its XFS devices report only status values). Open /diag/ktc-token and send the Counters section.");
+
+        // ---- application ----
+        var tx = tTx.Result.Where(t => t.AtmId == id).ToList();
+        var (app, resetUtc, resetType) = CounterRules.ApplicationFromTransactions(tx, now.Date);
+        var types = tx.GroupBy(t => t.Type.Length > 0 ? t.Type : "?").OrderByDescending(g => g.Count()).Take(12).Select(g => $"{g.Key} {g.Count()}");
+        diag.Add($"Transactions (last {days} days): {tTx.Result.Count} for all ATMs, {tx.Count} for this ATM{(tx.Count > 0 ? ": " + string.Join(", ", types) : "")}.");
+        if (tx.Count == 0)
+        {
+            w.Add($"Application counters: KTC returned no transactions for this ATM in the last {days} days.");
+            app = new List<ApplicationCounter>();
+        }
+        var resetSource = resetUtc is { } ru ? $"last {resetType} {ru:yyyy-MM-dd HH:mm} UTC" : tx.Count > 0 ? $"start of the {days}-day lookback (no replenishment found)" : null;
+        if (tx.Count > 0 && resetUtc == null) resetUtc = now.AddDays(-days);
+
+        return new AtmCounters(id, name, collected, resetUtc, app, xfs.OrderBy(x => CounterRules.ClassRank(x.ServiceClass)).ThenBy(x => x.Device).ToList(), w.ToList(), resetSource, diag);
     }
 
     private sealed record PropInfo(string Name, Dictionary<string, string> Values);
@@ -855,7 +926,8 @@ public class KtcDataService : IKtcDataService
             Type = TxType(e, types), Success = ok,
             Amount = double.IsNaN(amount) ? null : (decimal)amount, Currency = KtcJson.Str(e, "Currency", "CurrencyCode"), TimeUtc = start,
             ResponseMs = end.HasValue ? (int)Math.Max(0, (end.Value - start).TotalMilliseconds) : KtcJson.Int(e, 0, "ResponseTime", "ResponseMs"),
-            ErrorCode = ok ? "" : (err.Length > 0 ? err : result), FailureCategory = ok ? "" : FailureClassifier.Classify(result + " " + reason)
+            ErrorCode = ok ? "" : (err.Length > 0 ? err : result), FailureCategory = ok ? "" : FailureClassifier.Classify(result + " " + reason),
+            SessionId = KtcJson.NormId(KtcJson.Str(e, "sessionID", "SessionID", "SessionId")), Reason = reason
         };
     }
 
