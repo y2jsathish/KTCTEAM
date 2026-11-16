@@ -27,18 +27,17 @@ public class AtmGeneralTests
         var g = await Service().GetAtmGeneralAsync("19");
         Assert.NotNull(g);
         DetailField F(string name) => g!.Groups.SelectMany(x => x.Fields).First(f => f.Name == name);
+        Assert.Equal(new[] { "Name", "IP address", "Business", "Branch", "Address", "City", "Location", "Latitude", "Longitude" }, g!.Groups.SelectMany(x => x.Fields).Select(f => f.Name));
         Assert.Equal("ATM-NINETEEN", F("Name").Value);
         Assert.Equal("10.131.156.50", F("IP address").Value);
-        Assert.Equal("", F("Subnet").Value);                                  // not set
         Assert.Equal(("ADCB", "1"), (F("Business").Value, F("Business").Id));
         Assert.Equal(("Corniche Branch", "3"), (F("Branch").Value, F("Branch").Id));
-        Assert.Equal("Corniche Road", F("Branch address").Value);
-        Assert.Equal("Abu Dhabi", F("Region level 1").Value);
-        Assert.Equal("", F("Region level 2").Value);
+        Assert.Equal("Corniche Road", F("Address").Value);
+        Assert.Equal("Abu Dhabi", F("City").Value);
+        Assert.Equal("Abu Dhabi", F("Location").Value);
         Assert.Equal("24.4539", F("Latitude").Value);
-        Assert.Equal("CB222877-C3AB-45FA-936B-001E1A5E59E2", F("GUID").Value);
-        Assert.Equal((24.4539, 54.3773), (g!.Latitude, g.Longitude));
-        Assert.Contains("Subnet", g.NotSet); Assert.Contains("Region level 2", g.NotSet);
+        Assert.Equal((24.4539, 54.3773), (g.Latitude, g.Longitude));
+        Assert.Empty(g.NotSet);
         Assert.DoesNotContain(g.Groups.SelectMany(x => x.Fields), f => f.Value.Contains("s3cr3t") || f.Value.Contains("h4sh") || f.Name is "Salt" or "Auth Hash");
         Assert.Null(await Service().GetAtmGeneralAsync("NO-SUCH-ATM"));
     }

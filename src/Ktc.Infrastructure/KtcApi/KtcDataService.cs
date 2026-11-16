@@ -460,42 +460,21 @@ public class KtcDataService : IKtcDataService
 
         var branchId = Raw("BranchID", "BranchId");
         var branch = Find(tBr.Result, KtcJson.NormId(branchId), new[] { "BranchID" });
-        var location = new List<DetailField>
-        {
-            Named("Branch", branchId, tBr.Result, new[] { "BranchID" }),
-        };
-        if (branch is { } b)
-            foreach (var (path, value) in SchemaInferer.Leaves(b))
-                if (!Regex.IsMatch(path, @"(^|\.)(ID|Id|BranchID|Name|BranchName|Deleted.*|IsDeleted|BusinessID|.*RegionID)$") && !Secret.Contains(path) && value.Length > 0)
-                    location.Add(F("Branch " + TxDetailRules.Pretty(path).ToLowerInvariant(), value));
-        for (int lv = 1; lv <= 5; lv++)
-        {
-            var rid = Raw($"Level{lv}RegionID", $"Level{lv}RegionId");
-            if (lv == 1 && Empty(rid)) rid = Raw("RegionID", "RegionId");
-            location.Add(Named($"Region level {lv}", rid, tReg.Result, new[] { "RegionID" }));
-        }
-        location.Add(F("Latitude", Coord(lat))); location.Add(F("Longitude", Coord(lon)));
-        location.Add(F("Time zone", Raw("TimeZone", "TimeZoneName")));
-
+        // Only the fields asked for: name, IP, business, branch, branch address / city, location (region), latitude / longitude.
+        var region = Raw("Level1RegionID", "Level1RegionId"); if (Empty(region)) region = Raw("RegionID", "RegionId");
         var groups = new List<DetailGroup>
         {
-            new("Identity", new List<DetailField>
-            {
-                F("Name", Raw("Name", "NodeName", "ClientName")), F("Client ID", id), F("Alias", Raw("Alias", "DisplayName")), F("GUID", Raw("GUID", "Guid")),
-                F("Hardware", Raw("HardwareTypeName", "HardwareType", "ModelName")), F("Hardware ID", Raw("HardwareID", "HardwareId")),
-                F("Type", Raw("TypeByte", "Type")), F("Active", Raw("IsActive", "Active")), F("Owner ID", Raw("OwnerID", "OwnerId")),
-            }),
-            new("Network", new List<DetailField> { F("IP address", Raw("Address", "NetworkAddress", "IPAddress", "IP")), F("Subnet", Raw("Subnet")), F("Connectable", Raw("ConnectableByte", "Connectable")) }),
+            new("Machine", new List<DetailField> { F("Name", Raw("Name", "NodeName", "ClientName")), F("IP address", Raw("Address", "NetworkAddress", "IPAddress", "IP")) }),
             new("Business", new List<DetailField> { Named("Business", Raw("BusinessID", "BusinessId"), tBiz.Result, new[] { "BusinessID" }) }),
-            new("Location", location),
+            new("Location", new List<DetailField>
+            {
+                Named("Branch", branchId, tBr.Result, new[] { "BranchID" }),
+                F("Address", branch is { } b1 ? KtcJson.Str(b1, "Address", "Address1", "AddressLine1", "Street") : ""),
+                F("City", branch is { } b2 ? KtcJson.Str(b2, "City", "Town") : ""),
+                Named("Location", region, tReg.Result, new[] { "RegionID" }),
+                F("Latitude", Coord(lat)), F("Longitude", Coord(lon)),
+            }),
         };
-        // Everything else the record holds (feature flags, comments, grid, ...), never the secrets.
-        if (rec is { } rr)
-        {
-            var other = rr.EnumerateObject().Where(p => !used.Contains(p.Name) && !Secret.Contains(p.Name) && !Regex.IsMatch(p.Name, "^(ID|Id|ClientID|ClientId)$") && p.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
-                .Select(p => F(TxDetailRules.Pretty(p.Name), p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? "" : p.Value.ToString())).ToList();
-            if (other.Count > 0) groups.Add(new DetailGroup("Other KTC fields", other));
-        }
         var notSet = groups.SelectMany(g => g.Fields).Where(f => f.Value.Length == 0).Select(f => f.Name).ToList();
         _log.LogInformation("ATM general details {Atm} -> {Id}: {Set} values set, not set: {NotSet}", atmId, id, groups.Sum(g => g.Fields.Count) - notSet.Count, string.Join(", ", notSet));
         return new AtmGeneral(id, rec is { } n0 ? KtcJson.Str(n0, "Name", "NodeName", "ClientName") : lookup.GetValueOrDefault(id)?.Name ?? id, groups,
