@@ -58,6 +58,16 @@ public class DataController : ControllerBase
         return g == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(g);
     }
 
+    /// <summary>Replenishment tab: cash unit levels, replenishment history and KTC's replenishment records of one ATM.</summary>
+    [HttpGet("atm/{id}/replenishment")]
+    [Audit("AtmView", "ATM replenishment")]
+    public async Task<IActionResult> AtmReplenishment(string id, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Select an ATM." });
+        var r = await _data.GetReplenishmentAsync(id.Trim(), ct);
+        return r == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(r);
+    }
+
     [HttpPost("atm/{id}/favorite")]
     public async Task<IActionResult> Favorite(string id, string? name, CancellationToken ct)
     {

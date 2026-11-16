@@ -417,6 +417,95 @@ public class KtcDataService : IKtcDataService
     /// business, branch (with the branch record's address fields), regions level 1-5, hardware, flags. Ids are named through GET Business /
     /// Branch / Region; a field KTC leaves empty (or 0 for an id) is kept and listed as not set. Salt / AuthHash are never shown.
     /// </summary>
+    /// <summary>
+    /// Replenishment tab. Cash units: GET Client/{id}/CurrentCashUnitStatus (types / statuses named through CashUnitType / CashUnitStatus).
+    /// History: the replenishment sessions in the transactions of the last Ktc:CounterLookbackDays. KTC's own records: POST
+    /// Client/{id}/ReplenishmentsByTimeRange, GET Client/{id}/ReplenishmentOrders and GET Client/{id}/PhysicalCassettes (last 30 days), shown as they come.
+    /// </summary>
+    public async Task<AtmReplenishment?> GetReplenishmentAsync(string atmId, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+        var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
+        var diag = new List<string>();
+        var now = DateTime.UtcNow; var days = Math.Clamp(_opt.CounterLookbackDays, 1, 31); var from = now.AddDays(-30);
+        string D(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss"));
+
+        var cw = new Warn();
+        var tCash = Fetch($"api/v1/Client/{id}/CurrentCashUnitStatus", cw, ct: ct);
+        var tTx = SearchTransactionsAsync(new TransactionQuery(null, null, null, now.AddDays(-days), now), ct);
+        var routes = new (string Title, string Url, HttpMethod M, object? Body)[]
+        {
+            ("KTC replenishments", $"api/v1/Client/{id}/ReplenishmentsByTimeRange", HttpMethod.Post, new { Start = from, End = now, StartTime = from, EndTime = now }),
+            ("KTC replenishment orders", $"api/v1/Client/{id}/ReplenishmentOrders?start={D(from)}&end={D(now)}&providerID=0", HttpMethod.Get, null),
+            ("Physical cassettes", $"api/v1/Client/{id}/PhysicalCassettes", HttpMethod.Get, null),
+        };
+        var tRoutes = routes.Select(async r =>
+        {
+            var rw = new Warn();
+            var j = await Fetch(r.Url, rw, r.M, r.Body, idempotent: true, ct: ct);
+            return (r, j, err: rw.ToList().FirstOrDefault());
+        }).ToList();
+        await Task.WhenAll(tCash, tTx, Task.WhenAll(tRoutes));
+
+        // ---- cash units ----
+        var cashRows = KtcJson.Items(tCash.Result).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        var names = cashRows.Count > 0 ? await HardwareNamesAsync(cashRows, ct) : null;
+        var unitTypes = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitType", ct) : new();
+        var unitStatus = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitStatus", ct) : new();
+        var units = new List<CashUnitLevel>();
+        foreach (var e in cashRows)
+        {
+            var cid = KtcJson.NormId(KtcJson.Str(e, "DBComponentID", "ComponentID", "CompId"));
+            var dev = names?.Components.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
+            var unit = KtcJson.Str(e, "CashUnitNumber", "UnitNumber", "Number", "LogicalName");
+            var tid = KtcJson.NormId(KtcJson.Str(e, "TypeID", "TypeId", "Type")); var sid = KtcJson.NormId(KtcJson.Str(e, "StatusID", "StatusId", "Status"));
+            var val = KtcJson.Dbl(e, double.NaN, "Value", "Denomination", "NoteValue", "CurrencyValue");
+            units.Add(new CashUnitLevel(dev, unit.Length > 0 ? unit : "?", unitTypes.GetValueOrDefault(tid) ?? (tid.Length > 0 ? "Type " + tid : ""),
+                unitStatus.GetValueOrDefault(sid) ?? (sid.Length > 0 ? "Status " + sid : ""), double.IsNaN(val) || val <= 0 ? null : (decimal)val,
+                (long)Math.Max(0, KtcJson.Dbl(e, 0, "Count", "CurrentCount", "Notes")), KtcJson.Date(e, "Timestamp", "TimeStamp")));
+        }
+        units = units.OrderBy(u => CounterRules.ClassRank(CounterRules.XfsClass(u.Device) ?? "")).ThenBy(u => u.Device).ThenBy(u => int.TryParse(u.Unit, out var n) ? n : 999).ThenBy(u => u.Unit).ToList();
+        diag.Add(tCash.Result == null ? $"CurrentCashUnitStatus: {cw.ToList().FirstOrDefault() ?? "no answer"}." : $"CurrentCashUnitStatus: {units.Count} cash units.");
+        if (tCash.Result == null) w.Add("Replenishment: KTC did not return the cash units (CurrentCashUnitStatus), so cassette levels are not shown.");
+
+        // ---- history from the transactions ----
+        var tx = tTx.Result.Where(t => t.AtmId == id).ToList();
+        var history = ReplenishmentRules.History(tx, now);
+        diag.Add($"Transactions (last {days} days): {tx.Count} for this ATM, {history.Count} replenishment session(s) ({string.Join(", ", tx.Where(t => CounterRules.IsResetType(t.Type)).Select(t => t.Type).Distinct())}).");
+        if (history.Count == 0) w.Add($"Replenishment: no replenishment, add-cash or clear-cash operation in this ATM's transactions of the last {days} days (Ktc:CounterLookbackDays).");
+
+        // ---- KTC's own replenishment routes ----
+        var sets = new List<KtcRecordSet>();
+        foreach (var t in tRoutes)
+        {
+            var (r, j, err) = t.Result;
+            var path = r.Url.Split('?')[0];
+            var recs = j == null ? new List<IReadOnlyList<DetailField>>() : KtcJson.Items(j).Take(50).Select(e => (IReadOnlyList<DetailField>)TxDetailRules.Flatten(e)).Where(f => f.Count > 0).ToList();
+            sets.Add(new KtcRecordSet(r.Title, $"{r.M.Method} {path}", j == null ? err ?? "no answer" : null, recs));
+            diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}.");
+        }
+        return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag);
+    }
+
+    /// <summary>id -> name of a KTC list route (Name / DisplayName / Description); empty when the route does not answer. Cached.</summary>
+    private Task<Dictionary<string, string>> NamedListAsync(string route, CancellationToken ct) =>
+        Cached("named|" + route, TimeSpan.FromMinutes(30), async () =>
+        {
+            var map = new Dictionary<string, string>();
+            foreach (var (k, e) in KtcJson.Rows(await Quiet(route, ct)))
+            {
+                if (e.ValueKind == JsonValueKind.String) { if (e.GetString() is { Length: > 0 } s) map.TryAdd(KtcJson.NormId(k), s); continue; }
+                if (e.ValueKind != JsonValueKind.Object) continue;
+                var nid = KtcJson.NormId(KtcJson.Str(e, "ID", "Id") is { Length: > 0 } x ? x : k);
+                if (KtcJson.Str(e, NameFields) is { Length: > 0 } n && nid.Length > 0) map.TryAdd(nid, n);
+            }
+            return map;
+        });
+
     public async Task<AtmGeneral?> GetAtmGeneralAsync(string atmId, CancellationToken ct = default)
     {
         var w = new Warn(); var lookup = await LookupAsync(w, ct);

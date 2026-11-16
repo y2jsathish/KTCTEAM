@@ -69,6 +69,8 @@ public interface IKtcDataService
     Task<TransactionDto?> GetTransactionAsync(string id, CancellationToken ct = default);
     /// <summary>General details of one ATM from its KTC Client record, with branch, business and region names. Null when no ATM matches.</summary>
     Task<AtmGeneral?> GetAtmGeneralAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Replenishment tab of one ATM; null when no ATM matches.</summary>
+    Task<AtmReplenishment?> GetReplenishmentAsync(string atmId, CancellationToken ct = default);
     /// <summary>Transaction details for the popup: the record, session, STX fields, EJ lines and dispense counters. Null when the transaction is not found.</summary>
     Task<TransactionDetails?> GetTransactionDetailsAsync(string id, string? atmId, DateTime? timeUtc, CancellationToken ct = default);
     Task<IReadOnlyList<EjEntryDto>> SearchEjAsync(EjQuery query, CancellationToken ct = default);

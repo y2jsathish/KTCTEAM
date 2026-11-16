@@ -4,6 +4,8 @@
 <div id="warnings"></div>
 <ul class="nav nav-tabs mb-3" id="atmTabs" role="tablist">
   <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-overview" data-tab="overview" type="button" role="tab" aria-controls="tab-overview" aria-selected="true"><i class="bi bi-info-circle"></i> Overview</button></li>
+  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-hardware" data-tab="hardware" type="button" role="tab" aria-controls="tab-hardware" aria-selected="false"><i class="bi bi-cpu"></i> Hardware Status <span id="hwFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Devices not OK"></span></button></li>
+  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-replenishment" data-tab="replenishment" type="button" role="tab" aria-controls="tab-replenishment" aria-selected="false"><i class="bi bi-cash-coin"></i> Replenishment</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-app-counters" data-tab="app-counters" type="button" role="tab" aria-controls="tab-app-counters" aria-selected="false"><i class="bi bi-calculator"></i> Application Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-xfs-counters" data-tab="xfs-counters" type="button" role="tab" aria-controls="tab-xfs-counters" aria-selected="false"><i class="bi bi-gear-wide-connected"></i> XFS Counters <span id="xfsFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Counters at or over threshold"></span></button></li>
 </ul>
@@ -13,7 +15,7 @@
 <div class="cardx mb-3"><div class="d-flex align-items-center"><h6 class="m-0">General details</h6><span class="small text-muted ms-2" id="genMeta"></span><a class="small ms-auto d-none" id="genMap" target="_blank" rel="noopener"><i class="bi bi-geo-alt"></i> Show on map</a></div>
   <div id="general" class="row g-3 mt-0"><div class="col-12 text-muted small">Loading…</div></div></div>
 <div class="grid2">
-  <div class="cardx"><h6>Device details</h6><div id="device"></div><h6 class="mt-3">Hardware devices <a class="small ms-2" id="hwAll" href="#">Open Hardware Status</a></h6><div id="hw" class="hw-chips"><span class="text-muted small">Loading…</span></div></div>
+  <div class="cardx"><h6>Device details</h6><div id="device"></div></div>
   <div class="cardx"><h6>Availability (30 d) &amp; top unavailable reasons</h6><div class="chart-box sm"><canvas id="cReasons"></canvas></div></div>
 </div>
 <div class="grid2">
@@ -24,6 +26,21 @@
   <div class="cardx"><h6>Recent transactions (24 h)</h6><table id="tTx" class="table table-sm w-100"><thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Resp ms</th><th>Error</th></tr></thead></table></div>
   <div class="cardx"><h6>Latest transaction timeline (EJ, PAN masked)</h6><ul class="tl" id="timeline"></ul><div class="ej-term mt-2" id="ejRaw"></div></div>
 </div>
+</div>
+<div class="tab-pane fade" id="tab-hardware" role="tabpanel">
+  <div class="counter-bar"><span class="small text-muted" id="hwMeta"></span><a class="btn btn-sm btn-outline-secondary ms-auto" id="hwAll" href="#"><i class="bi bi-box-arrow-up-right"></i> Open Hardware Status page</a>
+    <button class="btn btn-sm btn-outline-secondary" data-hwrefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div id="hwMsg"></div>
+  <div id="hwKpis" class="kpis"></div>
+  <div id="hw" class="hw-chips mb-3"><span class="text-muted small">Loading…</span></div>
+  <div id="hwModules" class="row g-3"></div>
+</div>
+<div class="tab-pane fade" id="tab-replenishment" role="tabpanel">
+  <div class="counter-bar"><span class="small text-muted" id="repMeta"></span>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" data-reprefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div id="repMsg"></div>
+  <div id="repKpis" class="kpis"></div>
+  <div id="repBody" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
 <div class="tab-pane fade" id="tab-app-counters" role="tabpanel">
   <div class="counter-bar"><span class="small text-muted" id="appMeta"></span>
@@ -42,4 +59,4 @@
   <div id="xfsCounters" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
 </div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script> }
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script> }

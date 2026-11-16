@@ -250,3 +250,27 @@ public record NotesByDenomination(string Denomination, decimal? Value, string? D
     public decimal? AmountDispensed => Value * NotesDispensed;
     public decimal? AmountAccepted => Value * NotesAccepted;
 }
+
+/// <summary>
+/// ATM 360 Replenishment tab: current cash unit levels (KTC CurrentCashUnitStatus), the replenishment sessions found in the
+/// transactions (REPLENISH, ADD_CASH, CLR_CASH, ...) with what happened until the next one, and KTC's own replenishment records.
+/// </summary>
+public record AtmReplenishment(string AtmId, string AtmName, DateTime? LastReplenishmentUtc, int LookbackDays,
+    IReadOnlyList<CashUnitLevel> CashUnits, IReadOnlyList<ReplenishmentEvent> History, IReadOnlyList<KtcRecordSet> KtcRecords,
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Diagnostics);
+
+/// <summary>One cash unit (cassette) as KTC reports it now. Value is the note value; Amount = Value x Count.</summary>
+public record CashUnitLevel(string Device, string Unit, string Type, string Status, decimal? Value, long Count, DateTime? UpdatedUtc)
+{
+    public decimal? Amount => Value is > 0 ? Value * Count : null;
+}
+
+/// <summary>
+/// One replenishment session (the supervisor operations sharing a KTC session id) and the customer activity from it until the next
+/// replenishment (or now): transactions, successful withdrawals / deposits and their amounts.
+/// </summary>
+public record ReplenishmentEvent(DateTime StartUtc, DateTime? NextUtc, string SessionId, IReadOnlyList<string> Operations, bool Success,
+    int CustomerTransactions, int Withdrawals, decimal AmountWithdrawn, int Deposits, decimal AmountDeposited);
+
+/// <summary>Records of one KTC route shown as they come (fields flattened, card numbers masked); Error when the route did not answer.</summary>
+public record KtcRecordSet(string Title, string Route, string? Error, IReadOnlyList<IReadOnlyList<DetailField>> Records);

@@ -19,7 +19,23 @@
  document.getElementById('fav').onclick=async()=>{const r=await K.api('/data/atm/'+encodeURIComponent(id)+'/favorite?name='+encodeURIComponent(d.atm.name),{method:'POST'});d.favorite=r.favorite;render(d);};
  const hcls={OK:'ok',Warning:'warn',Fatal:'crit',Unknown:'unknown'};
  async function loadHw(){const box=document.getElementById('hw'),all=document.getElementById('hwAll'),base='/Hardware?atmId='+encodeURIComponent(id);all.href=base;
+  const mods=document.getElementById('hwModules'),kp=document.getElementById('hwKpis'),fl=document.getElementById('hwFlagged');
   try{const r=await K.api('/data/hardware?'+K.qs({atmId:id}));
    box.innerHTML=r.modules.length?r.modules.map(m=>`<a class="hw-chip text-decoration-none" href="${base}&component=${encodeURIComponent(m.id)}" title="${K.esc(m.name)}: ${K.esc(m.status)} - click for details"><span class="sbadge ${hcls[m.status]||'unknown'}">${K.esc(m.status)}</span> ${K.esc(m.name)}</a>`).join(''):'<span class="text-muted small">KTC returned no component status for this ATM.</span>';
-  }catch(e){box.innerHTML=`<span class="text-muted small">Hardware status unavailable: ${K.esc(e.message)}</span>`;}}
+   // Hardware Status tab: overall status, counts and one card per device with its properties and errors (devices not OK first).
+   const cnt=s=>r.modules.filter(m=>m.status===s).length,bad=r.modules.filter(m=>m.status!=='OK');
+   document.getElementById('hwMeta').innerHTML=r.updatedUtc?`<i class="bi bi-clock"></i> Last reported ${K.local(r.updatedUtc)}`:'';
+   document.getElementById('hwMsg').innerHTML=(r.warnings||[]).length?`<div class="alert alert-warning py-2 small">${r.warnings.map(K.esc).join('<br>')}</div>`:'';
+   fl.textContent=bad.length;fl.classList.toggle('d-none',!bad.length);
+   const k=(l,v,c,d)=>`<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d||'&nbsp;'}</div></div>`;
+   kp.innerHTML=k('Overall',K.esc(r.status),hcls[r.status]||'info')+k('Devices',r.modules.length,'info')+k('OK',cnt('OK'),'ok')+k('Warning',cnt('Warning'),cnt('Warning')?'warn':'ok')+k('Fatal',cnt('Fatal'),cnt('Fatal')?'crit':'ok');
+   const order={Fatal:0,Warning:1,Unknown:2,OK:3};
+   mods.innerHTML=r.modules.slice().sort((a,b)=>(order[a.status]??2)-(order[b.status]??2)||a.name.localeCompare(b.name)).map(m=>`<div class="col-md-6 col-xl-4"><div class="cardx h-100 xfs-card ${m.status==='OK'?'ok':'warn'}">
+     <div class="d-flex align-items-center mb-1"><h6 class="m-0">${K.esc(m.name)}</h6><span class="ms-auto sbadge ${hcls[m.status]||'unknown'}">${K.esc(m.status)}</span></div>
+     <div class="small text-muted mb-2">${m.updatedUtc?'Last update '+K.local(m.updatedUtc):'&nbsp;'} · <a href="${base}&component=${encodeURIComponent(m.id)}">details</a></div>
+     ${(m.errors||[]).length?`<div class="small text-danger mb-2">${m.errors.slice(0,3).map(K.esc).join('<br>')}</div>`:''}
+     <table class="table table-sm small mb-0 counter-table"><tbody>${(m.properties||[]).slice(0,8).map(p=>`<tr${/warn|fatal|crit/i.test(p.status||'')?' class="table-warning-soft"':''}><td>${K.esc(p.name)}</td><td class="text-end">${K.esc(p.value)}</td></tr>`).join('')||'<tr><td class="text-muted">No properties reported.</td></tr>'}</tbody></table>
+     ${(m.properties||[]).length>8?`<div class="small text-muted mt-1">+${m.properties.length-8} more on the details page</div>`:''}</div></div>`).join('');
+  }catch(e){box.innerHTML=`<span class="text-muted small">Hardware status unavailable: ${K.esc(e.message)}</span>`;mods.innerHTML='';kp.innerHTML='';}}
+ document.querySelector('[data-hwrefresh]').onclick=()=>loadHw();
  load();loadHw();setInterval(load,60000);setInterval(loadHw,60000);K.hooks.dashboard.push(load);document.addEventListener('ktc-theme',()=>d&&render(d));})();
