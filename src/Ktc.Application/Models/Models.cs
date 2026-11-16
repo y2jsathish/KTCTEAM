@@ -91,6 +91,13 @@ public record TransactionDto
     public DateTime? LocalTime { get; init; }
 }
 
+/// <summary>
+/// An ATM's general details from its KTC Client record (name, IP, location, branch, business, regions, ...), ids named through the
+/// Business / Branch / Region lists. Values KTC does not hold are listed as not set (Value empty) so the page can say so.
+/// </summary>
+public record AtmGeneral(string AtmId, string Name, IReadOnlyList<DetailGroup> Groups, double? Latitude, double? Longitude, IReadOnlyList<string> NotSet, IReadOnlyList<string> Warnings);
+public record DetailGroup(string Title, IReadOnlyList<DetailField> Fields);
+
 /// <summary>One named value shown in the transaction details popup (PAN-masked).</summary>
 public record DetailField(string Name, string Value, string? Id = null);
 

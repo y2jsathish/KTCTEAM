@@ -409,6 +409,99 @@ public class KtcDataService : IKtcDataService
         return new AtmHardware(id, atm?.Name ?? id, HardwareStatusRules.Worst(modules.Select(m => m.Status)), compTime.Values.Where(v => v.HasValue).DefaultIfEmpty().Max(), modules, warnings);
     }
 
+    // ---------------- general details ----------------
+    private static readonly HashSet<string> Secret = new(StringComparer.OrdinalIgnoreCase) { "Salt", "AuthHash", "Password", "Secret", "Token" };
+
+    /// <summary>
+    /// General details of one ATM from GET Client/{id} (or the client list): name, GUID, IP (Address), subnet, latitude / longitude, time zone,
+    /// business, branch (with the branch record's address fields), regions level 1-5, hardware, flags. Ids are named through GET Business /
+    /// Branch / Region; a field KTC leaves empty (or 0 for an id) is kept and listed as not set. Salt / AuthHash are never shown.
+    /// </summary>
+    public async Task<AtmGeneral?> GetAtmGeneralAsync(string atmId, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+
+        var tRec = Fetch($"api/v1/Client/{id}", new Warn(), ct: ct);
+        var tBiz = Cached("gen-business", TimeSpan.FromMinutes(30), async () => KtcJson.Items(await Quiet("api/v1/Business?includeDefault=false", ct)).ToList());
+        var tBr = Cached("gen-branch", TimeSpan.FromMinutes(30), async () => KtcJson.Items(await Quiet("api/v1/Branch?includeDefault=false", ct)).ToList());
+        var tReg = Cached("gen-region", TimeSpan.FromMinutes(30), async () => KtcJson.Items(await Quiet("api/v1/Region?includeDefault=false", ct)).ToList());
+        await Task.WhenAll(tRec, tBiz, tBr, tReg);
+        JsonElement? rec = KtcJson.Items(tRec.Result).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object) is { ValueKind: JsonValueKind.Object } r1 ? r1 : null;
+        if (rec == null)
+        {
+            // Client/{id} not readable: take the record from the client list.
+            var all = await Fetch("api/v1/Client?includedeleted=false", w, ct: ct);
+            rec = KtcJson.Items(all).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object && KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId", "ID", "Id")) == id) is { ValueKind: JsonValueKind.Object } r2 ? r2 : null;
+            if (rec == null) w.Add($"KTC returned no Client record for {id} (GET Client/{id} and the client list).");
+        }
+        static string IdOf(JsonElement e, params string[] f) => KtcJson.NormId(KtcJson.Str(e, f.Concat(new[] { "ID", "Id" }).ToArray()));
+        JsonElement? Find(List<JsonElement> list, string key, string[] f) => key is "" or "0" ? null : list.FirstOrDefault(e => e.ValueKind == JsonValueKind.Object && IdOf(e, f) == key) is { ValueKind: JsonValueKind.Object } x ? x : null;
+        string NameOf(JsonElement? e) => e is { } x ? KtcJson.Str(x, "Name", "DisplayName", "BusinessName", "BranchName", "RegionName", "Description") : "";
+
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string Raw(params string[] names) { foreach (var n in names) used.Add(n); return rec is { } r ? KtcJson.Str(r, names) : ""; }
+        static bool Empty(string v) => v.Length == 0 || v == "0" || v == "0001-01-01T00:00:00" || v.Equals("<Comments />", StringComparison.OrdinalIgnoreCase);
+        DetailField F(string label, string value, string? id = null) => new(label, Empty(value) ? "" : Guid.TryParse(value, out _) ? value : PanMasker.Mask(value), id);
+        DetailField Named(string label, string rawId, List<JsonElement> list, string[] f)
+        {
+            if (Empty(rawId)) return new DetailField(label, "", null);
+            var n = NameOf(Find(list, KtcJson.NormId(rawId), f));
+            return new DetailField(label, n.Length > 0 ? n : $"id {rawId} (no name in KTC)", rawId);
+        }
+
+        var lat = KtcJson.Dbl(rec ?? default, double.NaN, "Latitude", "Lat"); var lon = KtcJson.Dbl(rec ?? default, double.NaN, "Longitude", "Lon", "Lng");
+        used.UnionWith(new[] { "Latitude", "Lat", "Longitude", "Lon", "Lng" });
+        bool hasPos = !double.IsNaN(lat) && !double.IsNaN(lon) && !(lat == 0 && lon == 0);
+        string Coord(double v) => double.IsNaN(v) || !hasPos ? "" : v.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture);
+
+        var branchId = Raw("BranchID", "BranchId");
+        var branch = Find(tBr.Result, KtcJson.NormId(branchId), new[] { "BranchID" });
+        var location = new List<DetailField>
+        {
+            Named("Branch", branchId, tBr.Result, new[] { "BranchID" }),
+        };
+        if (branch is { } b)
+            foreach (var (path, value) in SchemaInferer.Leaves(b))
+                if (!Regex.IsMatch(path, @"(^|\.)(ID|Id|BranchID|Name|BranchName|Deleted.*|IsDeleted|BusinessID|.*RegionID)$") && !Secret.Contains(path) && value.Length > 0)
+                    location.Add(F("Branch " + TxDetailRules.Pretty(path).ToLowerInvariant(), value));
+        for (int lv = 1; lv <= 5; lv++)
+        {
+            var rid = Raw($"Level{lv}RegionID", $"Level{lv}RegionId");
+            if (lv == 1 && Empty(rid)) rid = Raw("RegionID", "RegionId");
+            location.Add(Named($"Region level {lv}", rid, tReg.Result, new[] { "RegionID" }));
+        }
+        location.Add(F("Latitude", Coord(lat))); location.Add(F("Longitude", Coord(lon)));
+        location.Add(F("Time zone", Raw("TimeZone", "TimeZoneName")));
+
+        var groups = new List<DetailGroup>
+        {
+            new("Identity", new List<DetailField>
+            {
+                F("Name", Raw("Name", "NodeName", "ClientName")), F("Client ID", id), F("Alias", Raw("Alias", "DisplayName")), F("GUID", Raw("GUID", "Guid")),
+                F("Hardware", Raw("HardwareTypeName", "HardwareType", "ModelName")), F("Hardware ID", Raw("HardwareID", "HardwareId")),
+                F("Type", Raw("TypeByte", "Type")), F("Active", Raw("IsActive", "Active")), F("Owner ID", Raw("OwnerID", "OwnerId")),
+            }),
+            new("Network", new List<DetailField> { F("IP address", Raw("Address", "NetworkAddress", "IPAddress", "IP")), F("Subnet", Raw("Subnet")), F("Connectable", Raw("ConnectableByte", "Connectable")) }),
+            new("Business", new List<DetailField> { Named("Business", Raw("BusinessID", "BusinessId"), tBiz.Result, new[] { "BusinessID" }) }),
+            new("Location", location),
+        };
+        // Everything else the record holds (feature flags, comments, grid, ...), never the secrets.
+        if (rec is { } rr)
+        {
+            var other = rr.EnumerateObject().Where(p => !used.Contains(p.Name) && !Secret.Contains(p.Name) && !Regex.IsMatch(p.Name, "^(ID|Id|ClientID|ClientId)$") && p.Value.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+                .Select(p => F(TxDetailRules.Pretty(p.Name), p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() ?? "" : p.Value.ToString())).ToList();
+            if (other.Count > 0) groups.Add(new DetailGroup("Other KTC fields", other));
+        }
+        var notSet = groups.SelectMany(g => g.Fields).Where(f => f.Value.Length == 0).Select(f => f.Name).ToList();
+        _log.LogInformation("ATM general details {Atm} -> {Id}: {Set} values set, not set: {NotSet}", atmId, id, groups.Sum(g => g.Fields.Count) - notSet.Count, string.Join(", ", notSet));
+        return new AtmGeneral(id, rec is { } n0 ? KtcJson.Str(n0, "Name", "NodeName", "ClientName") : lookup.GetValueOrDefault(id)?.Name ?? id, groups,
+            hasPos ? lat : null, hasPos ? lon : null, notSet, w.ToList());
+    }
+
     // ---------------- counters ----------------
     /// <summary>
     /// Application and CEN/XFS device counters of one ATM, built from standard KTC data:

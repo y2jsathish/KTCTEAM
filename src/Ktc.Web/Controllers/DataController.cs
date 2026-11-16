@@ -49,6 +49,15 @@ public class DataController : ControllerBase
         return Ok(new { d.Atm, d.Incidents, d.Tickets, d.Transactions, d.Ej, timeline, availability = new { pct = double.IsNaN(d.Availability.AvailabilityPct) ? (double?)null : d.Availability.AvailabilityPct, reasons = d.Availability.TopUnavailableReasons.Select(r => new { r.Reason, r.Hours }) }, d.Warnings, favorite = fav });
     }
 
+    /// <summary>General details of one ATM (KTC Client record: name, IP, location, branch, business, regions, ...).</summary>
+    [HttpGet("atm/{id}/general")]
+    public async Task<IActionResult> AtmGeneral(string id, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Select an ATM." });
+        var g = await _data.GetAtmGeneralAsync(id.Trim(), ct);
+        return g == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(g);
+    }
+
     [HttpPost("atm/{id}/favorite")]
     public async Task<IActionResult> Favorite(string id, string? name, CancellationToken ct)
     {

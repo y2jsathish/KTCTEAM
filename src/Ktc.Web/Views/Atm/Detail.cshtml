@@ -10,6 +10,8 @@
 <div class="tab-content">
 <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
 <div class="kpis" id="kpis"></div>
+<div class="cardx mb-3"><div class="d-flex align-items-center"><h6 class="m-0">General details</h6><span class="small text-muted ms-2" id="genMeta"></span><a class="small ms-auto d-none" id="genMap" target="_blank" rel="noopener"><i class="bi bi-geo-alt"></i> Show on map</a></div>
+  <div id="general" class="row g-3 mt-0"><div class="col-12 text-muted small">Loading…</div></div></div>
 <div class="grid2">
   <div class="cardx"><h6>Device details</h6><div id="device"></div><h6 class="mt-3">Hardware devices <a class="small ms-2" id="hwAll" href="#">Open Hardware Status</a></h6><div id="hw" class="hw-chips"><span class="text-muted small">Loading…</span></div></div>
   <div class="cardx"><h6>Availability (30 d) &amp; top unavailable reasons</h6><div class="chart-box sm"><canvas id="cReasons"></canvas></div></div>
@@ -40,4 +42,4 @@
   <div id="xfsCounters" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
 </div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script> }
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script> }
