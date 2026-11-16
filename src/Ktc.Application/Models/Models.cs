@@ -279,4 +279,6 @@ public record KtcRecordSet(string Title, string Route, string? Error, IReadOnlyL
     public string? Hint { get; init; }
     /// <summary>The dates sent (JSON body or query), so a failure shows what KTC was given.</summary>
     public string? Sent { get; init; }
+    /// <summary>Id fields no KTC list names, so they show the id.</summary>
+    public IReadOnlyList<string> UnnamedIds { get; init; } = Array.Empty<string>();
 }
