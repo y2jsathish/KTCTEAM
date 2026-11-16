@@ -273,4 +273,10 @@ public record ReplenishmentEvent(DateTime StartUtc, DateTime? NextUtc, string Se
     int CustomerTransactions, int Withdrawals, decimal AmountWithdrawn, int Deposits, decimal AmountDeposited);
 
 /// <summary>Records of one KTC route shown as they come (fields flattened, card numbers masked); Error when the route did not answer.</summary>
-public record KtcRecordSet(string Title, string Route, string? Error, IReadOnlyList<IReadOnlyList<DetailField>> Records);
+public record KtcRecordSet(string Title, string Route, string? Error, IReadOnlyList<IReadOnlyList<DetailField>> Records)
+{
+    /// <summary>What the error likely means and what to do, when it fails.</summary>
+    public string? Hint { get; init; }
+    /// <summary>The dates sent (JSON body or query), so a failure shows what KTC was given.</summary>
+    public string? Sent { get; init; }
+}

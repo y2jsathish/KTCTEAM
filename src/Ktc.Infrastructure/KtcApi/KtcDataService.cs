@@ -432,23 +432,21 @@ public class KtcDataService : IKtcDataService
         var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
         var diag = new List<string>();
         var now = DateTime.UtcNow; var days = Math.Clamp(_opt.CounterLookbackDays, 1, 31); var from = now.AddDays(-30);
-        string D(DateTime d) => Uri.EscapeDataString(d.ToString("yyyy-MM-ddTHH:mm:ss"));
 
         var cw = new Warn();
         var tCash = Fetch($"api/v1/Client/{id}/CurrentCashUnitStatus", cw, ct: ct);
         var tTx = SearchTransactionsAsync(new TransactionQuery(null, null, null, now.AddDays(-days), now), ct);
-        var routes = new (string Title, string Url, HttpMethod M, object? Body)[]
+        var routes = new (string Title, HttpMethod M, string Path, Func<Task<RouteTry>> Call)[]
         {
-            ("KTC replenishments", $"api/v1/Client/{id}/ReplenishmentsByTimeRange", HttpMethod.Post, new { Start = from, End = now, StartTime = from, EndTime = now }),
-            ("KTC replenishment orders", $"api/v1/Client/{id}/ReplenishmentOrders?start={D(from)}&end={D(now)}&providerID=0", HttpMethod.Get, null),
-            ("Physical cassettes", $"api/v1/Client/{id}/PhysicalCassettes", HttpMethod.Get, null),
+            ("KTC replenishments", HttpMethod.Post, $"api/v1/Client/{id}/ReplenishmentsByTimeRange", () => ReplenishmentsByTimeRangeAsync(id, from, now, ct)),
+            ("KTC replenishment orders", HttpMethod.Get, $"api/v1/Client/{id}/ReplenishmentOrders", () => ReplenishmentOrdersAsync(id, from, now, ct)),
+            ("Physical cassettes", HttpMethod.Get, $"api/v1/Client/{id}/PhysicalCassettes", async () =>
+            {
+                var r = await _api.SendAsync(HttpMethod.Get, $"api/v1/Client/{id}/PhysicalCassettes", null, new KtcCallOptions(), ct);
+                return new RouteTry(r.Success ? r.Json : null, r.Success ? null : r.Error ?? $"HTTP {r.StatusCode}", null);
+            }),
         };
-        var tRoutes = routes.Select(async r =>
-        {
-            var rw = new Warn();
-            var j = await Fetch(r.Url, rw, r.M, r.Body, idempotent: true, ct: ct);
-            return (r, j, err: rw.ToList().FirstOrDefault());
-        }).ToList();
+        var tRoutes = routes.Select(async r => (r, res: await r.Call())).ToList();
         await Task.WhenAll(tCash, tTx, Task.WhenAll(tRoutes));
 
         // ---- cash units ----
@@ -482,13 +480,82 @@ public class KtcDataService : IKtcDataService
         var sets = new List<KtcRecordSet>();
         foreach (var t in tRoutes)
         {
-            var (r, j, err) = t.Result;
-            var path = r.Url.Split('?')[0];
+            var (r, res) = t.Result;
+            var (j, err, sent) = res;
+            var path = r.Path;
             var recs = j == null ? new List<IReadOnlyList<DetailField>>() : KtcJson.Items(j).Take(50).Select(e => (IReadOnlyList<DetailField>)TxDetailRules.Flatten(e)).Where(f => f.Count > 0).ToList();
-            sets.Add(new KtcRecordSet(r.Title, $"{r.M.Method} {path}", j == null ? err ?? "no answer" : null, recs));
-            diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}.");
+            var hint = j == null ? ReplenishmentHint(err, sent) : null;
+            sets.Add(new KtcRecordSet(r.Title, $"{r.M.Method} {path}", j == null ? err ?? "no answer" : null, recs) { Hint = hint, Sent = sent });
+            diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
         return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag);
+    }
+
+    /// <summary>A KTC route's answer: the records, or the error, and what was sent (the date body / query that was used or last tried).</summary>
+    private sealed record RouteTry(JsonElement? Json, string? Error, string? Sent);
+
+    private static bool IsDateFailure(KtcResponse r) =>
+        r.StatusCode == 500 && Regex.IsMatch(r.Raw ?? r.Error ?? "", @"SqlDateTime|valid DateTime|DateTime overflow|FormatException", RegexOptions.IgnoreCase);
+
+    /// <summary>What to tell the person when a replenishment route still fails.</summary>
+    private static string? ReplenishmentHint(string? err, string? sent)
+    {
+        var e = err ?? "";
+        if (Regex.IsMatch(e, "SqlDateTime|DateTime overflow", RegexOptions.IgnoreCase))
+            return "KTC did not find the start / end dates in the request (it used an empty date). The portal tried the date field names KTC uses elsewhere; " +
+                   $"none was accepted{(sent != null ? $" (last tried: {sent})" : "")}. Open this route in KTC's own UI or API help to see its body, and tell us the field names.";
+        if (Regex.IsMatch(e, "valid DateTime|FormatException", RegexOptions.IgnoreCase))
+            return $"KTC could not read the dates in the request{(sent != null ? $" (last tried: {sent})" : "")}. Every known date format was tried; set Ktc:QueryDateFormat to the format this KTC expects.";
+        if (Regex.IsMatch(e, @"\b404\b")) return "This KTC server does not have this route (404), so there is nothing to show.";
+        if (Regex.IsMatch(e, @"\b(401|403)\b")) return "The KTC account the portal uses is not allowed to read this route.";
+        return null;
+    }
+
+    // Body field names tried for POST Client/{id}/ReplenishmentsByTimeRange, whose body KTC does not document ({} in the Postman collection):
+    // the DateTimePair {dt1, dt2} KTC's HistoricalError routes read first, then common names. The first one KTC accepts is kept.
+    private static readonly (string A, string B)[] RangeBodyNames = { ("dt1", "dt2"), ("Start", "End"), ("StartTime", "EndTime"), ("From", "To"), ("StartDate", "EndDate"), ("start", "end") };
+    private static int _rangeBody = -1;
+
+    private async Task<RouteTry> ReplenishmentsByTimeRangeAsync(string id, DateTime from, DateTime to, CancellationToken ct)
+    {
+        var url = $"api/v1/Client/{id}/ReplenishmentsByTimeRange";
+        var fmt = KtcDateFormats.CurrentBody;
+        string Body(int i) => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
+            { [RangeBodyNames[i].A] = KtcDateFormats.Raw(from, fmt, _opt.QueryTimeZone), [RangeBodyNames[i].B] = KtcDateFormats.Raw(to, fmt, _opt.QueryTimeZone) });
+        var remembered = _rangeBody;   // the body KTC accepted before goes first; the others only if it is rejected
+        var order = Enumerable.Range(0, RangeBodyNames.Length).OrderBy(i => i == remembered ? 0 : 1).ToArray();
+        KtcResponse? last = null; string? sent = null;
+        foreach (var i in order)
+        {
+            sent = Body(i);
+            last = await _api.SendAsync(HttpMethod.Post, url, sent, new KtcCallOptions { Idempotent = true }, ct);
+            if (IsDateFailure(last)) continue;
+            if (last.Success) { if (_rangeBody != i) _log.LogInformation("KTC ReplenishmentsByTimeRange accepts the body {Body}", sent); _rangeBody = i; }
+            break;
+        }
+        // Dates in the query instead of the body, as KTC's other time-range routes take them.
+        if (last != null && IsDateFailure(last))
+        {
+            var f = KtcDateFormats.Current(_opt);
+            sent = $"?start={KtcDateFormats.Raw(from, f, _opt.QueryTimeZone)}&end={KtcDateFormats.Raw(to, f, _opt.QueryTimeZone)}";
+            var p = await _api.SendAsync(HttpMethod.Post, $"{url}?start={KtcDateFormats.Format(from, f, _opt.QueryTimeZone)}&end={KtcDateFormats.Format(to, f, _opt.QueryTimeZone)}", "{}", new KtcCallOptions { Idempotent = true }, ct);
+            if (!IsDateFailure(p)) last = p;
+        }
+        return last is { Success: true } ok ? new RouteTry(ok.Json, null, sent) : new RouteTry(null, last?.Error ?? "no answer", sent);
+    }
+
+    /// <summary>GET Client/{id}/ReplenishmentOrders?start=&amp;end=&amp;providerID= with the query date format KTC accepts (yyyyMMddHHmmssfff on most servers).</summary>
+    private async Task<RouteTry> ReplenishmentOrdersAsync(string id, DateTime from, DateTime to, CancellationToken ct)
+    {
+        string? sent = null;
+        var r = await GetWithDatesAsync(d => sent = $"api/v1/Client/{id}/ReplenishmentOrders?start={d(from)}&end={d(to)}&providerID=0", ct);
+        if (!r.Success && r.StatusCode is 400 or 500 && !IsDateFailure(r))   // providerID 0 may not be accepted: without it
+        {
+            var r2 = await GetWithDatesAsync(d => sent = $"api/v1/Client/{id}/ReplenishmentOrders?start={d(from)}&end={d(to)}", ct);
+            if (r2.Success) r = r2;
+        }
+        var q = sent?.Split('?').Skip(1).FirstOrDefault();
+        return r.Success ? new RouteTry(r.Json, null, "?" + q) : new RouteTry(null, r.Error ?? $"HTTP {r.StatusCode}", "?" + q);
     }
 
     /// <summary>id -> name of a KTC list route (Name / DisplayName / Description); empty when the route does not answer. Cached.</summary>

@@ -21,7 +21,7 @@
  }
  function ktc(s){
   let body;
-  if(s.error)body=`<div class="small text-muted">KTC did not answer: ${K.esc(s.error)}</div>`;
+  if(s.error)body=(s.hint?`<div class="small mb-1"><i class="bi bi-lightbulb"></i> ${K.esc(s.hint)}</div>`:'')+`<details class="small text-muted"><summary>KTC's answer</summary>${K.esc(s.error)}${s.sent?`<div class="mt-1">Sent: <code>${K.esc(s.sent)}</code></div>`:''}</details>`;
   else if(!s.records.length)body='<div class="small text-muted">KTC answered with no records for the last 30 days.</div>';
   else{const cols=[];s.records.forEach(r=>r.forEach(f=>{if(!cols.includes(f.name)&&cols.length<12)cols.push(f.name);}));
    body=`<div class="table-responsive"><table class="table table-sm small mb-0 counter-table"><thead><tr>${cols.map(c=>`<th>${K.esc(c)}</th>`).join('')}</tr></thead><tbody>${s.records.map(r=>`<tr>${cols.map(c=>{const f=r.find(x=>x.name===c);return `<td>${f?K.esc(f.value):''}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>`;}

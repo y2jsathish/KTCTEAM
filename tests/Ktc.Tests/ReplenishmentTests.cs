@@ -69,6 +69,53 @@ public class ReplenishmentTests
         Assert.Null(await new KtcDataService(api, Microsoft.Extensions.Options.Options.Create(new KtcOptions()), new MemoryCache(new MemoryCacheOptions()), new HttpContextAccessor(), NullLogger<KtcDataService>.Instance).GetReplenishmentAsync("NO-SUCH-ATM"));
     }
 
+    // Live ATM 19: ReplenishmentsByTimeRange answered 500 SqlDateTime overflow (its date fields were not filled) and ReplenishmentOrders
+    // 500 FormatException (ISO dates in the query). This KTC takes yyyyMMddHHmmssfff query dates and, here, a {StartDate, EndDate} body.
+    [Fact]
+    public async Task Replenishment_routes_retry_date_body_names_and_query_formats()
+    {
+        var api = new DateStrict();
+        var r = await new KtcDataService(api, Microsoft.Extensions.Options.Options.Create(new KtcOptions()), new MemoryCache(new MemoryCacheOptions()), new HttpContextAccessor(), NullLogger<KtcDataService>.Instance)
+            .GetReplenishmentAsync("19");
+        var rep = r!.KtcRecords.Single(s => s.Title == "KTC replenishments");
+        Assert.Null(rep.Error);
+        Assert.Contains(rep.Records[0], f => f.Name == "Amount" && f.Value == "300000");
+        Assert.Contains("\"StartDate\"", rep.Sent);
+        var orders = r.KtcRecords.Single(s => s.Title == "KTC replenishment orders");
+        Assert.Null(orders.Error);
+        Assert.Matches(@"start=\d{17}&end=\d{17}", orders.Sent);
+        Assert.Contains("POST api/v1/Client/19/ReplenishmentsByTimeRange {\"dt1\"", string.Join("|", api.Calls));   // tried first, then the others
+    }
+
+    [Fact]
+    public void Failing_routes_get_a_hint()
+    {
+        var m = typeof(KtcDataService).GetMethod("ReplenishmentHint", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        string? H(string e) => (string?)m.Invoke(null, new object?[] { e, "{\"dt1\":\"x\"}" });
+        Assert.StartsWith("KTC did not find the start / end dates", H("HTTP 500 Internal Server Error: SqlTypeException: SqlDateTime overflow."));
+        Assert.StartsWith("KTC could not read the dates", H("HTTP 500: FormatException: String was not recognized as a valid DateTime."));
+        Assert.StartsWith("This KTC server does not have this route", H("HTTP 404 Not Found"));
+    }
+
+    private sealed class DateStrict : IKtcApiClient
+    {
+        public List<string> Calls { get; } = new();
+        public Task<KtcResponse> SendAsync(HttpMethod method, string url, object? body = null, KtcCallOptions? options = null, CancellationToken ct = default)
+        {
+            var path = url.Split('?')[0]; var b = body as string ?? "";
+            lock (Calls) Calls.Add($"{method.Method} {path} {b}");
+            KtcResponse Json(string j) { using var d = JsonDocument.Parse(j); return new KtcResponse(true, 200, d.RootElement.Clone(), j, null, 1); }
+            KtcResponse Err(string m) => new(false, 500, null, m, "HTTP 500 Internal Server Error: " + m, 1);
+            return Task.FromResult(path switch
+            {
+                "api/v1/Client" => Json("""[{"ID":19,"Name":"ATM-NINETEEN"}]"""),
+                "api/v1/Client/19/ReplenishmentsByTimeRange" => b.Contains("\"StartDate\"") ? Json("""[{"ID":1,"Amount":300000}]""") : Err("SqlTypeException: SqlDateTime overflow. Must be between 1/1/1753 12:00:00 AM and 12/31/9999 11:59:59 PM."),
+                "api/v1/Client/19/ReplenishmentOrders" => System.Text.RegularExpressions.Regex.IsMatch(url, @"start=\d{17}&end=\d{17}") ? Json("""[{"ID":4,"State":"Open"}]""") : Err("FormatException: String was not recognized as a valid DateTime."),
+                _ => KtcResponse.Fail("HTTP 404 Not Found", 404),
+            });
+        }
+    }
+
     private sealed class Fake(Dictionary<string, string> routes) : IKtcApiClient
     {
         public List<string> Calls { get; } = new();
