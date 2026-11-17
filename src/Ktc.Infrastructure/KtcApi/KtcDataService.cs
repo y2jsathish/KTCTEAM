@@ -450,23 +450,7 @@ public class KtcDataService : IKtcDataService
         await Task.WhenAll(tCash, tTx, Task.WhenAll(tRoutes));
 
         // ---- cash units ----
-        var cashRows = KtcJson.Items(tCash.Result).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
-        var names = cashRows.Count > 0 ? await HardwareNamesAsync(cashRows, ct) : null;
-        var unitTypes = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitType", ct) : new();
-        var unitStatus = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitStatus", ct) : new();
-        var units = new List<CashUnitLevel>();
-        foreach (var e in cashRows)
-        {
-            var cid = KtcJson.NormId(KtcJson.Str(e, "DBComponentID", "ComponentID", "CompId"));
-            var dev = names?.Components.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
-            var unit = KtcJson.Str(e, "CashUnitNumber", "UnitNumber", "Number", "LogicalName");
-            var tid = KtcJson.NormId(KtcJson.Str(e, "TypeID", "TypeId", "Type")); var sid = KtcJson.NormId(KtcJson.Str(e, "StatusID", "StatusId", "Status"));
-            var val = KtcJson.Dbl(e, double.NaN, "Value", "Denomination", "NoteValue", "CurrencyValue");
-            units.Add(new CashUnitLevel(dev, unit.Length > 0 ? unit : "?", unitTypes.GetValueOrDefault(tid) ?? (tid.Length > 0 ? "Type " + tid : ""),
-                unitStatus.GetValueOrDefault(sid) ?? (sid.Length > 0 ? "Status " + sid : ""), double.IsNaN(val) || val <= 0 ? null : (decimal)val,
-                (long)Math.Max(0, KtcJson.Dbl(e, 0, "Count", "CurrentCount", "Notes")), KtcJson.Date(e, "Timestamp", "TimeStamp")));
-        }
-        units = units.OrderBy(u => CounterRules.ClassRank(CounterRules.XfsClass(u.Device) ?? "")).ThenBy(u => u.Device).ThenBy(u => int.TryParse(u.Unit, out var n) ? n : 999).ThenBy(u => u.Unit).ToList();
+        var units = await CashUnitsFromAsync(tCash.Result, ct);
         diag.Add(tCash.Result == null ? $"CurrentCashUnitStatus: {cw.ToList().FirstOrDefault() ?? "no answer"}." : $"CurrentCashUnitStatus: {units.Count} cash units.");
         if (tCash.Result == null) w.Add("Replenishment: KTC did not return the cash units (CurrentCashUnitStatus), so cassette levels are not shown.");
 
@@ -496,6 +480,41 @@ public class KtcDataService : IKtcDataService
             diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
         return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag);
+    }
+
+    /// <summary>Cash units of one ATM now (KTC CurrentCashUnitStatus); null when KTC did not answer, with the reason in the warnings.</summary>
+    public async Task<(IReadOnlyList<CashUnitLevel>? Units, IReadOnlyList<string> Warnings)> GetCashUnitsAsync(string atmId, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return (null, new[] { $"No ATM matches \"{atmId}\"." });
+        var json = await Fetch($"api/v1/Client/{id}/CurrentCashUnitStatus", w, ct: ct);
+        return json == null ? (null, w.ToList()) : (await CashUnitsFromAsync(json, ct), w.ToList());
+    }
+
+    /// <summary>Reads KTC CurrentCashUnitStatus rows into cash unit levels (device, unit, type and status named), ordered by device and unit.</summary>
+    private async Task<List<CashUnitLevel>> CashUnitsFromAsync(JsonElement? cash, CancellationToken ct)
+    {
+        var cashRows = KtcJson.Items(cash).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        var names = cashRows.Count > 0 ? await HardwareNamesAsync(cashRows, ct) : null;
+        var unitTypes = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitType", ct) : new();
+        var unitStatus = cashRows.Count > 0 ? await NamedListAsync("api/v1/CashUnitStatus", ct) : new();
+        var units = new List<CashUnitLevel>();
+        foreach (var e in cashRows)
+        {
+            var cid = KtcJson.NormId(KtcJson.Str(e, "DBComponentID", "ComponentID", "CompId"));
+            var dev = names?.Components.GetValueOrDefault(cid) ?? (cid.Length > 0 ? "Component " + cid : "Device");
+            var unit = KtcJson.Str(e, "CashUnitNumber", "UnitNumber", "Number", "LogicalName");
+            var tid = KtcJson.NormId(KtcJson.Str(e, "TypeID", "TypeId", "Type")); var sid = KtcJson.NormId(KtcJson.Str(e, "StatusID", "StatusId", "Status"));
+            var val = KtcJson.Dbl(e, double.NaN, "Value", "Denomination", "NoteValue", "CurrencyValue");
+            units.Add(new CashUnitLevel(dev, unit.Length > 0 ? unit : "?", unitTypes.GetValueOrDefault(tid) ?? (tid.Length > 0 ? "Type " + tid : ""),
+                unitStatus.GetValueOrDefault(sid) ?? (sid.Length > 0 ? "Status " + sid : ""), double.IsNaN(val) || val <= 0 ? null : (decimal)val,
+                (long)Math.Max(0, KtcJson.Dbl(e, 0, "Count", "CurrentCount", "Notes")), KtcJson.Date(e, "Timestamp", "TimeStamp")));
+        }
+        units = units.OrderBy(u => CounterRules.ClassRank(CounterRules.XfsClass(u.Device) ?? "")).ThenBy(u => u.Device).ThenBy(u => int.TryParse(u.Unit, out var n) ? n : 999).ThenBy(u => u.Unit).ToList();
+        return units;
     }
 
     private static readonly Regex IdField = new(@"^(.*?)(ID|Id|id)$");

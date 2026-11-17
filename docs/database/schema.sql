@@ -453,3 +453,97 @@ GO
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE TABLE [CashDailyUsages] (
+        [Id] int NOT NULL IDENTITY,
+        [Day] datetime2 NOT NULL,
+        [CapturedUtc] datetime2 NOT NULL,
+        [AtmId] nvarchar(100) NOT NULL,
+        [AtmName] nvarchar(200) NOT NULL,
+        [Client] nvarchar(200) NOT NULL,
+        [Withdrawals] int NOT NULL,
+        [AmountWithdrawn] decimal(18,2) NOT NULL,
+        [Deposits] int NOT NULL,
+        [AmountDeposited] decimal(18,2) NOT NULL,
+        [Partial] bit NOT NULL,
+        CONSTRAINT [PK_CashDailyUsages] PRIMARY KEY ([Id])
+    );
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE TABLE [CashSnapshots] (
+        [Id] int NOT NULL IDENTITY,
+        [Day] datetime2 NOT NULL,
+        [CapturedUtc] datetime2 NOT NULL,
+        [AtmId] nvarchar(100) NOT NULL,
+        [AtmName] nvarchar(200) NOT NULL,
+        [Unit] nvarchar(50) NOT NULL,
+        [UnitType] nvarchar(100) NULL,
+        [Denomination] decimal(18,2) NULL,
+        [Notes] bigint NOT NULL,
+        CONSTRAINT [PK_CashSnapshots] PRIMARY KEY ([Id])
+    );
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_CashDailyUsages_AtmId_Day] ON [CashDailyUsages] ([AtmId], [Day]);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE INDEX [IX_CashDailyUsages_Day] ON [CashDailyUsages] ([Day]);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_CashSnapshots_AtmId_Day_Unit] ON [CashSnapshots] ([AtmId], [Day], [Unit]);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    CREATE INDEX [IX_CashSnapshots_Day] ON [CashSnapshots] ([Day]);
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117144041_AddCashForecast'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261117144041_AddCashForecast', N'8.0.11');
+END;
+GO
+
+COMMIT;
+GO
+

@@ -164,3 +164,31 @@ public class IncidentAction : Entity
     public string? Value { get; set; }              // assignee / comment text / escalation level
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>Notes in one cash unit of one ATM at the daily cash snapshot (one row per ATM, unit and portal-local day; the latest run of the day wins).</summary>
+public class CashSnapshot : Entity
+{
+    public DateTime Day { get; set; }                // portal-local date
+    public DateTime CapturedUtc { get; set; } = DateTime.UtcNow;
+    public string AtmId { get; set; } = "";
+    public string AtmName { get; set; } = "";
+    public string Unit { get; set; } = "";
+    public string? UnitType { get; set; }
+    public decimal? Denomination { get; set; }
+    public long Notes { get; set; }
+}
+
+/// <summary>Actual cash withdrawn / deposited at one ATM on one portal-local day (successful customer transactions), kept beyond KTC's lookback.</summary>
+public class CashDailyUsage : Entity
+{
+    public DateTime Day { get; set; }                // portal-local date
+    public DateTime CapturedUtc { get; set; } = DateTime.UtcNow;
+    public string AtmId { get; set; } = "";
+    public string AtmName { get; set; } = "";
+    public string Client { get; set; } = "";
+    public int Withdrawals { get; set; }
+    public decimal AmountWithdrawn { get; set; }
+    public int Deposits { get; set; }
+    public decimal AmountDeposited { get; set; }
+    public bool Partial { get; set; }                // the day was not over when captured
+}

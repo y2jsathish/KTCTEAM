@@ -1,0 +1,17 @@
+@{ ViewData["Title"] = "Cash Forecast"; }
+<div class="page-h"><h4 id="title">Cash forecast</h4><span class="sbadge warn" title="Run-out dates, usage and loads are estimates">Estimates</span><span class="sub" id="sub"></span>
+  <a class="btn btn-sm btn-outline-secondary ms-auto" id="atm360" href="#"><i class="bi bi-hdd-network"></i> ATM 360</a><a class="btn btn-sm btn-outline-secondary" href="/Cash"><i class="bi bi-arrow-left"></i> Cash Forecasting</a></div>
+<div class="alert alert-info py-2 small mb-2"><i class="bi bi-info-circle"></i> Notes in the cassettes, counters and daily cash are <b>actual</b> KTC data; usage per day, run-out dates and loads are <b>estimates</b> (source and confidence shown per cassette).</div>
+<div id="warnings"><div class="text-muted small">Loading… (reads cash units, counters and the EJ of this ATM)</div></div>
+<div class="kpis" id="kpis"></div>
+<div class="row g-3 mb-3">
+  <div class="col-xl-7 col-12"><div class="cardx h-100"><h6><i class="bi bi-safe"></i> Cassettes and estimated run-out</h6><div id="units"></div></div></div>
+  <div class="col-xl-5 col-12"><div class="cardx h-100"><h6><i class="bi bi-truck"></i> Suggested replenishment (estimate)</h6><div id="suggest"></div></div></div>
+</div>
+<div class="cardx mb-3"><h6><i class="bi bi-check2-square"></i> Reconciliation: XFS cash units vs EJ counter report vs application counters <span id="reconStatus"></span></h6><div id="recon"></div></div>
+<div class="grid2">
+  <div class="cardx"><h6>Cash withdrawn per day (actual)</h6><div class="chart-box"><canvas id="cDaily"></canvas></div></div>
+  <div class="cardx"><h6>Notes per cassette at the daily snapshot (actual)</h6><div class="chart-box"><canvas id="cSnaps"></canvas></div><div class="small text-muted" id="snapNote"></div></div>
+</div>
+<details class="small text-muted mt-2" id="diagWrap"><summary>What was read</summary><ul class="mb-0 ps-3" id="diag"></ul></details>
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/cash-atm.js" asp-append-version="true"></script> }

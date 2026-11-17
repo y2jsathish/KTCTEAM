@@ -59,7 +59,19 @@ The Postman collection has **no base URL, no response samples and empty `url.raw
 | 10 | API layer | `KtcApiClient` + Polly (retry w/ backoff+jitter for idempotent calls, circuit breaker, per-attempt timeout) + `ApiHealthHandler` + Serilog |
 | 11 | Audit | `AuditService` + `[Audit]` filter: logins, searches, ticket/incident/ATM views, reports, admin changes (PAN-masked) |
 | – | ATM 360 | `Atm/Detail` → `DashboardService.GetAtmDetailAsync` (device, incidents, tickets, transactions, EJ + timeline, availability, health score) |
+| – | Cash forecasting | `Cash/Index`, `Cash/Atm/{id}` → `CashForecastService` + `CashForecastRules` (see 3a) |
 | – | Management / Clients / RCA / Global search | `Home/Management`, `Home/Clients`, `Home/Rca` (recurring ≥ 3 occurrences), header search (`/data/search`) |
+
+## 3a. Cash forecasting (phase 1)
+
+Menu **Operations → Cash Forecasting**, plus a cash card on the dashboard. Counts and daily cash are actual KTC data; usage, run-out dates, visit dates and loads are **estimates** and the UI labels them so.
+
+* **Daily snapshot** (`CashSnapshotJob`, once a day after `CashForecast:SnapshotHour`, and at start-up when today has no run): one transaction search for the lookback + `CurrentCashUnitStatus` per ATM (`CashForecast:MaxParallel` at a time). Stores `CashSnapshots` (notes per cash unit per day) and `CashDailyUsage` (successful withdrawals / deposits per ATM per day), then the estate forecast in `DashboardCaches` (key `cash:forecast`). Operators can recalculate by hand.
+* **Usage per cassette**, best source first: day-to-day drops in the snapshots (needs `MinHistoryDays` intervals; refill days left out) → notes per denomination since the reset (application counters; ATM page only, as it needs per-transaction calls) → the ATM's average amount withdrawn per day split by the cash each cassette holds (rough). Each cassette shows its source and a confidence label.
+* **Run-out**: days until the cassette reaches `LowNotes`, using a weekday pattern once 14 days of daily cash are stored. Status Out / Critical (≤ 1 day) / Warning (≤ 3 days) / OK.
+* **Suggested replenishment**: visit `BufferDays` before the earliest run-out (within `HorizonDays`); load `CoverDays` of use + `SafetyStockPct`, rounded up to 100 notes, capped at `CassetteCapacity`.
+* **Reconciliation** (ATM page): per note value, XFS cash units now vs the latest EJ counter report (notes in cassette), and application notes dispensed since the reset vs the EJ report's dispensed. Compared only when the times are within `ReconcileToleranceMinutes`; otherwise "Not comparable" with the reason.
+* Deferred to phase 2 (needs 4–8 weeks of snapshots): forecast-vs-actual tracking with a live accuracy score.
 
 ## 4. API Mapping Framework
 
@@ -91,12 +103,12 @@ Score 0–100 is derived from the same inputs (used in ATM 360 and the grid).
 
 ## 7. Real-time & background work
 
-`DashboardRefreshJob` (every 60 s, needs `Ktc:ServiceAccount` or mock): rebuild snapshot → persist to `DashboardCaches` → SignalR `dashboardUpdated` (lightweight summary) → evaluate alert rules → push API health. Pages re-fetch on that event and also poll (60 s / 30 s) as a fallback. `ReportSchedulerJob` (1 min) and `ApiMappingSchedulerJob` (30 s) run similarly.
+`DashboardRefreshJob` (every 60 s, needs `Ktc:ServiceAccount` or mock): rebuild snapshot → persist to `DashboardCaches` → SignalR `dashboardUpdated` (lightweight summary) → evaluate alert rules → push API health. Pages re-fetch on that event and also poll (60 s / 30 s) as a fallback. `ReportSchedulerJob` (1 min) and `ApiMappingSchedulerJob` (30 s) run similarly. `CashSnapshotJob` checks every 10 min and runs once a day (see 3a).
 Per-ATM availability needs one KTC call per ATM; it is cached (`AvailabilityCacheMinutes`) and warmed progressively (`AvailabilityWarmupPerCycle`) so a 1,000-ATM estate does not hammer KTC; ATMs not yet fetched show "n/a" (never a fabricated value).
 
 ## 8. Database
 
-14 tables (+ EF history) — `Users, Roles, AuditLogs, DashboardCaches, SavedSearches, FavoriteAtms, AlertRules, AlertHistories, ReportSchedules, ApiModules, ApiEndpoints, ApiMappings, ApiFieldMappings` and `IncidentActions`. See `docs/database/schema.sql`. `SavedSearches` is modelled but has no UI yet.
+16 tables (+ EF history) — `Users, Roles, AuditLogs, DashboardCaches, SavedSearches, FavoriteAtms, AlertRules, AlertHistories, ReportSchedules, ApiModules, ApiEndpoints, ApiMappings, ApiFieldMappings, IncidentActions`, and `CashSnapshots` / `CashDailyUsage` (cash forecasting history, kept `CashForecast:RetentionDays`). See `docs/database/schema.sql`. `SavedSearches` is modelled but has no UI yet.
 
 ## 9. Known gaps / honest limitations
 * **Verified only against the built-in mock** — there is no access to a live KTC from the build environment. Field-name aliases, ticket status semantics, severity levels, login response shape, `HistoricalError` / `OverallAvailability` query parameters are assumptions (checklist in DEPLOYMENT.md).

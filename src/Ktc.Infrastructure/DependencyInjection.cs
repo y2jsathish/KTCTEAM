@@ -19,6 +19,7 @@ public static class DependencyInjection
     {
         s.Configure<PortalOptions>(cfg.GetSection(PortalOptions.Section));
         s.Configure<NotificationOptions>(cfg.GetSection(NotificationOptions.Section));
+        s.Configure<CashForecastOptions>(cfg.GetSection(CashForecastOptions.Section));
         // One KtcOptions instance for the whole app. The HTTP pipeline (mock or live handler) is built from it at startup, so the
         // token provider, dashboard and jobs must read the very same values: before, they could disagree (pipeline live while
         // IOptions said UseMock=true), and the background jobs then sent the literal "mock-token" to the real KTC server.
@@ -44,6 +45,7 @@ public static class DependencyInjection
         s.AddSingleton<IExportService, ExportService>();
         s.AddScoped<IKtcDataService, KtcDataService>();
         s.AddScoped<IDashboardService, DashboardService>();
+        s.AddScoped<ICashForecastService, CashForecastService>();
         s.AddScoped<IAlertEngine, AlertEngine>();
         s.AddScoped<INotificationSender, NotificationSender>();
         s.AddScoped<IReportService, ReportService>();
@@ -56,6 +58,7 @@ public static class DependencyInjection
         s.AddHostedService<DashboardRefreshJob>();
         s.AddHostedService<ReportSchedulerJob>();
         s.AddHostedService<ApiMappingSchedulerJob>();
+        s.AddHostedService<CashSnapshotJob>();
         return s;
     }
 }
