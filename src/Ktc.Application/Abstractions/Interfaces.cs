@@ -173,6 +173,26 @@ public interface IExportService
     byte[] ToCsv(ReportData data);
 }
 
+/// <summary>Disputes menu (read-only): KTC DisputeManagement search, details, states and rules.</summary>
+public interface IKtcDisputeService
+{
+    Task<DisputeSearchResult> SearchAsync(DisputeQuery query, CancellationToken ct = default);
+    Task<DisputeDto?> GetAsync(string id, CancellationToken ct = default);
+    Task<DisputeDetails?> GetDetailsAsync(string id, CancellationToken ct = default);
+    Task<IReadOnlyList<DisputeStateDto>> GetStatesAsync(CancellationToken ct = default);
+    Task<DisputeSetup> GetSetupAsync(CancellationToken ct = default);
+    /// <summary>Drops cached dispute lists so a change shows at once.</summary>
+    void Invalidate();
+}
+
+/// <summary>Change state / close on KTC disputes (behind DisputeWrite:Enabled), audited, verified by reading the dispute back.</summary>
+public interface IDisputeWriteService
+{
+    Task<DisputeWriteState> StateAsync(string disputeId, CancellationToken ct = default);
+    Task<DisputeWriteResult> ChangeStateAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default);
+    Task<DisputeWriteResult> CloseAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default);
+}
+
 /// <summary>Add comment / close on KTC tickets (behind TicketWrite:Enabled), audited.</summary>
 public interface ITicketWriteService
 {

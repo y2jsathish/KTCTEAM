@@ -10,7 +10,7 @@ namespace Ktc.Infrastructure.Mock;
 /// In-process stand-in for the KTC REST API (Ktc:UseMock=true). Deterministic, time-aware sample data in KTC-shaped JSON so the
 /// whole portal can be demonstrated and tested without access to a live KTC server. NOT used when UseMock=false.
 /// </summary>
-public sealed class MockKtcHttpHandler : HttpMessageHandler
+public sealed partial class MockKtcHttpHandler : HttpMessageHandler
 {
     private static readonly string[] Banks = { "Brinks", "ADCB", "Emirates NBD" };
     private static readonly (string Region, string City)[] Places =
@@ -160,6 +160,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if (Is(path, "api/v1/STXField")) return Ok(StxFields.Select((f, k) => (k, f)).ToDictionary(x => (x.k + 1).ToString(), x => new { ID = x.k + 1, Name = x.f }));
         if (Is(path, "api/v1/STXFieldLookup")) return Ok(new Dictionary<string, object> { ["20"] = new { ID = 20, Value = "en" }, ["22"] = new { ID = 22, Value = "AED" }, ["59"] = new { ID = 59, Value = "TOUCH" } });
         if (Is(path, "api/v1/EJData/EJDataForClientBetweenIDs") && long.TryParse(q["startid"], out var ejStart)) return Ok(TxEj(q["clientid"], ejStart, now));
+        if (path.StartsWith("api/v1/DisputeManagement/", StringComparison.OrdinalIgnoreCase) && Disputes(path, m, q, body, now) is { } dr) return dr;
         if (m == "GET") return Ok(new { mock = true, note = "Mock KTC server has no sample data for this route.", path });
         return Resp(HttpStatusCode.OK, "true");
     }
