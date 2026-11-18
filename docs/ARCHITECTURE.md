@@ -32,7 +32,7 @@ The brief's mapping was checked against the supplied Postman collection (805 req
 |---|---|---|
 | `Device` (`GET /Device`, `/Device/{id}`, `POST /Device/Search`) | **No Device controller.** ATMs are `Client` records | `GET Client?includedeleted=`, `Client/{id}`, `LastClientContact`, `Client/{id}/OverallAvailability`, `Client/{id}/Top5UnavailableReasons`, `Business/Branch/Region` for ownership & location |
 | `Incident` (`GET /Incident`, `POST /Incident/Search`) | **No Incident controller.** Faults are error codes | `ActiveErrorExtra?abovelevel=0` (open), `HistoricalError`, `Client/{id}/HistoricalError` (history/RCA); level → P1–P4 via `Ktc:SeverityMap` |
-| `Client` = bank (`/Client/{id}/Contacts`, `/Actions`) | `Client` = **ATM**; banks are `Business`. `/Contacts` and `/Client/{id}/Actions` do not exist | Portal "Client" = KTC `Business` (`Business`, `Branch`, `Region`) |
+| `Client` = bank (`/Client/{id}/Contacts`, `/Actions`) | `Client` = **ATM**; banks are `Business`. `/Contacts` does not exist; `/Client/{id}/Actions` exists but is the ATM's remote command history and queue (see the Actions tab below) | Portal "Client" = KTC `Business` (`Business`, `Branch`, `Region`) |
 | `GET /Ticket`, `GET /Ticket/{id}`, `POST /Ticket/Search`, `PUT /Ticket/{id}` | Exists (`GET Ticket?errorID=`, `Ticket/{id}`, `Ticket/Search`, `Ticket/{id}/SLA`) — there is no bare `GET /Ticket` | `Ticket/Search`, `Ticket/{id}`, `Ticket/{id}/SLA`. **Ticket writes are not performed** (see §6) |
 | `POST /TransactionData/Search`, `GET /TransactionData/{id}` | Exists | Used as specified |
 | `POST /Client/{id}/EJRow`, `/EJPlusTime` | Exists (body `{Value1: start, Value2: end, Value3: [field names]}`) | `EJRow` |
@@ -59,6 +59,7 @@ The Postman collection has **no base URL, no response samples and empty `url.raw
 | 10 | API layer | `KtcApiClient` + Polly (retry w/ backoff+jitter for idempotent calls, circuit breaker, per-attempt timeout) + `ApiHealthHandler` + Serilog |
 | 11 | Audit | `AuditService` + `[Audit]` filter: logins, searches, ticket/incident/ATM views, reports, admin changes (PAN-masked) |
 | – | ATM 360 | `Atm/Detail` → `DashboardService.GetAtmDetailAsync` (device, incidents, tickets, transactions, EJ + timeline, availability, health score) |
+| – | ATM Actions (step 1, read-only) | `Atm/Detail` → Actions tab → `GET /data/actions/command-types` → `KtcActionService` → KTC `GET api/v1/CommandType`. Lists command types (PAN-masked, secret-looking values hidden), maps Reboot / XFS reset / Device reset / Out of service / In service to them from `KtcActions:Commands`, buttons always disabled. **No command is sent to an ATM**; sending comes in the next step once the real ids are confirmed |
 | – | Cash forecasting | `Cash/Index`, `Cash/Atm/{id}` → `CashForecastService` + `CashForecastRules` (see 3a) |
 | – | Management / Clients / RCA / Global search | `Home/Management`, `Home/Clients`, `Home/Rca` (recurring ≥ 3 occurrences), header search (`/data/search`) |
 

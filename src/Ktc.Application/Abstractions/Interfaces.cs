@@ -85,6 +85,12 @@ public interface IKtcDataService
     Task<AtmCounters?> GetCountersAsync(string atmId, CancellationToken ct = default);
 }
 
+/// <summary>ATM Actions tab, step 1: reads KTC's command types only. Nothing is sent to an ATM.</summary>
+public interface IKtcActionService
+{
+    Task<AtmActionCatalog> GetCatalogAsync(bool refresh, CancellationToken ct = default);
+}
+
 // ---- Services ----
 public interface IDashboardService
 {
