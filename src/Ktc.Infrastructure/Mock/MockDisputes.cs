@@ -62,17 +62,26 @@ public sealed partial class MockKtcHttpHandler
             ID = d.ID, ClientID = Id(d.AtmIndex), ClientName = name, StateID = d.StateID, StateName = st.Name, BusinessID = d.AtmIndex % 3 + 1,
             TimeCreated = d.TimeCreated, TimeUpdated = d.TimeUpdated, TimeClosed = d.TimeClosed, CreatedBy = d.History[0].User, LastChangeBy = d.History[^1].User,
             TransactionID = 5_000_000L + d.ID % 100_000 * 7, SessionID = 2_500_000L + d.ID % 100_000 * 3, TransactionTime = d.TransactionTime, TransactionType = d.TransactionType,
-            Amount = d.Amount, Currency = "AED", PAN = d.Pan, Reason = d.Reason,
+            Currency = "AED", PAN = d.Pan, Reason = d.Reason,
             CustomerDetails = new Dictionary<string, object?>
             {
                 ["Name"] = d.Customer, ["MobileNumber"] = $"+9715{Hash((int)d.ID, 912) % 10}{Hash((int)d.ID, 913) % 9000000 + 1000000}", ["Email"] = $"{d.Customer.Replace(". ", ".").Replace(" ", "").ToLowerInvariant()}@example.com",
                 ["CardNumber"] = d.Pan, ["PreferredContact"] = Hash((int)d.ID, 914) % 2 == 0 ? "SMS" : "Email"
             },
-            ExtraData = new Dictionary<string, object?> { ["BankReference"] = $"DSP-{d.ID % 100000:00000}", ["Channel"] = Hash((int)d.ID, 915) % 2 == 0 ? "Branch" : "Call Centre", ["Track2Data"] = $"{d.Pan}=2812101000000000" },
+            ExtraData = new Dictionary<string, object?> { ["Amount"] = d.Amount, ["EffectiveAmount"] = d.Amount, ["TSN"] = (d.ID % 10000).ToString("0000"), ["BankReference"] = $"DSP-{d.ID % 100000:00000}", ["Channel"] = Hash((int)d.ID, 915) % 2 == 0 ? "Branch" : "Call Centre", ["Track2Data"] = $"{d.Pan}=2812101000000000" },
             History = d.History.Select(h => new { StateID = h.State, StateName = DisputeStates.First(s => s.Id == h.State).Name, Time = h.At, User = h.User }),
-            CommentsString = $"<Comments><Comment User=\"{d.History[0].User}\" Timestamp=\"{d.TimeCreated:yyyy-MM-dd HH:mm:ss}\" Confidential=\"False\">Dispute raised: {d.Reason}</Comment></Comments>"
+            CommentsString = "<Comments>" + string.Concat(new[] { (T: d.TimeCreated, U: d.History[0].User, C: "Dispute raised: " + d.Reason) }
+                .Concat(AddedComments.TryGetValue(d.ID, out var added) ? added.ToList().Select(a => (T: a.T, U: a.U, C: a.C)) : Enumerable.Empty<(DateTime T, string U, string C)>())
+                .Select(c => new System.Xml.Linq.XElement("Comment", new System.Xml.Linq.XAttribute("User", c.U), new System.Xml.Linq.XAttribute("Timestamp", c.T.ToString("yyyy-MM-dd HH:mm:ss")),
+                    new System.Xml.Linq.XAttribute("Confidential", "False"), c.C).ToString(System.Xml.Linq.SaveOptions.DisableFormatting))) + "</Comments>"
         };
     }
+
+    private record MockSms(long ID, long DisputeID, string PhoneNumber, string Message, DateTime TimeQueued, bool Sent, DateTime? TimeSent);
+    private static IEnumerable<MockSms> SmsQueue(DateTime now) =>
+        AllDisputes(now).Where(x => x.History.Count > 1).SelectMany(x => x.History.Skip(1).Where(h => h.State is 2 or 4 or 5 or 6).Select((h, k) => new MockSms(
+            x.ID * 10 + k, x.ID, "+97150*****" + (x.ID % 1000).ToString("000"), $"Your ATM dispute DSP-{x.ID % 100000:00000} is now: {DisputeStates.First(s => s.Id == h.State).Name}.",
+            h.At, h.At < now.AddMinutes(-10), h.At < now.AddMinutes(-10) ? h.At.AddMinutes(2) : null)));
 
     private HttpResponseMessage? Disputes(string path, string m, NameValueCollection q, string body, DateTime now)
     {
@@ -87,6 +96,25 @@ public sealed partial class MockKtcHttpHandler
                 new { ID = 2, Name = "Remind customer after 3 days", TransactionTypeID = 1, FromStateID = 3, ToStateID = 3, AfterHours = 72, SendsMessage = true },
                 new { ID = 3, Name = "Close approved refunds after 7 days", TransactionTypeID = 1, FromStateID = 4, ToStateID = 6, AfterHours = 168, SendsMessage = false }
             });
+        // The list calls KTC's Windows client makes (bank trace): {groupid}/GroupDisputes and {clientid}/ClientDisputes ?statusfilter=&Numdays=.
+        // Demo assumption, NOT confirmed: statusfilter 0 = open disputes, 1 = closed ones (the client sends 0 by default; 1 came back empty
+        // in the trace for an ATM whose only dispute was open).
+        System.Text.RegularExpressions.Match lr;
+        if ((lr = Rx(path, @"api/v1/DisputeManagement/(\d+)/(GroupDisputes|ClientDisputes)")).Success && m == "GET")
+        {
+            var sf = int.TryParse(q["statusfilter"], out var f) ? f : 0; var nd = int.TryParse(q["Numdays"] ?? q["numdays"], out var dd) ? dd : 14;
+            var idv = int.Parse(lr.Groups[1].Value); var byClient = lr.Groups[2].Value == "ClientDisputes";
+            return Ok(AllDisputes(now).Where(x => (byClient ? Id(x.AtmIndex) == idv : true) && x.TimeCreated >= now.AddDays(-nd) && (sf == 1 ? x.TimeClosed != null : x.TimeClosed == null))
+                .Select(DisputeJson));
+        }
+        if (p.Equals("SMSQueue/Disputes", StringComparison.OrdinalIgnoreCase) && m == "POST")
+        {
+            using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "[]" : body);
+            var ids = d.RootElement.ValueKind == JsonValueKind.Array ? d.RootElement.EnumerateArray().Select(x => x.GetInt64()).ToHashSet() : new HashSet<long>();
+            return Ok(SmsQueue(now).Where(x => ids.Contains(x.DisputeID)).ToDictionary(x => x.ID.ToString(), x => (object)x));
+        }
+        if (p.Equals("DisputeMessageTemplate", StringComparison.OrdinalIgnoreCase) && m == "GET")
+            return Ok(new Dictionary<string, object> { ["1"] = new { ID = 1, Name = "State change", Template = "Your ATM dispute <DisputeRef> is now: <StateName>." } });
         if (p.Equals("Search", StringComparison.OrdinalIgnoreCase) && m == "POST")
         {
             using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body); var b = d.RootElement;
@@ -122,13 +150,7 @@ public sealed partial class MockKtcHttpHandler
             var x = AllDisputes(now).FirstOrDefault(z => z.ID == long.Parse(r.Groups[1].Value));
             return x == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(DisputeJson(x));
         }
-        if (p.Equals("SMSQueue", StringComparison.OrdinalIgnoreCase) && m == "GET")
-            return Ok(AllDisputes(now).Where(x => x.History.Count > 1).SelectMany(x => x.History.Skip(1).Where(h => h.State is 2 or 4 or 5 or 6).Select((h, k) => new
-            {
-                ID = x.ID * 10 + k, DisputeID = x.ID, PhoneNumber = "+97150*****" + (x.ID % 1000).ToString("000"),
-                Message = $"Your ATM dispute DSP-{x.ID % 100000:00000} is now: {DisputeStates.First(s => s.Id == h.State).Name}.",
-                TimeQueued = h.At, Sent = h.At < now.AddMinutes(-10), TimeSent = h.At < now.AddMinutes(-10) ? h.At.AddMinutes(2) : (DateTime?)null
-            })));
+        if (p.Equals("SMSQueue", StringComparison.OrdinalIgnoreCase) && m == "GET") return Ok(SmsQueue(now));
         // Every other DisputeManagement call (create, update, delete, SMS writes, templates) is not used by the portal.
         return Resp(HttpStatusCode.NotImplemented, "{\"Message\":\"Demo KTC server: this dispute route is not simulated.\"}");
     }

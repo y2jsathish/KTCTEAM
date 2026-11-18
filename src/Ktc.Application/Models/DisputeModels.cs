@@ -46,11 +46,11 @@ public record DisputeDetails(DisputeDto Dispute, IReadOnlyList<KtcField> Fields,
 
 /// <summary>KTC's dispute set-up (read-only): states and rules, every field as KTC returned it.</summary>
 public record DisputeSetup(IReadOnlyList<DisputeStateDto> States, IReadOnlyList<IReadOnlyList<KtcField>> StateRecords, IReadOnlyList<IReadOnlyList<KtcField>> Rules,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<IReadOnlyList<KtcField>> MessageTemplates, IReadOnlyList<string> Warnings);
 
 /// <summary>Change a dispute's state, or close it, from the portal.</summary>
-public record DisputeWriteRequest(int? StateId, string? Reason, string? ConfirmDisputeId);
-public record DisputeWriteState(bool Enabled, bool CanChangeState, bool CanClose, string? BlockedReason, IReadOnlyList<DisputeStateDto> States, int MinReasonLength, int MaxReasonLength);
+public record DisputeWriteRequest(int? StateId, string? Reason, string? ConfirmDisputeId, string? AtmId = null);
+public record DisputeWriteState(bool Enabled, bool CanComment, bool StateChangeAllowed, bool CanChangeState, bool CanClose, string? BlockedReason, IReadOnlyList<DisputeStateDto> States, int MinReasonLength, int MaxReasonLength);
 public record DisputeWriteResult(bool Done, string Message, IReadOnlyList<ActionCheck> Checks, string CorrelationId)
 {
     /// <summary>What KTC answered at each step and the state read back.</summary>
