@@ -121,12 +121,15 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT")
         {
             var tid = long.Parse(r.Groups[1].Value);
-            if (!AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.NotFound, "null");
+            var cur = AllTickets(now).FirstOrDefault(x => x.ID == tid);
+            if (cur == null) return Resp(HttpStatusCode.NotFound, "null");
             using var d = JsonDocument.Parse(body);
+            // Like the real server (ticket 5992): a closed ticket answers 200 with its record but keeps none of the changes.
+            if (cur.TimeClosed != null) return Ok(cur);
             if (d.RootElement.TryGetProperty("TimeClosed", out var tc) && tc.ValueKind == JsonValueKind.String && d.RootElement.TryGetProperty("StatusByte", out var sbe))
                 ClosedTickets[tid] = (sbe.GetInt32(), tc.GetDateTime().ToUniversalTime());
             if (d.RootElement.TryGetProperty("CommentsString", out var cs) && cs.ValueKind == JsonValueKind.String) CommentsOverride[tid] = cs.GetString() ?? "";
-            return Resp(HttpStatusCode.OK, "true");
+            return Ok(AllTickets(now).First(x => x.ID == tid));
         }
         if (Is(path, "api/v1/Comment") && m == "POST")
         {

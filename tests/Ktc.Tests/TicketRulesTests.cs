@@ -93,7 +93,7 @@ public class TicketRulesTests
     {
         var x = TicketRules.AppendComment(null, "alice", T0, "Checked on site, card 4111111111111111");
         Assert.StartsWith("<Comments><Comment ", x);
-        Assert.Contains("User=\"alice\"", x); Assert.Contains("2026-11-18T10:00:00.000Z", x); Assert.DoesNotContain("4111111111111111", x);
+        Assert.Contains("User=\"alice\"", x); Assert.Contains("Timestamp=\"2026-11-18 10:00:00\"", x); Assert.Contains("Confidential=\"False\"", x); Assert.DoesNotContain("4111111111111111", x);
         Assert.Single(TicketRules.ParseCommentsString(x));
     }
 
@@ -109,7 +109,7 @@ public class TicketRulesTests
     public void Append_comment_copies_the_child_element_form()
     {
         var x = TicketRules.AppendComment("<Comments><KtcComment><Timestamp>2026-11-17T08:00:00Z</Timestamp><User>bob</User><Comment>first</Comment></KtcComment></Comments>", "alice", T0, "second note");
-        Assert.Contains("<KtcComment><Timestamp>2026-11-18T10:00:00.000Z</Timestamp><User>alice</User><Comment>second note</Comment></KtcComment>", x);
+        Assert.Contains("<KtcComment><Timestamp>2026-11-18T10:00:00Z</Timestamp><User>alice</User><Comment>second note</Comment></KtcComment>", x);
     }
 
     [Fact]
@@ -118,5 +118,29 @@ public class TicketRulesTests
         Assert.True(TicketRules.LooksClosed(J("""{"StatusByte":1,"TimeClosed":"2026-11-18T10:00:00Z"}"""), null));
         Assert.True(TicketRules.LooksClosed(J("""{"StatusByte":4,"TimeClosed":null}"""), 4));
         Assert.False(TicketRules.LooksClosed(J("""{"StatusByte":1,"TimeClosed":null}"""), 4));
+    }
+
+    [Fact]
+    public void Append_comment_matches_ktc_own_format()
+    {
+        // As KTC wrote ticket 5992: space between date and time, no zone, Confidential="False".
+        var x = TicketRules.AppendComment("<Comments><Comment Timestamp=\"2026-11-18 10:27:47\" User=\"System\" Confidential=\"False\">Ticket created automatically.</Comment></Comments>", "alice", T0, "Engineer on site & checking");
+        Assert.EndsWith("<Comment Timestamp=\"2026-11-18 10:00:00\" User=\"alice\" Confidential=\"False\">Engineer on site &amp; checking</Comment></Comments>", x);
+    }
+
+    [Theory]
+    [InlineData("2026-11-18 10:27:47", "yyyy-MM-dd HH:mm:ss")]
+    [InlineData("2026-11-18T10:27:47.123Z", "yyyy-MM-dd'T'HH:mm:ss.fff'Z'")]
+    [InlineData("2026-11-18T10:27:47", "yyyy-MM-dd'T'HH:mm:ss")]
+    [InlineData(null, "yyyy-MM-dd HH:mm:ss")]
+    [InlineData("18/11/2026", "yyyy-MM-dd HH:mm:ss")]
+    public void Time_format_follows_ktc(string? sample, string expected) => Assert.Equal(expected, TicketRules.TimeFormatLike(sample));
+
+    [Fact]
+    public void Comments_text_counts_and_names_the_last()
+    {
+        var t = J("""{"CommentsString":"<Comments><Comment Timestamp=\"2026-11-18 10:27:47\" User=\"System\">Ticket created automatically.</Comment></Comments>"}""");
+        Assert.StartsWith("1 comment, last: System 2026-11-18 10:27:47", TicketRules.CommentsText(t));
+        Assert.Equal("no comments", TicketRules.CommentsText(J("{}")));
     }
 }

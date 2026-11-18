@@ -153,7 +153,13 @@ public static partial class TicketRules
         try { root = string.IsNullOrWhiteSpace(commentsXml) ? new XElement("Comments") : XElement.Parse(commentsXml); }
         catch (System.Xml.XmlException) { root = new XElement("Comments"); }
         var last = root.Elements().LastOrDefault();
-        var ts = utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+        // Same time and true/false format as KTC's own comments ("2026-11-18 10:27:47", Confidential="False").
+        var parts = last == null ? new List<(string Name, string Value)>()
+            : last.Attributes().Select(a => (Name: a.Name.LocalName, a.Value)).Concat(last.Elements().Select(e => (Name: e.Name.LocalName, e.Value))).ToList();
+        var sample = parts.Where(x => x.Name.Contains("Time", StringComparison.OrdinalIgnoreCase) || x.Name.Contains("Date", StringComparison.OrdinalIgnoreCase)).Select(x => x.Value).FirstOrDefault();
+        var ts = utc.ToString(TimeFormatLike(sample), CultureInfo.InvariantCulture);
+        var conf = parts.Where(x => x.Name.Equals("Confidential", StringComparison.OrdinalIgnoreCase)).Select(x => x.Value).FirstOrDefault();
+        var no = conf is { Length: > 0 } && char.IsLower(conf[0]) ? "false" : "False";
         XElement n;
         if (last != null && last.HasElements)
         {
@@ -164,7 +170,7 @@ public static partial class TicketRules
                 var k = c.Name.LocalName;
                 n.Add(new XElement(c.Name, k.Equals("User", StringComparison.OrdinalIgnoreCase) || k.Equals("UserName", StringComparison.OrdinalIgnoreCase) ? user
                     : k.Contains("Time", StringComparison.OrdinalIgnoreCase) || k.Contains("Date", StringComparison.OrdinalIgnoreCase) ? ts
-                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? "false"
+                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? no
                     : k.Equals("Comment", StringComparison.OrdinalIgnoreCase) || k.Equals("Text", StringComparison.OrdinalIgnoreCase) ? text : c.Value));
             }
         }
@@ -178,13 +184,31 @@ public static partial class TicketRules
                 var k = a.LocalName;
                 n.SetAttributeValue(a, k.Equals("User", StringComparison.OrdinalIgnoreCase) || k.Equals("UserName", StringComparison.OrdinalIgnoreCase) ? user
                     : k.Contains("Time", StringComparison.OrdinalIgnoreCase) || k.Contains("Date", StringComparison.OrdinalIgnoreCase) ? ts
-                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? "false"
+                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? no
                     : k.Equals("Comment", StringComparison.OrdinalIgnoreCase) || k.Equals("Text", StringComparison.OrdinalIgnoreCase) ? text : last!.Attribute(a)!.Value);
             }
             if (!attrs.Any(a => a.LocalName.Equals("Comment", StringComparison.OrdinalIgnoreCase) || a.LocalName.Equals("Text", StringComparison.OrdinalIgnoreCase))) n.Value = text;
         }
         root.Add(n);
         return root.ToString(SaveOptions.DisableFormatting);
+    }
+
+    /// <summary>A .NET time format matching a time KTC wrote ("2026-11-18 10:27:47", "2026-11-18T10:27:47.123Z"); KTC's own form when unknown.</summary>
+    public static string TimeFormatLike(string? sample)
+    {
+        if (string.IsNullOrWhiteSpace(sample)) return "yyyy-MM-dd HH:mm:ss";
+        var m = System.Text.RegularExpressions.Regex.Match(sample.Trim(), @"^\d{4}-\d{2}-\d{2}([T ])\d{2}:\d{2}:\d{2}(\.(\d+))?(Z)?$");
+        if (!m.Success) return "yyyy-MM-dd HH:mm:ss";
+        return "yyyy-MM-dd" + (m.Groups[1].Value == "T" ? "'T'" : " ") + "HH:mm:ss" + (m.Groups[3].Success ? "." + new string('f', Math.Min(7, m.Groups[3].Value.Length)) : "") + (m.Groups[4].Success ? "'Z'" : "");
+    }
+
+    /// <summary>"3 comments, last: System 2026-11-18 10:27:47" for the steps shown under "What KTC answered".</summary>
+    public static string CommentsText(JsonElement ticket)
+    {
+        var all = Comments(ticket);
+        if (all.Count == 0) return "no comments";
+        var l = all[^1]; var t = l.Text.Length > 60 ? l.Text[..60] + "…" : l.Text;
+        return $"{all.Count} comment{(all.Count == 1 ? "" : "s")}, last: {l.User} {l.Utc:yyyy-MM-dd HH:mm:ss} \"{PanMasker.Mask(t)}\"";
     }
 
     /// <summary>The ticket record with one more comment in its CommentsString (the field name KTC used is kept).</summary>
