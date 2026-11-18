@@ -34,6 +34,8 @@ public class IncidentsController : Controller { [Audit("IncidentView", "Incident
 
 public class TicketsController : Controller { [Audit("TicketView", "Ticket workbench")] public IActionResult Index(string? ticketId, string? atmId, [FromServices] Microsoft.Extensions.Options.IOptions<Ktc.Application.Options.KtcOptions> opt) { ViewBag.TicketId = ticketId; ViewBag.AtmId = atmId; ViewBag.ClosedDays = opt.Value.TicketClosedDays; return View(); } }
 
+public class DisputesController : Controller { [Audit("DisputeView", "Disputes")] public IActionResult Index(string? disputeId, string? atmId, [FromServices] Microsoft.Extensions.Options.IOptions<Ktc.Application.Options.DisputeOptions> opt) { ViewBag.DisputeId = disputeId; ViewBag.AtmId = atmId; ViewBag.Days = opt.Value.LookbackDays; return View(); } }
+
 public class HardwareController : Controller { [Audit("HardwareView", "ATM hardware status")] public IActionResult Index(string? atmId, string? atm, string? component) { ViewBag.AtmId = string.IsNullOrWhiteSpace(atmId) ? atm : atmId; ViewBag.Component = component; return View(); } }
 
 public class TransactionsController : Controller { public IActionResult Index(string? id) { ViewBag.Id = id; return View(); } }

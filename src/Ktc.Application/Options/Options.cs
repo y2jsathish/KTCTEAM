@@ -278,3 +278,32 @@ public class TicketWriteOptions
     public int MaxCommentLength { get; set; } = 1000;
 }
 
+
+/// <summary>Disputes menu (KTC POST api/v1/DisputeManagement/Search), read-only.</summary>
+public class DisputeOptions
+{
+    public const string Section = "Disputes";
+    /// <summary>Default date range of the list when no dates are given.</summary>
+    public int LookbackDays { get; set; } = 30;
+    /// <summary>At most this many disputes are listed (newest first).</summary>
+    public int MaxRows { get; set; } = 2000;
+    /// <summary>
+    /// Optional: KTC dispute state id -> name, used only when GET DisputeState does not name a state the records use. Empty by
+    /// default; the portal then shows "State 7" (the raw number) rather than guessing.
+    /// </summary>
+    public Dictionary<string, string> StateNames { get; set; } = new();
+}
+
+/// <summary>
+/// Changing a dispute's state (POST DisputeManagement/Dispute/{id}/ChangeState, body {"Item1": stateId, "Item2": reason}) and
+/// closing it (POST Dispute/Close?disputeId=) from the Dispute Details popup. OFF by default: the form shows, every check runs,
+/// nothing is sent. State numbers always come from KTC's GET DisputeState list. Create, update, delete and SMS calls are never made.
+/// </summary>
+public class DisputeWriteOptions
+{
+    public const string Section = "DisputeWrite";
+    /// <summary>Master switch (env DisputeWrite__Enabled=true).</summary>
+    public bool Enabled { get; set; }
+    public int MinReasonLength { get; set; } = 10;
+    public int MaxReasonLength { get; set; } = 500;
+}

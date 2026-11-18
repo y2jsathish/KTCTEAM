@@ -1,0 +1,45 @@
+@{ ViewData["Title"] = "Disputes"; }
+<div class="page-h"><h4>Disputes</h4><span class="sub">KTC Dispute Management · card numbers masked · double-click a dispute for details</span></div>
+<div id="dsWarn"></div>
+<div class="cardx mb-3"><form id="f" class="row g-2 align-items-end">
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fFrom">Raised from</label><input name="from" id="fFrom" type="date" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fTo">Raised to</label><input name="to" id="fTo" type="date" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fState">Dispute state</label><select name="state" id="fState" class="form-select form-select-sm"><option value="">All</option></select></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fAtm">ATM</label><input name="atmId" id="fAtm" class="form-control form-control-sm" placeholder="ATM ID / name" value="@ViewBag.AtmId"/></div>
+  <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fMin">Min amount</label><input name="minAmount" id="fMin" type="number" min="0" step="any" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fMax">Max amount</label><input name="maxAmount" id="fMax" type="number" min="0" step="any" class="form-control form-control-sm"/></div>
+  <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fId">Dispute ID</label><input name="disputeId" id="fId" class="form-control form-control-sm" value="@ViewBag.DisputeId"/></div>
+  <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fCard">Card last 4</label><input name="card" id="fCard" class="form-control form-control-sm" inputmode="numeric" maxlength="4" pattern="\d{0,4}" autocomplete="off"/></div>
+  <div class="col-6 col-md-2 col-lg-auto"><button class="btn btn-sm btn-primary w-100"><i class="bi bi-search"></i> Search</button></div>
+</form><div class="small text-muted mt-1">Default range: the last @ViewBag.Days days. Only the last 4 card digits are ever compared; full card numbers are never shown.</div></div>
+<div class="kpis" id="dsTiles"></div>
+<div class="cardx"><div class="table-responsive"><table id="tbl" class="table table-sm table-hover w-100 small text-nowrap"><thead><tr>
+  <th>Dispute ID</th><th>ATM</th><th>Bank</th><th>State</th><th>Raised</th><th>Transaction Time</th><th>Transaction Type</th><th>Amount</th><th>Card</th>
+  <th>Customer</th><th>Reason</th><th>Raised By</th><th>Last Change By</th><th>Last Change</th><th>Closed</th></tr></thead></table></div>
+  <div class="small text-muted mt-1" id="dsSrc"></div></div>
+
+<details class="cardx mt-3" id="dsSetup"><summary class="small fw-semibold">KTC dispute states and rules (read-only)</summary><div id="dsSetupBody" class="pt-2 small text-muted">Open to load.</div></details>
+
+<div class="modal fade" id="dsModal" tabindex="-1" aria-labelledby="dsTitle" aria-hidden="true"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="dsTitle">Dispute Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body">
+    <ul class="nav nav-tabs small" role="tablist">
+      <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dsInfo" type="button" role="tab">Dispute Information</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsCust" type="button" role="tab">Customer Details</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsTx" type="button" role="tab">Transaction</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsHist" type="button" role="tab">State History</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsNotif" type="button" role="tab">Customer Notifications</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsAll" type="button" role="tab">All KTC fields</button></li>
+    </ul>
+    <div class="tab-content pt-2">
+      <div class="tab-pane fade show active" id="dsInfo" role="tabpanel"></div>
+      <div class="tab-pane fade" id="dsCust" role="tabpanel"></div>
+      <div class="tab-pane fade" id="dsTx" role="tabpanel"></div>
+      <div class="tab-pane fade" id="dsHist" role="tabpanel"></div>
+      <div class="tab-pane fade" id="dsNotif" role="tabpanel"></div>
+      <div class="tab-pane fade" id="dsAll" role="tabpanel"></div>
+    </div>
+  </div>
+  <div class="modal-footer"><span class="small text-muted me-auto" id="dsSrcD"></span><a class="btn btn-sm btn-outline-secondary" id="dsAtm" href="#"><i class="bi bi-hdd-rack"></i> Open ATM</a><button type="button" class="btn btn-sm btn-primary" data-bs-dismiss="modal">OK</button></div>
+</div></div></div>
+@section Scripts { <script src="~/js/pages/disputes.js" asp-append-version="true"></script> }
