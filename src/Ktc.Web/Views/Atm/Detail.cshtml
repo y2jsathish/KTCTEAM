@@ -72,10 +72,43 @@
   <div class="counter-bar"><span class="small text-muted" id="actMeta"></span>
     <button class="btn btn-sm btn-outline-secondary ms-auto" id="actJson" disabled><i class="bi bi-download"></i> Download command list (JSON)</button>
     <button class="btn btn-sm btn-outline-secondary" data-actrefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
-  <div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <b>Read-only for now.</b> This tab lists the commands your KTC server offers (<code>GET api/v1/CommandType</code>) so the real command ids for reboot and resets can be confirmed. The action buttons stay disabled and nothing is sent to the ATM from this portal yet.</div>
+  <div id="actMode"></div>
   <div id="actMsg"></div>
-  <div class="cardx mb-3"><h6><i class="bi bi-ui-checks-grid"></i> Planned actions</h6><div id="actPlanned" class="row g-2"><div class="col-12 text-muted small">Open this tab to read KTC's command list.</div></div></div>
+  <div class="cardx mb-3"><h6><i class="bi bi-send"></i> Run a command</h6>
+    <div class="row g-2 align-items-end">
+      <div class="col-lg-6 col-12"><label class="form-label small mb-1" for="actCmd">Command</label>
+        <select class="form-select form-select-sm" id="actCmd" disabled><option>Open this tab to read KTC's command list…</option></select></div>
+      <div class="col-lg-6 col-12 small text-muted" id="actCmdInfo"></div>
+    </div>
+    <form id="actForm" class="mt-2 d-none" novalidate autocomplete="off">
+      <div id="actFields" class="row g-2"></div>
+      <hr class="my-2">
+      <div class="row g-2">
+        <div class="col-md-3 col-12"><label class="form-label small mb-1" for="actTicket">Ticket number <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="actTicket" maxlength="40" required></div>
+        <div class="col-md-9 col-12"><label class="form-label small mb-1" for="actReason">Reason <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="actReason" maxlength="500" required placeholder="Why this command is needed (card numbers are masked)"></div>
+      </div>
+      <div id="actFormErr" class="small text-danger mt-1"></div>
+      <button type="submit" class="btn btn-sm btn-primary mt-2" id="actReview"><i class="bi bi-shield-check"></i> Review and confirm</button>
+    </form>
+  </div>
+  <div class="cardx mb-3"><h6><i class="bi bi-ui-checks-grid"></i> Guided actions (own flow, coming next)</h6><div id="actPlanned" class="row g-2"><div class="col-12 text-muted small">Open this tab to read KTC's command list.</div></div></div>
   <div class="cardx"><h6><i class="bi bi-list-task"></i> KTC command types <span class="small text-muted" id="actCount"></span></h6><div id="actCommands"></div></div>
 </div>
 </div>
+<div class="modal fade" id="actConfirm" tabindex="-1" aria-labelledby="actConfirmTitle" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="actConfirmTitle"><i class="bi bi-exclamation-triangle text-warning"></i> Confirm command</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body">
+    <div id="actSummary"></div>
+    <div id="actRisk" class="d-none alert alert-danger py-2 small mt-2"></div>
+    <div class="row g-2 mt-1">
+      <div class="col-md-6 col-12"><label class="form-label small mb-1" for="actTypeAtm">Type the ATM id to confirm</label><input class="form-control form-control-sm" id="actTypeAtm" autocomplete="off"></div>
+      <div class="col-md-6 col-12 d-none" id="actTypeCmdBox"><label class="form-label small mb-1" for="actTypeCmd">Type the command name</label><input class="form-control form-control-sm" id="actTypeCmd" autocomplete="off"></div>
+      <div class="col-12 d-none" id="actAckBox"><div class="form-check"><input class="form-check-input" type="checkbox" id="actAck"><label class="form-check-label small" for="actAck">I understand this command can take the ATM out of use or change it, and I have the approval recorded in the ticket.</label></div></div>
+    </div>
+    <div id="actChecks" class="mt-2"></div>
+  </div>
+  <div class="modal-footer"><button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+    <button type="button" class="btn btn-sm btn-outline-primary" id="actCheckBtn"><i class="bi bi-list-check"></i> Run checks</button>
+    <button type="button" class="btn btn-sm btn-danger" id="actSendBtn" disabled><i class="bi bi-send"></i> Send to ATM</button></div>
+</div></div></div>
 @section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script> }

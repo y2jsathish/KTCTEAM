@@ -51,6 +51,10 @@ builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = 429;
     o.AddPolicy("login", ctx => RateLimitPartition.GetFixedWindowLimiter(ctx.Connection.RemoteIpAddress?.ToString() ?? "x", _ => new FixedWindowRateLimiterOptions { PermitLimit = 8, Window = TimeSpan.FromMinutes(1) }));
+    // ATM commands: per signed-in user (KtcActions:MaxSendsPerMinute sends, and 6x that many checks, per minute).
+    var maxSends = Math.Max(1, builder.Configuration.GetValue("KtcActions:MaxSendsPerMinute", 5));
+    o.AddPolicy("atm-actions", ctx => RateLimitPartition.GetFixedWindowLimiter("send:" + (ctx.User.Identity?.Name ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "x"), _ => new FixedWindowRateLimiterOptions { PermitLimit = maxSends, Window = TimeSpan.FromMinutes(1) }));
+    o.AddPolicy("atm-actions-check", ctx => RateLimitPartition.GetFixedWindowLimiter("check:" + (ctx.User.Identity?.Name ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "x"), _ => new FixedWindowRateLimiterOptions { PermitLimit = maxSends * 6, Window = TimeSpan.FromMinutes(1) }));
 });
 builder.Services.AddControllersWithViews(o => o.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()))
     .AddJsonOptions(o => { o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase; o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()); });

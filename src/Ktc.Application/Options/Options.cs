@@ -180,4 +180,28 @@ public class KtcActionsOptions
     /// the tab then only suggests commands whose names look right. Keys: Reboot, XfsReset, DeviceReset, OutOfService, InService.
     /// </summary>
     public Dictionary<string, string?> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Master switch for sending commands from the generic form (POST Client/{id}/Actions). OFF by default: the form can be filled
+    /// and every check runs, but nothing reaches KTC. Turn on with KtcActions:SendEnabled = true (env: KtcActions__SendEnabled=true)
+    /// only after the real command list has been reviewed.
+    /// </summary>
+    public bool SendEnabled { get; set; }
+    /// <summary>The ticket number must exist in KTC (GET Ticket/{id}) and, when KTC says which ATM it is for, be for this ATM.</summary>
+    public bool VerifyTicketInKtc { get; set; } = true;
+    /// <summary>Minimum length of the reason.</summary>
+    public int MinReasonLength { get; set; } = 10;
+    /// <summary>Commands sent per user per minute.</summary>
+    public int MaxSendsPerMinute { get; set; } = 5;
+    /// <summary>
+    /// Commands (name or description, regex, case-insensitive) that need the extra confirmation: retype the command name and tick
+    /// "I understand". Default: Emergency Reboot, Shutdown, Rename File or Folder, Run ATM Script, Trigger Rescue Image.
+    /// </summary>
+    public string HighRiskPattern { get; set; } = @"emergency.?reboot|shut.?down|rename|run.*script|script.*run|rescue.?image";
+    /// <summary>Commands never sent from the generic form (regex on name or description). Empty = none beyond the special flows.</summary>
+    public string BlockedPattern { get; set; } = "";
+    /// <summary>Shape of the parameter XML sent as Value2: &lt;Parameters&gt;&lt;Parameter Name="x"&gt;value&lt;/Parameter&gt;&lt;/Parameters&gt;.</summary>
+    public string ParametersRoot { get; set; } = "Parameters";
+    public string ParameterElement { get; set; } = "Parameter";
+    public string ParameterNameAttribute { get; set; } = "Name";
 }

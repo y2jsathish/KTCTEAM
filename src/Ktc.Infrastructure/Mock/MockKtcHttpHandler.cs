@@ -51,6 +51,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
 
         Match r;
         if (Is(path, "api/v1/CommandType", m == "GET")) return Ok(CommandTypes);
+        if (Is(path, "api/v1/Action/ClientIDsPIP", m == "GET")) return Ok(Array.Empty<int>());
+        if (Rx(path, @"api/v1/Client/(\d+)/Actions").Success && m == "POST") return Ok(Interlocked.Increment(ref _nextAction));
         if (Is(path, "api/v1/Client", m == "GET")) return Ok(Enumerable.Range(0, AtmCount).Select(i => ClientJson(i)));
         if (Is(path, "api/v1/Business")) return Ok(Banks.Select((b, i) => new { ID = i + 1, Name = b }));
         if (Is(path, "api/v1/Region")) return Ok(Places.Select(p => p.Region).Distinct().Select((x, i) => new { ID = i + 1, Name = x }));
@@ -484,22 +486,37 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     // KTC CommandType records, shaped like the Postman collection's POST CommandType sample. Names are DEMO values, not a real server's.
     private static readonly object[] CommandTypes =
     {
-        Cmd(1, "UPLOAD", "Upload a file", "File Management", "<Params><Path /></Params>", true, 50, 0),
-        Cmd(2, "DOWNLOAD", "Send a file to the ATM", "File Management", "<Params><Path /><Hash /></Params>", false, 50, 0),
-        Cmd(3, "REBOOT", "Reboot the ATM", "Device Control", "<Params><WhenIdle>true</WhenIdle></Params>", false, 20, 0),
-        Cmd(4, "RESTART_APPLICATION", "Restart the ATM application", "Device Control", "<Params />", false, 20, 0),
-        Cmd(5, "XFS_RESET", "Reset all XFS devices", "Device Control", "<Params />", false, 20, 0),
-        Cmd(6, "DEVICE_RESET", "Reset one XFS device", "Device Control", "<Params><Device /></Params>", false, 20, 0),
-        Cmd(7, "OUT_OF_SERVICE", "Put the ATM out of service", "Device Control", "<Params><Reason /></Params>", false, 50, 0),
-        Cmd(8, "IN_SERVICE", "Put the ATM back in service", "Device Control", "<Params />", false, 50, 0),
-        Cmd(9, "CLEAR_COUNTERS", "Clear the cash counters", "Cash Management", "<Params />", false, 10, 1),
-        Cmd(10, "INSTALL_PACKAGE", "Install a software package", "Software Distribution", "<Params><PackageID /></Params>", false, 10, 1),
+        Cmd(1, "KTC_DIR_LISTING", "ATM Directory Listing", "ATM Management", "<Params><Param Name=\"Folder\" Type=\"String\" Required=\"true\" /><Param Name=\"Recursive\" Type=\"Bool\" Default=\"false\" /></Params>", 0),
+        Cmd(2, "KTC_CLEAR_MSG_QUEUE", "Clear Message Queue", "ATM Management", "<Params />", 0),
+        Cmd(3, "KTC_EMERGENCY_REBOOT", "Emergency Reboot", "ATM Management", "<Params />", 0),
+        Cmd(4, "KTC_PING", "Ping", "ATM Management", "<Params />", 0),
+        Cmd(5, "KTC_REBOOT", "Reboot", "ATM Management", "<Params><Param Name=\"WhenIdle\" Type=\"Bool\" Default=\"true\" /></Params>", 0),
+        Cmd(6, "KTC_REFRESH_STATUS", "Refresh Status", "ATM Management", "<Params />", 0),
+        Cmd(7, "KTC_RENAME", "Rename File or Folder", "ATM Management", "<Params><Param Name=\"From\" Type=\"String\" Required=\"true\" /><Param Name=\"To\" Type=\"String\" Required=\"true\" /></Params>", 0),
+        Cmd(8, "KTC_RUN_SCRIPT", "Run ATM Script and Upload Result", "ATM Management", "<Params><Param Name=\"Script\" Type=\"String\" Required=\"true\" /><Param Name=\"TimeoutSeconds\" Type=\"Int32\" Default=\"300\" Min=\"10\" Max=\"3600\" /></Params>", 0),
+        Cmd(9, "KTC_SET_TIME", "Set ATM Time", "ATM Management", "<Params><Param Name=\"Time\" Type=\"DateTime\" Required=\"true\" /></Params>", 0),
+        Cmd(10, "KTC_SET_TIME_TZ", "Set ATM Time and Time Zone", "ATM Management", "<Params><Param Name=\"Time\" Type=\"DateTime\" Required=\"true\" /><Param Name=\"TimeZone\" Type=\"Choice\" Values=\"Arabian Standard Time,UTC,India Standard Time\" /></Params>", 0),
+        Cmd(11, "KTC_SHUTDOWN", "Shutdown", "ATM Management", "<Params />", 0),
+        Cmd(12, "KTC_RESCUE_IMAGE", "Trigger Rescue Image", "ATM Management", "<Params />", 1),
+        Cmd(13, "KTC_GET_SETTING", "Get Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" Default=\"MultiLevelStore\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 0),
+        Cmd(14, "KTC_SET_SETTING", "Set Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Value\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 1),
+        Cmd(15, "KTC_XFS_RESET", "Reset All XFS Devices", "Device Management", "<Params />", 0),
+        Cmd(16, "KTC_DEVICE_RESET", "Device Reset", "Device Management", "<Params><Param Name=\"Device\" Type=\"Choice\" Values=\"Dispenser,CardReader,ReceiptPrinter,JournalPrinter,PinPad,Depository,Sensors\" /></Params>", 0),
+        Cmd(17, "KTC_OUT_OF_SERVICE", "Out of Service", "Device Management", "<Params><Param Name=\"Reason\" Type=\"String\" /></Params>", 0),
+        Cmd(18, "KTC_IN_SERVICE", "In Service", "Device Management", "<Params />", 0),
+        Cmd(19, "KTC_UPLOAD_EJ", "Upload Journal Data", "Journal Data", "<Params><Param Name=\"Days\" Type=\"Int32\" Default=\"1\" Min=\"1\" Max=\"31\" /></Params>", 0),
+        Cmd(20, "KTC_UPLOAD_FILE", "Upload File", "Uploads", "<Params><Param Name=\"Path\" Type=\"String\" Required=\"true\" /></Params>", 0),
+        Cmd(21, "KTC_CERT_RENEW", "Renew Certificate", "Certificates", "<Params><Param Name=\"Store\" Type=\"Choice\" Values=\"Machine,User\" /></Params>", 1),
+        Cmd(22, "KTC_APP_COMMAND", "Application Command", "Application Command", "<Params><Param Name=\"Command\" Type=\"String\" Required=\"true\" /><Param Name=\"Mode\" Type=\"Widget\" /></Params>", 0),
+        Cmd(23, "KTC_INSTALL_PACKAGE", "Install Package", "Software Distribution", "<Params><Param Name=\"PackageID\" Type=\"Int32\" Required=\"true\" /></Params>", 1),
+        Cmd(24, "KTC_LINKED_ACTIONS", "Linked Actions", "Linked Actions", "<Params />", 0),
     };
-    private static object Cmd(int id, string name, string desc, string cat, string tpl, bool clientInit, int maxSim, int dual) => new
+    private static object Cmd(int id, string name, string desc, string cat, string tpl, int dual) => new
     {
-        ID = id, CommandName = name, Description = desc, ParameterListTemplateString = tpl, SubCommandListString = "", AllowClientInitiation = clientInit,
-        MaxRetries = 3, RetryWaitTime = 60, MaxSimultaneous = maxSim, TargetTypeByte = 0, IsUserDefined = false, Category = cat, DualAuthModeByte = dual
+        ID = id, CommandName = name, Description = desc, ParameterListTemplateString = tpl, SubCommandListString = "", AllowClientInitiation = false,
+        MaxRetries = 3, RetryWaitTime = 60, MaxSimultaneous = 50, TargetTypeByte = 0, IsUserDefined = false, Category = cat, DualAuthModeByte = dual
     };
+    private static long _nextAction = 880000;
 
     private static bool Is(string path, string route, bool cond = true) => cond && path.Equals(route, StringComparison.OrdinalIgnoreCase);
     private static Match Rx(string path, string pattern) => Regex.Match(path, "^" + pattern + "$", RegexOptions.IgnoreCase);
