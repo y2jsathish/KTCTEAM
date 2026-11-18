@@ -47,7 +47,7 @@
   let d;try{d=await K.api('/data/tickets/'+encodeURIComponent(id)+'/details');}
   catch(e){$id('tkInfo').innerHTML=`<div class="alert alert-danger small">${K.esc(e.message)}</div>`;return;}
   const t=d.ticket,F=d.ticketFields,T=d.ticketType,E=d.error,C=d.errorCodeType;
-  const info=grid('Ticket Information',[['Ticket ID',t.id],['Status',t.ktcStatus+(t.statusByte!=null?` (${t.statusByte})`:'')],['Escalation Level',val(F,'EscalationLevel','Escalation')],['Bank Ref. Num.',val(F,'BankRefNum','BankReferenceNumber','BankRef')],
+  const info=grid('Ticket Information',[['Ticket ID',t.id],['Status',t.ktcStatus+(t.statusByte!=null?` (${t.statusByte})`:'')],['Escalation Level',val(F,'EscalationLevel','Escalation')],['Bank Ref. Num.',val(F,'BankReferenceNumber','BankRefNum','BankRef')],
    ['Ticket Created',t.createdUtc],['Ticket Opened',t.openedUtc],['Closure Mode',val(F,'ClosureMode','ClosureModeName')],['Planned Ticket',val(F,'PlannedTicket','IsPlanned','Planned')],
    ['Owner',t.owner,'Unowned'],['Owned Time',val(F,'TimeOwned','OwnedTime'),'Never Owned'],['Dispatched To',val(F,'DispatchedTo','DispatchName','DispatchedToName')],['Dispatched Time',val(F,'TimeDispatched','DispatchedTime'),'Never Dispatched'],
    ['Closed Time',t.closedUtc],['Last Update',t.updatedUtc||t.lastChangeUtc],['Reopen Count',val(F,'ReopenCount','TimesReopened')],['Duration',dur(Math.round(((t.closedUtc?new Date(t.closedUtc+(t.closedUtc.endsWith('Z')?'':'Z')):new Date())-new Date((t.openedUtc||t.createdUtc)+((t.openedUtc||t.createdUtc).endsWith('Z')?'':'Z')))/1000))]]);
@@ -85,8 +85,10 @@
   const body={comment:$id('tkComment').value,confirmTicketId:$id('tkConfirm')?$id('tkConfirm').value:null};
   try{const r=await K.api(`/data/tickets/${encodeURIComponent(id)}/${what}`,{json:body});
    const box=`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message)} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
-    <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>`;
-   if(r.done){K.toast(r.message,'ok');await details(id,atmId);load().catch(()=>{});}
+    <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>
+    ${(r.ktcSteps||[]).length?`<details class="small mt-1"${r.done?'':' open'}><summary>What KTC answered</summary><ol class="mb-0 font-monospace" style="font-size:.75rem">${r.ktcSteps.map(x=>`<li>${K.esc(x)}</li>`).join('')}</ol></details>`:''}`;
+   if(r.done)K.toast(r.message,'ok');
+   if((r.ktcSteps||[]).length){await details(id,atmId);load().catch(()=>{});}
    if($id('tkWriteRes'))$id('tkWriteRes').innerHTML=box;
   }catch(e){if($id('tkWriteRes'))$id('tkWriteRes').innerHTML=`<div class="alert alert-danger py-1 small">${K.esc(e.message)}</div>`;}
   btns.forEach(b=>{if(document.body.contains(b))b.disabled=false;});

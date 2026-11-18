@@ -1463,7 +1463,7 @@ public class KtcDataService : IKtcDataService
             CreatedUtc = created, UpdatedUtc = updated, ClosedUtc = closed, Owner = owner.Length == 0 ? null : owner, Description = PanMasker.Mask(desc),
             SlaDueUtc = due, Sla = SlaCalculator.Evaluate(due, completed, DateTime.UtcNow, _opt.NearBreachMinutes),
             KtcStatus = ktcStatus, StatusByte = sb, TypeId = typeId, TypeName = typeName, OpenedUtc = opened ?? created,
-            ErrorId = KtcJson.Str(e, "ErrorID", "ErrorId", "ActiveErrorID", "HistoricalErrorID"), ErrorCodeTypeId = ecId, ErrorCode = code, ErrorText = PanMasker.Mask(errText),
+            ErrorId = KtcJson.Str(e, "ErrorID", "ErrorId", "ActiveErrorID", "HistoricalErrorID", "HistoricalErrorCodeID"), ErrorCodeTypeId = ecId, ErrorCode = code, ErrorText = PanMasker.Mask(errText),
             LastChangeBy = NullIf(KtcJson.Str(e, "LastChangeBy", "LastChangedBy", "LastUpdatedBy", "UpdatedBy")) ?? last?.User,
             LastChangeUtc = updated ?? last?.Utc, LastComment = PanMasker.Mask(KtcJson.Str(e, "LastComment")) is { Length: > 0 } lc ? lc : last?.Text ?? "",
             SlaSummary = slaText, HasKtcSla = hasSla

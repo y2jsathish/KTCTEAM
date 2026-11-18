@@ -112,6 +112,12 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)/SLA")).Success) { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t.SLADueTime == null ? Array.Empty<object>() : new object[] { new { level = 1, startTime = t.TimeCreated, expectedEndTime = t.SLADueTime, endTime = t.TimeClosed } }); }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "GET") { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t); }
+        if ((r = Rx(path, @"api/v1/Ticket/(\d+)/ClosedDate")).Success && m == "PUT")
+        {
+            var tid = long.Parse(r.Groups[1].Value); var t = AllTickets(now).FirstOrDefault(x => x.ID == tid);
+            if (t == null) return Resp(HttpStatusCode.NotFound, "null");
+            ClosedTickets[tid] = (4, now); return Resp(HttpStatusCode.OK, "true");
+        }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT")
         {
             var tid = long.Parse(r.Groups[1].Value);
@@ -119,11 +125,13 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             using var d = JsonDocument.Parse(body);
             if (d.RootElement.TryGetProperty("TimeClosed", out var tc) && tc.ValueKind == JsonValueKind.String && d.RootElement.TryGetProperty("StatusByte", out var sbe))
                 ClosedTickets[tid] = (sbe.GetInt32(), tc.GetDateTime().ToUniversalTime());
+            if (d.RootElement.TryGetProperty("CommentsString", out var cs) && cs.ValueKind == JsonValueKind.String) CommentsOverride[tid] = cs.GetString() ?? "";
             return Resp(HttpStatusCode.OK, "true");
         }
         if (Is(path, "api/v1/Comment") && m == "POST")
         {
             using var d = JsonDocument.Parse(body); var rt = d.RootElement;
+            if (rt.TryGetProperty("table", out var tb) && tb.GetInt32() == 4) return Resp(HttpStatusCode.InternalServerError, "{\"Message\":\"Exception: Action not found\"}");
             var tid = rt.GetProperty("rowID").GetInt64(); var kc = rt.GetProperty("kcComment");
             if (!AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.NotFound, "false");
             var list = AddedComments.GetOrAdd(tid, _ => new());
@@ -364,8 +372,10 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     // Portal writes in demo mode: comments added and tickets closed (POST api/v1/Comment, PUT Ticket/{id}).
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, List<(DateTime T, string U, string C)>> AddedComments = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int Status, DateTime Closed)> ClosedTickets = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> CommentsOverride = new();
     private static MockTicket Applied(MockTicket t)
     {
+        if (CommentsOverride.TryGetValue(t.ID, out var cs)) t = t with { CommentsString = cs };
         if (ClosedTickets.TryGetValue(t.ID, out var c)) t = t with { StatusByte = c.Status, TimeClosed = c.Closed, TimeUpdated = c.Closed };
         if (AddedComments.TryGetValue(t.ID, out var l))
         {
