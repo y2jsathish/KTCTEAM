@@ -26,8 +26,14 @@ public class KtcOptions
     public int AvailabilityWarmupPerCycle { get; set; } = 150;
     /// <summary>KTC error "level" -> P1..P4. Key = level, value = 1..4.</summary>
     public Dictionary<string, int> SeverityMap { get; set; } = new() { ["1"] = 1, ["2"] = 2, ["3"] = 3, ["4"] = 4 };
-    /// <summary>Ticket StatusByte -> TicketStatus name (Open/Assigned/InProgress/Resolved/Closed).</summary>
+    /// <summary>
+    /// KTC ticket StatusByte -> KTC's status name as its ticket list shows it (e.g. "4" = "AutoClosed"). Used when KTC sends only the
+    /// number. The portal files each name under Open / Assigned / InProgress / Resolved / Closed by its wording. Unmapped numbers show
+    /// as "Status N" (closed ones as Closed, or AutoClosed when KTC closed them itself).
+    /// </summary>
     public Dictionary<string, string> TicketStatusMap { get; set; } = new();
+    /// <summary>Closed tickets older than this many days are left out (KTC's "Number of days of Closed Tickets to show").</summary>
+    public int TicketClosedDays { get; set; } = 14;
     /// <summary>Fallback SLA hours per severity when the Ticket SLA endpoint returns nothing.</summary>
     public Dictionary<string, double> DefaultSlaHours { get; set; } = new() { ["P1"] = 4, ["P2"] = 8, ["P3"] = 24, ["P4"] = 72 };
     public int NearBreachMinutes { get; set; } = 60;

@@ -101,7 +101,16 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if ((r = Rx(path, @"api/v1/Client/(\d+)/(EJRow|EJPlusTime)")).Success && m == "POST") return Ok(Ej(Idx(r), body, now));
         if ((r = Rx(path, @"api/v1/Client/(\d+)")).Success && m == "GET") return Ok(ClientJson(Idx(r)));
         if (Is(path, "api/v1/Ticket/Search") && m == "POST") return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => Tickets(i, now)));
-        if ((r = Rx(path, @"api/v1/Ticket/(\d+)/SLA")).Success) { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(new[] { new { level = 1, startTime = t.TimeCreated, expectedEndTime = t.SLADueTime, endTime = t.TimeClosed } }); }
+        if (Is(path, "api/v1/TroubleTicketType")) return Ok(TicketTypes());
+        if (Is(path, "api/v1/ErrorCodeType")) return Ok(ErrorCodeTypes());
+        if ((r = Rx(path, @"api/v1/Ticket/(\d+)/Children")).Success) return Ok(Array.Empty<object>());
+        if ((r = Rx(path, @"api/v1/HistoricalError/(\d+)")).Success)
+        {
+            var hid = long.Parse(r.Groups[1].Value); var t = AllTickets(now).FirstOrDefault(x => x.ErrorID == hid);
+            return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(new { ID = hid, ClientID = t.ClientID, ClientName = t.ClientName, ErrorCodeTypeID = t.ErrorCodeTypeID, ErrorCode = MockCode(t.ErrorCodeTypeID),
+                OccurrenceTime = t.TimeCreated.AddMinutes(-4), ReceivedTime = t.TimeCreated.AddMinutes(-4), TimeClosed = t.TimeClosed?.AddSeconds(-1), CountsAsDowntime = t.Level <= 2 });
+        }
+        if ((r = Rx(path, @"api/v1/Ticket/(\d+)/SLA")).Success) { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t.SLADueTime == null ? Array.Empty<object>() : new object[] { new { level = 1, startTime = t.TimeCreated, expectedEndTime = t.SLADueTime, endTime = t.TimeClosed } }); }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "GET") { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t); }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT") return Resp(HttpStatusCode.OK, "true");
         if (Is(path, "api/v1/TransactionData/Search") && m == "POST") return Ok(Transactions(body, now));
@@ -304,7 +313,36 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         }
     }
 
-    private record MockTicket(long ID, int ClientID, string ClientName, int StatusByte, DateTime TimeCreated, DateTime TimeUpdated, DateTime? TimeOwned, DateTime? TimeDispatched, DateTime? TimeClosed, string? OwnerName, string Description, int Level, DateTime SLADueTime);
+    private record MockTicket(long ID, int ClientID, string ClientName, int StatusByte, DateTime TimeCreated, DateTime TimeUpdated, DateTime? TimeOwned, DateTime? TimeDispatched, DateTime? TimeClosed, string? OwnerName, string Description, int Level, DateTime? SLADueTime)
+    {
+        // KTC-like extras for the ticket list and details popup.
+        public int TicketTypeID { get; init; }
+        public int ErrorCodeTypeID { get; init; }
+        public long ErrorID { get; init; }
+        public DateTime TimeOpened => TimeCreated;
+        public int EscalationLevel { get; init; }
+        public string BankRefNum { get; init; } = "";
+        public string ClosureMode => TimeClosed == null ? "" : StatusByte == 5 ? "Automatic" : "Manual";
+        public bool PlannedTicket { get; init; }
+        public string? DispatchedTo { get; init; }
+        public int ReopenCount { get; init; }
+        public string LastChangeBy { get; init; } = "System";
+        public string CommentsString { get; init; } = "";
+    }
+    private static string MockCode(int id) => "KW" + (20 + id);
+    private static readonly string[] CodeCategory = { "Cash", "Card", "Host", "Consumables", "Network", "Cash", "Security", "Replenish" };
+    private static object ErrorCodeTypes() => Codes.Select(c => new { ID = c.Id, Code = MockCode(c.Id), ErrorText = c.Name, Description = c.Name + ". Check the device and the ATM application log.", Level = c.Level, Category = CodeCategory[(c.Id - 1) % CodeCategory.Length], HelpText = c.Level <= 2 ? "Dispatch an engineer if it does not clear in 15 minutes." : "Send CVIT / branch staff on the next visit." });
+    private static object TicketTypes() => Codes.Select(c => new { ID = 100 + c.Id, Name = c.Name, AppliesToBusiness = "All Businesses", SendsEmail = "On Creation", PerformsAction = false, MinimumPoints = 0, Category = CodeCategory[(c.Id - 1) % CodeCategory.Length], ConflictCategory = "None", NoTicketsWhenPlannedActive = false });
+    private static string MockComments(DateTime created, DateTime? closed, string? owner, bool auto, string desc)
+    {
+        var x = new System.Text.StringBuilder("<Comments>");
+        void Add(DateTime t, string u, string c) => x.Append($"<Comment User=\"{u}\" Timestamp=\"{t:yyyy-MM-ddTHH:mm:ssZ}\">{System.Security.SecurityElement.Escape(c)}</Comment>");
+        Add(created, "System", "Ticket created automatically.");
+        Add(created, "System", "Email successfully sent TO: atm.support@example.com;cash.ops@example.com");
+        if (owner != null) Add(created.AddMinutes(10), owner, $"Taking ownership. Customer card 4111111111111111 reported retained; checking {desc.ToLowerInvariant()}.");
+        if (closed != null) Add(closed.Value, auto ? "System" : owner ?? "System", auto ? "Auto closed by system as error code is no longer active." : "Fixed on site, ticket closed.");
+        return x.Append("</Comments>").ToString();
+    }
     private static readonly string[] Owners = { "a.rahman", "j.thomas", "m.khan", "s.nair", "l.fernandez" };
     private static IEnumerable<MockTicket> Tickets(int i, DateTime now)
     {
@@ -320,9 +358,12 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             // make a few tickets near breach / breached for realism
             if (Hash(i, code, 23) % 100 < 18) sla = now.AddMinutes(20 + Hash(i, code, 24) % 40);
             if (Hash(i, code, 25) % 100 < 8) sla = now.AddMinutes(-(10 + Hash(i, code, 26) % 120));
-            yield return new MockTicket(700000L + i * 100 + code, Id(i), (string)inc.ClientName, stage == 3 ? 4 : stage + 1, created, now.AddMinutes(-5),
-                stage >= 1 ? created.AddMinutes(10) : null, stage >= 2 ? created.AddMinutes(25) : null, stage == 3 ? now.AddMinutes(-3) : null,
-                stage >= 1 ? Owners[Hash(i, code) % Owners.Length] : null, (string)inc.Description, level, sla);
+            var own = stage >= 1 ? Owners[Hash(i, code) % Owners.Length] : null; DateTime? cl = stage == 3 ? now.AddMinutes(-3) : null;
+            yield return new MockTicket(700000L + i * 100 + code, Id(i), (string)inc.ClientName, stage == 3 ? 4 : stage + 1, created, cl ?? now.AddMinutes(-5),
+                stage >= 1 ? created.AddMinutes(10) : null, stage >= 2 ? created.AddMinutes(25) : null, cl,
+                own, (string)inc.Description, level, level <= 2 ? sla : null)
+            { TicketTypeID = 100 + code, ErrorCodeTypeID = code, ErrorID = (long)inc.ID, BankRefNum = (160000 + Hash(i, code, 27) % 9999).ToString(), DispatchedTo = stage >= 2 ? "CMS Field Services" : null,
+              EscalationLevel = level <= 2 && stage == 0 ? 1 : 0, LastChangeBy = own ?? "System", CommentsString = MockComments(created, cl, own, false, (string)inc.Description) };
         }
         // closed tickets in last 3 days
         for (int d = 0; d < 3; d++)
@@ -332,7 +373,10 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                 var cr = now.Date.AddDays(-d).AddHours(Hash(i, d, 33) % 12 + 1);
                 var due = cr.AddHours(c.Level switch { 1 => 4, 2 => 8, 3 => 24, _ => 72 });
                 var closed = Hash(i, d, 34) % 100 < 12 ? due.AddMinutes(45) : cr.AddHours(1 + Hash(i, d, 35) % 3);
-                yield return new MockTicket(600000L + i * 100 + d * 10 + c.Id, Id(i), $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}", 5, cr, closed, cr.AddMinutes(5), cr.AddMinutes(20), closed, Owners[Hash(i, d) % Owners.Length], c.Name, c.Level, due);
+                var auto = Hash(i, d, 36) % 100 < 70; var own = auto ? null : Owners[Hash(i, d) % Owners.Length];
+                yield return new MockTicket(600000L + i * 100 + d * 10 + c.Id, Id(i), $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}", auto ? 5 : 4, cr, closed, auto ? null : cr.AddMinutes(5), auto ? null : cr.AddMinutes(20), closed, own, c.Name, c.Level, auto ? null : due)
+                { TicketTypeID = 100 + c.Id, ErrorCodeTypeID = c.Id, ErrorID = 400000L + i * 100 + d, BankRefNum = (160000 + Hash(i, d, 37) % 9999).ToString(), DispatchedTo = auto ? null : "CMS Field Services",
+                  LastChangeBy = auto ? "System" : own!, CommentsString = MockComments(cr, closed, own, auto, c.Name) };
             }
     }
     private static IEnumerable<MockTicket> AllTickets(DateTime now) => Enumerable.Range(0, AtmCount).SelectMany(i => Tickets(i, now));

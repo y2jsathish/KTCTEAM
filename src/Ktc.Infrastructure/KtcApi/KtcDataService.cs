@@ -1324,12 +1324,30 @@ public class KtcDataService : IKtcDataService
     private static List<TicketDto> DistinctTickets(IEnumerable<TicketDto?> t) =>
         t.Where(x => x != null).Select(x => x!).GroupBy(x => x.Id).Select(g => g.First()).ToList();
 
+    private record TicketLookups(Dictionary<string, JsonElement> Types, Dictionary<string, JsonElement> ErrorTypes);
+
+    /// <summary>KTC's ticket types (GET TroubleTicketType) and error code types (GET ErrorCodeType), by id. Cached 30 min.</summary>
+    private Task<TicketLookups> TicketLookupsAsync(Warn w, CancellationToken ct) =>
+        Cached("ticket-lookups", TimeSpan.FromMinutes(30), async () =>
+        {
+            var tt = Fetch("api/v1/TroubleTicketType", w, ct: ct); var et = Fetch("api/v1/ErrorCodeType", w, ct: ct);
+            await Task.WhenAll(tt, et);
+            static Dictionary<string, JsonElement> ById(JsonElement? root, params string[] idf)
+            {
+                var d = new Dictionary<string, JsonElement>();
+                foreach (var (k, e) in KtcJson.Rows(root))
+                    if (e.ValueKind == JsonValueKind.Object) { var id = KtcJson.Str(e, idf); if (id.Length == 0) id = k; if (id.Length > 0) d.TryAdd(id, e.Clone()); }
+                return d;
+            }
+            return new TicketLookups(ById(tt.Result, "ID", "Id", "TroubleTicketTypeID", "TicketTypeID"), ById(et.Result, "ID", "Id", "ErrorCodeTypeID"));
+        });
+
     private Task<List<TicketDto>> TicketsCore(Warn w, CancellationToken ct) =>
         Cached("tickets", TimeSpan.FromSeconds(30), async () =>
         {
-            var lookup = await LookupAsync(w, ct);
+            var lookup = await LookupAsync(w, ct); var tl = await TicketLookupsAsync(w, ct);
             var rows = await SearchPerBusinessAsync("api/v1/Ticket/Search", b => TicketBody(b, DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), DateTime.UtcNow.AddMinutes(5)), w, ct);
-            return DistinctTickets(rows.Select(e => MapTicket(e, lookup)));
+            return DistinctTickets(rows.Select(e => MapTicket(e, lookup, tl)));
         });
 
     public async Task<IReadOnlyList<TicketDto>> SearchTicketsAsync(TicketQuery q, CancellationToken ct = default)
@@ -1338,12 +1356,18 @@ public class KtcDataService : IKtcDataService
         IEnumerable<TicketDto> all;
         if (q.From.HasValue || q.To.HasValue)
         {
-            var lookup = await LookupAsync(w, ct);
+            var lookup = await LookupAsync(w, ct); var tl = await TicketLookupsAsync(w, ct);
             var rows = await SearchPerBusinessAsync("api/v1/Ticket/Search", b => TicketBody(b, q.From ?? DateTime.UtcNow.AddDays(-_opt.TicketLookbackDays), q.To ?? DateTime.UtcNow), w, ct);
-            all = DistinctTickets(rows.Select(e => MapTicket(e, lookup)));
+            all = DistinctTickets(rows.Select(e => MapTicket(e, lookup, tl)));
         }
         else all = await TicketsCore(w, ct);
 
+        // Like KTC's list: open tickets always, closed ones only from the last N days.
+        if (q.ClosedDays is int cd && cd >= 0)
+        {
+            var since = DateTime.UtcNow.AddDays(-cd);
+            all = all.Where(t => t.IsOpen || (t.ClosedUtc ?? t.UpdatedUtc ?? t.CreatedUtc) >= since);
+        }
         if (!string.IsNullOrWhiteSpace(q.AtmId))
         {
             var ids = MatchAtms(await LookupAsync(new Warn(), ct), q.AtmId);
@@ -1357,40 +1381,94 @@ public class KtcDataService : IKtcDataService
 
     public async Task<TicketDto?> GetTicketAsync(string id, CancellationToken ct = default)
     {
-        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var w = new Warn(); var lookup = await LookupAsync(w, ct); var tl = await TicketLookupsAsync(w, ct);
         var json = await Fetch($"api/v1/Ticket/{Uri.EscapeDataString(id)}", w, ct: ct);
-        return KtcJson.Items(json).Select(e => MapTicket(e, lookup)).FirstOrDefault();
+        return KtcJson.Items(json).Select(e => MapTicket(e, lookup, tl)).FirstOrDefault();
     }
 
-    private TicketDto? MapTicket(JsonElement e, Dictionary<string, ClientRec> lookup)
+    /// <summary>
+    /// Ticket Details popup (read-only): GET Ticket/{id}, its ticket type and error code type (from the cached lists), the error
+    /// (GET HistoricalError/{errorId}, else ActiveError/{errorId}), GET Ticket/{id}/SLA and GET Ticket/{id}/Children. KTC's API has
+    /// no GET for a ticket's queued notifications (only POST), so that tab shows what the ticket record itself carries.
+    /// </summary>
+    public async Task<TicketDetails?> GetTicketDetailsAsync(string id, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct); var tl = await TicketLookupsAsync(w, ct);
+        var esc = Uri.EscapeDataString(id);
+        var tj = KtcJson.Items(await Fetch($"api/v1/Ticket/{esc}", w, ct: ct)).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object);
+        if (tj.ValueKind != JsonValueKind.Object) return null;
+        var t = MapTicket(tj, lookup, tl);
+        if (t == null) return null;
+        var sources = new List<string> { $"GET api/v1/Ticket/{id}" };
+        var slaT = Fetch($"api/v1/Ticket/{esc}/SLA", w, ct: ct); var kidsT = Fetch($"api/v1/Ticket/{esc}/Children", w, ct: ct);
+        Task<JsonElement?>? errT = null;
+        if (t.ErrorId.Length > 0) errT = Fetch($"api/v1/HistoricalError/{Uri.EscapeDataString(t.ErrorId)}", w, ct: ct);
+        await Task.WhenAll(new Task[] { slaT, kidsT, errT ?? Task.CompletedTask });
+        sources.Add($"GET api/v1/Ticket/{id}/SLA"); sources.Add($"GET api/v1/Ticket/{id}/Children");
+        JsonElement? err = errT == null ? null : KtcJson.Items(errT.Result).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object) is { ValueKind: JsonValueKind.Object } he ? he : null;
+        if (errT != null) sources.Add($"GET api/v1/HistoricalError/{t.ErrorId}");
+        if (err == null && t.ErrorId.Length > 0 && t.IsOpen)
+        {
+            var a = KtcJson.Items(await Fetch($"api/v1/ActiveError/{Uri.EscapeDataString(t.ErrorId)}", w, ct: ct)).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object);
+            if (a.ValueKind == JsonValueKind.Object) { err = a; sources.Add($"GET api/v1/ActiveError/{t.ErrorId}"); }
+        }
+        var type = t.TypeId.Length > 0 && tl.Types.TryGetValue(t.TypeId, out var ty) ? TicketRules.Fields(ty) : null;
+        var ect = t.ErrorCodeTypeId.Length > 0 && tl.ErrorTypes.TryGetValue(t.ErrorCodeTypeId, out var et) ? TicketRules.Fields(et) : null;
+        if (type != null) sources.Add("GET api/v1/TroubleTicketType");
+        if (ect != null) sources.Add("GET api/v1/ErrorCodeType");
+        var notes = KtcJson.TryProp(tj, out var qn, "QueuedNotifications", "Notifications") && qn.ValueKind == JsonValueKind.Array
+            ? qn.EnumerateArray().Select(n => (IReadOnlyList<KtcField>)TicketRules.Fields(n)).ToList() : new List<IReadOnlyList<KtcField>>();
+        var kids = KtcJson.Items(kidsT.Result).Select(e => MapTicket(e, lookup, tl)).Where(x => x != null).Select(x => x!).ToList();
+        return new TicketDetails(t, TicketRules.Fields(tj).Where(f => !f.Name.StartsWith("Comment", StringComparison.OrdinalIgnoreCase)).ToList(),
+            TicketRules.Comments(tj), type, ect, err == null ? null : TicketRules.Fields(err),
+            KtcJson.Items(slaT.Result).Where(e => e.ValueKind == JsonValueKind.Object).Select(e => (IReadOnlyList<KtcField>)TicketRules.Fields(e)).ToList(),
+            notes, kids, sources, w.ToList().Select(PanMasker.Mask).ToList());
+    }
+
+    private TicketDto? MapTicket(JsonElement e, Dictionary<string, ClientRec> lookup, TicketLookups tl)
     {
         var id = KtcJson.Str(e, "ID", "Id", "TicketID");
         if (id.Length == 0) return null;
         var atm = KtcJson.NormId(KtcJson.Str(e, "ClientID", "ClientId")); lookup.TryGetValue(atm, out var c);
         var created = KtcJson.Date(e, "TimeCreated", "CreationDate", "Created") ?? DateTime.UtcNow;
-        var updated = KtcJson.Date(e, "TimeUpdated", "Updated");
+        var opened = KtcJson.Date(e, "TimeOpened", "OpenedTime", "Opened", "TimeOpen");
+        var updated = KtcJson.Date(e, "TimeUpdated", "LastUpdate", "LastChangeDate", "LastChangeTime", "Updated");
         var closed = KtcJson.Date(e, "TimeClosed", "ClosedDate", "Closed");
-        var owned = KtcJson.Date(e, "TimeOwned"); var dispatched = KtcJson.Date(e, "TimeDispatched");
         var owner = KtcJson.Str(e, "OwnerName", "Owner", "AssignedTo");
-        var sb = KtcJson.Int(e, -1, "StatusByte", "Status");
-        TicketStatus st;
-        if (sb >= 0 && _opt.TicketStatusMap.TryGetValue(sb.ToString(), out var mapped) && Enum.TryParse<TicketStatus>(mapped, true, out var ms)) st = ms;
-        else if (closed.HasValue) st = TicketStatus.Closed;
-        else if (dispatched.HasValue) st = TicketStatus.InProgress;
-        else if (owned.HasValue || owner.Length > 0) st = TicketStatus.Assigned;
-        else st = TicketStatus.Open;
-        var level = KtcJson.Int(e, 3, "Level", "Priority", "Severity", "ErrorLevel");
+        var comments = TicketRules.Comments(e);
+        var (ktcStatus, st, sb) = TicketRules.Status(e, _opt.TicketStatusMap, comments);
+        var typeId = KtcJson.Str(e, "TicketTypeID", "TroubleTicketTypeID", "TypeID");
+        var ecId = KtcJson.Str(e, "ErrorCodeTypeID", "ErrorCodeTypeId");
+        tl.Types.TryGetValue(typeId, out var type); tl.ErrorTypes.TryGetValue(ecId, out var ect);
+        var typeName = KtcJson.Str(e, "TicketTypeName", "TroubleTicketTypeName", "TypeName");
+        if (typeName.Length == 0 && type.ValueKind == JsonValueKind.Object) typeName = KtcJson.Str(type, "Name", "TypeName", "Description");
+        var code = KtcJson.Str(e, "ErrorCode", "ErrorCodeName", "Code");
+        if (code.Length == 0 && ect.ValueKind == JsonValueKind.Object) code = KtcJson.Str(ect, "Code", "ErrorCode", "Name");
+        var errText = KtcJson.Str(e, "ErrorText", "ErrorCodeTypeName", "ErrorDescription");
+        if (errText.Length == 0 && ect.ValueKind == JsonValueKind.Object) errText = KtcJson.Str(ect, "ErrorText", "Text", "Description", "Name");
+        var level = KtcJson.Int(e, -1, "Level", "Priority", "Severity", "ErrorLevel");
+        if (level < 0 && ect.ValueKind == JsonValueKind.Object) level = KtcJson.Int(ect, -1, "Level", "ErrorLevel");
+        if (level < 0) level = 3;
         var sev = _opt.SeverityMap.TryGetValue(level.ToString(), out var s) ? (Severity)Math.Clamp(s, 1, 4) : Severity.P3;
-        var due = KtcJson.Date(e, "SLADueTime", "ExpectedEndTime", "SlaDue", "DueTime") ?? created.AddHours(_opt.DefaultSlaHours.GetValueOrDefault(sev.ToString(), 24));
+        var ktcDue = KtcJson.Date(e, "SLADueTime", "ExpectedEndTime", "SlaDue", "DueTime");
+        var due = ktcDue ?? created.AddHours(_opt.DefaultSlaHours.GetValueOrDefault(sev.ToString(), 24));
         DateTime? completed = st is TicketStatus.Closed or TicketStatus.Resolved ? (closed ?? updated ?? DateTime.UtcNow) : null;
-        var desc = KtcJson.Str(e, "Description", "Summary", "ErrorCodeTypeName", "TicketTypeName", "Title");
-        if (desc.Length == 0) desc = Regex.Replace(KtcJson.Str(e, "CommentsString"), "<[^>]+>", " ").Trim();
+        var desc = KtcJson.Str(e, "Description", "Summary", "Title");
+        if (desc.Length == 0) desc = errText.Length > 0 ? errText : typeName;
+        var last = comments.LastOrDefault();
+        var (slaText, hasSla) = TicketRules.SlaSummary(ktcDue, completed, DateTime.UtcNow);
         return new TicketDto
         {
             Id = id, AtmId = atm, AtmName = c?.Name ?? KtcJson.Str(e, "ClientName"), Client = c?.Business ?? "", Status = st, Severity = sev,
-            CreatedUtc = created, UpdatedUtc = updated, ClosedUtc = closed, Owner = owner.Length == 0 ? null : owner, Description = desc,
-            SlaDueUtc = due, Sla = SlaCalculator.Evaluate(due, completed, DateTime.UtcNow, _opt.NearBreachMinutes)
+            CreatedUtc = created, UpdatedUtc = updated, ClosedUtc = closed, Owner = owner.Length == 0 ? null : owner, Description = PanMasker.Mask(desc),
+            SlaDueUtc = due, Sla = SlaCalculator.Evaluate(due, completed, DateTime.UtcNow, _opt.NearBreachMinutes),
+            KtcStatus = ktcStatus, StatusByte = sb, TypeId = typeId, TypeName = typeName, OpenedUtc = opened ?? created,
+            ErrorId = KtcJson.Str(e, "ErrorID", "ErrorId", "ActiveErrorID", "HistoricalErrorID"), ErrorCodeTypeId = ecId, ErrorCode = code, ErrorText = PanMasker.Mask(errText),
+            LastChangeBy = NullIf(KtcJson.Str(e, "LastChangeBy", "LastChangedBy", "LastUpdatedBy", "UpdatedBy")) ?? last?.User,
+            LastChangeUtc = updated ?? last?.Utc, LastComment = PanMasker.Mask(KtcJson.Str(e, "LastComment")) is { Length: > 0 } lc ? lc : last?.Text ?? "",
+            SlaSummary = slaText, HasKtcSla = hasSla
         };
+        static string? NullIf(string v) => v.Length == 0 ? null : v;
     }
 
     // ---------------- transactions ----------------

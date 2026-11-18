@@ -139,19 +139,32 @@ public class DataController : ControllerBase
     // ---------- tickets ----------
     [HttpGet("tickets")]
     [Audit("TicketView", "Ticket search")]
-    public async Task<IActionResult> Tickets(string? atmId, string? ticketId, string? client, DateTime? from, DateTime? to, string? status, CancellationToken ct)
+    public async Task<IActionResult> Tickets(string? atmId, string? ticketId, string? client, DateTime? from, DateTime? to, string? status, int? closedDays,
+        [FromServices] Microsoft.Extensions.Options.IOptions<Ktc.Application.Options.KtcOptions> opt, CancellationToken ct)
     {
-        var all = await _data.SearchTicketsAsync(new TicketQuery(atmId, ticketId, client, from?.ToUniversalTime(), to?.ToUniversalTime()), ct);
+        var days = Math.Clamp(closedDays ?? opt.Value.TicketClosedDays, 0, 365);
+        var all = await _data.SearchTicketsAsync(new TicketQuery(atmId, ticketId, client, from?.ToUniversalTime(), to?.ToUniversalTime(), days), ct);
         IEnumerable<TicketDto> r = all;
-        if (Enum.TryParse<TicketStatus>(status, true, out var st)) r = r.Where(t => t.Status == st);
+        // KTC status name (as in KTC's "Ticket status filter"), or one of the portal's categories (the tiles).
+        if (!string.IsNullOrWhiteSpace(status) && !status.Equals("All", StringComparison.OrdinalIgnoreCase))
+            r = Enum.TryParse<TicketStatus>(status, true, out var st) && !all.Any(t => t.KtcStatus.Equals(status, StringComparison.OrdinalIgnoreCase))
+                ? r.Where(t => t.Status == st) : r.Where(t => t.KtcStatus.Equals(status, StringComparison.OrdinalIgnoreCase));
         var list = r.Take(3000).ToList();
         var now = DateTime.UtcNow;
         return Ok(new
         {
-            data = list.Select(t => new { t.Id, t.AtmId, t.AtmName, t.Client, status = t.Status.ToString(), severity = t.Severity.ToString(), t.CreatedUtc, t.UpdatedUtc, t.Owner, t.Description, t.SlaDueUtc, sla = t.Sla.ToString(), minutesToBreach = t.IsOpen ? (int)(t.SlaDueUtc - now).TotalMinutes : (int?)null }),
+            closedDays = days,
+            statuses = all.GroupBy(t => t.KtcStatus).OrderBy(g => g.Min(t => (int)t.Status)).ThenBy(g => g.Key).Select(g => new { name = g.Key, count = g.Count() }),
+            data = list.Select(t => new
+            {
+                t.Id, t.AtmId, t.AtmName, t.Client, status = t.Status.ToString(), t.KtcStatus, t.StatusByte, severity = t.Severity.ToString(), t.CreatedUtc, t.OpenedUtc, t.ClosedUtc,
+                t.UpdatedUtc, t.Owner, t.Description, t.TypeName, t.ErrorId, t.ErrorCode, t.ErrorText, t.LastChangeBy, t.LastChangeUtc, t.LastComment, t.SlaSummary, t.HasKtcSla,
+                durationSeconds = (long)(((t.ClosedUtc ?? now) - (t.OpenedUtc ?? t.CreatedUtc)).TotalSeconds),
+                t.SlaDueUtc, sla = t.Sla.ToString(), minutesToBreach = t.IsOpen ? (int)(t.SlaDueUtc - now).TotalMinutes : (int?)null
+            }),
             counts = Enum.GetValues<TicketStatus>().ToDictionary(x => x.ToString(), x => all.Count(t => t.Status == x)),
-            sla = new { achieved = all.Count(t => t.Sla == SlaState.Achieved), breached = all.Count(t => t.Sla == SlaState.Breached), nearBreach = all.Count(t => t.Sla == SlaState.NearBreach), onTrack = all.Count(t => t.Sla == SlaState.OnTrack) },
-            breachSoon = all.Where(t => t.IsOpen && t.Sla == SlaState.NearBreach).OrderBy(t => t.SlaDueUtc).Take(20).Select(t => new { t.Id, t.AtmName, t.Client, minutes = Math.Max(0, (int)(t.SlaDueUtc - now).TotalMinutes) })
+            sla = new { achieved = all.Count(t => t.Sla == SlaState.Achieved), breached = all.Count(t => t.Sla == SlaState.Breached), nearBreach = all.Count(t => t.Sla == SlaState.NearBreach), onTrack = all.Count(t => t.Sla == SlaState.OnTrack), noKtcSla = all.Count(t => !t.HasKtcSla) },
+            breachSoon = all.Where(t => t.IsOpen && t.HasKtcSla && t.Sla == SlaState.NearBreach).OrderBy(t => t.SlaDueUtc).Take(20).Select(t => new { t.Id, t.AtmName, t.Client, minutes = Math.Max(0, (int)(t.SlaDueUtc - now).TotalMinutes) })
         });
     }
 
@@ -161,6 +174,15 @@ public class DataController : ControllerBase
     {
         var t = await _data.GetTicketAsync(id, ct);
         return t == null ? NotFound() : Ok(t);
+    }
+
+    /// <summary>Ticket Details popup (read-only): ticket, type, error, error code type, SLA, child tickets and comments.</summary>
+    [HttpGet("tickets/{id}/details")]
+    [Audit("TicketView", "Ticket details")]
+    public async Task<IActionResult> TicketDetails(string id, CancellationToken ct)
+    {
+        var d = await _data.GetTicketDetailsAsync(id, ct);
+        return d == null ? NotFound(new { error = $"KTC has no ticket {id}." }) : Ok(d);
     }
 
     // ---------- transactions ----------

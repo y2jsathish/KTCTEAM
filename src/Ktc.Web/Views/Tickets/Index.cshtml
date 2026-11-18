@@ -1,15 +1,37 @@
 @{ ViewData["Title"] = "Ticket Workbench"; }
-<div class="page-h"><h4>Ticket Workbench</h4><span class="sub">auto-refresh 60 s</span></div>
+<div class="page-h"><h4>Ticket Workbench</h4><span class="sub">KTC tickets · auto-refresh 60 s · double-click a ticket for details</span></div>
 <div id="breachBanner"></div>
-<div class="cardx mb-3"><form id="f" class="row g-2">
-  <div class="col-6 col-md-2"><input name="atmId" class="form-control form-control-sm" placeholder="ATM ID / name" value="@ViewBag.AtmId"/></div>
-  <div class="col-6 col-md-2"><input name="ticketId" class="form-control form-control-sm" placeholder="Ticket ID" value="@ViewBag.TicketId"/></div>
-  <div class="col-6 col-md-2"><input name="client" class="form-control form-control-sm" placeholder="Client"/></div>
-  <div class="col-6 col-md-2"><input name="from" type="date" class="form-control form-control-sm" title="From"/></div>
-  <div class="col-6 col-md-2"><input name="to" type="date" class="form-control form-control-sm" title="To"/></div>
+<div class="cardx mb-3"><form id="f" class="row g-2 align-items-end">
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fStatus">Ticket status filter</label><select name="status" id="fStatus" class="form-select form-select-sm"><option value="">All</option></select></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fDays">Days of closed tickets to show</label><input name="closedDays" id="fDays" type="number" min="0" max="365" class="form-control form-control-sm" value="@ViewBag.ClosedDays"/></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fAtm">ATM</label><input name="atmId" id="fAtm" class="form-control form-control-sm" placeholder="ATM ID / name" value="@ViewBag.AtmId"/></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fTicket">Ticket ID</label><input name="ticketId" id="fTicket" class="form-control form-control-sm" value="@ViewBag.TicketId"/></div>
+  <div class="col-6 col-md-2"><label class="form-label small mb-1" for="fClient">Bank</label><input name="client" id="fClient" class="form-control form-control-sm"/></div>
   <div class="col-6 col-md-2"><button class="btn btn-sm btn-primary w-100"><i class="bi bi-search"></i> Search</button></div>
 </form></div>
 <div class="kpis" id="statusTiles"></div>
-<div class="kpis" id="slaTiles"></div>
-<div class="cardx"><table id="tbl" class="table table-sm w-100"><thead><tr><th>Ticket</th><th>ATM</th><th>Client</th><th>Status</th><th>Severity</th><th>Created</th><th>Owner</th><th>SLA due</th><th>SLA</th><th>Description</th></tr></thead></table></div>
+<div class="cardx"><div class="table-responsive"><table id="tbl" class="table table-sm table-hover w-100 small text-nowrap"><thead><tr>
+  <th>Ticket ID</th><th>Ticket Type</th><th>Client Name</th><th>Created</th><th>Opened</th><th>Closed</th><th>Duration</th><th>Status</th><th>Error ID</th><th>Code</th>
+  <th>Error Text</th><th>Owner</th><th>Last Change By</th><th>Last Change Date</th><th>Last Comment</th><th>SLA Summary</th></tr></thead></table></div></div>
+
+<div class="modal fade" id="tkModal" tabindex="-1" aria-labelledby="tkTitle" aria-hidden="true"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="tkTitle">Ticket Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body">
+    <ul class="nav nav-tabs small" role="tablist">
+      <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tkInfo" type="button" role="tab">Ticket Information</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tkSla" type="button" role="tab">Service Level Agreement Information</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tkNotif" type="button" role="tab">Queued Notification</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tkKids" type="button" role="tab">Child Tickets</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tkAll" type="button" role="tab">All KTC fields</button></li>
+    </ul>
+    <div class="tab-content pt-2">
+      <div class="tab-pane fade show active" id="tkInfo" role="tabpanel"></div>
+      <div class="tab-pane fade" id="tkSla" role="tabpanel"></div>
+      <div class="tab-pane fade" id="tkNotif" role="tabpanel"></div>
+      <div class="tab-pane fade" id="tkKids" role="tabpanel"></div>
+      <div class="tab-pane fade" id="tkAll" role="tabpanel"></div>
+    </div>
+  </div>
+  <div class="modal-footer"><span class="small text-muted me-auto" id="tkSrc"></span><a class="btn btn-sm btn-outline-secondary" id="tkAtm" href="#"><i class="bi bi-hdd-rack"></i> Open ATM</a><button type="button" class="btn btn-sm btn-primary" data-bs-dismiss="modal">OK</button></div>
+</div></div></div>
 @section Scripts { <script src="~/js/pages/tickets.js" asp-append-version="true"></script> }
