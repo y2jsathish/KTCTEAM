@@ -31,9 +31,18 @@ public record DisputeDto
     public string Reason { get; init; } = "";
     public string CreatedBy { get; init; } = "";
     public string LastChangeBy { get; init; } = "";
+    /// <summary>KTC's dispute rule that raised it ("Dispute Rules" column of KTC's Windows client): its id and its name from GET DisputeRule.</summary>
+    public int? RuleId { get; init; }
+    public string Rule { get; init; } = "";
+    /// <summary>Text of the newest comment ("Last Comment" column), card numbers masked.</summary>
+    public string LastComment { get; init; } = "";
 }
 
-public record DisputeQuery(DateTime? From = null, DateTime? To = null, int? StateId = null, string? AtmId = null, decimal? MinAmount = null, decimal? MaxAmount = null,
+/// <summary>
+/// The Disputes list query. StateId is sent to KTC as statusfilter (0 or none = all states), Days as Numdays ("Number of days to show"),
+/// as KTC's Windows client does. A numeric AtmId that is a known KTC client reads that ATM's ClientDisputes instead of the group list.
+/// </summary>
+public record DisputeQuery(int? Days = null, int? StateId = null, string? AtmId = null, decimal? MinAmount = null, decimal? MaxAmount = null,
     string? DisputeId = null, string? Card = null);
 
 public record DisputeSearchResult(IReadOnlyList<DisputeDto> Rows, IReadOnlyList<DisputeStateDto> States, IReadOnlyList<string> Warnings, IReadOnlyList<string> Sources,

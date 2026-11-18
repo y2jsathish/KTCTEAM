@@ -34,7 +34,8 @@ public class DisputeWriteService : IDisputeWriteService
         var why = d == null ? "KTC has no such dispute." : d.IsClosed ? $"The dispute is already closed ({d.State})." : null;
         var stateWhy = why ?? (!_opt.AllowStateChange ? "Change state and Close are off (DisputeWrite:AllowStateChange): KTC's Windows client trace did not show these calls, so they are not confirmed."
             : states.Count == 0 ? "KTC returned no dispute states (GET DisputeState), so there is nothing to pick." : null);
-        return new DisputeWriteState(_opt.Enabled, d != null, _opt.AllowStateChange, stateWhy == null, why == null && _opt.AllowStateChange, why ?? stateWhy, states, _opt.MinReasonLength, _opt.MaxReasonLength);
+        return new DisputeWriteState(_opt.Enabled, d != null, _opt.AllowStateChange, stateWhy == null, why == null && _opt.AllowStateChange, why ?? stateWhy,
+            states.Where(s => s.Id != 0).ToList(), _opt.MinReasonLength, _opt.MaxReasonLength);
     }
 
     public async Task<DisputeWriteResult> AddCommentAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default)
@@ -81,18 +82,22 @@ public class DisputeWriteService : IDisputeWriteService
         return (c, true, c == (raw ?? "").Trim() ? "OK" : "OK (card numbers masked)");
     }
 
-    private List<ActionCheck> Common(string disputeId, DisputeDto? d, DisputeWriteRequest q, out string reason)
+    private List<ActionCheck> Common(string disputeId, DisputeDto? d, DisputeWriteRequest q, bool typed, out string reason)
     {
         var checks = new List<ActionCheck>
         {
             new("Dispute", d != null, d != null ? $"{d.Id} · {d.AtmName} · {d.State}" : $"KTC has no dispute {disputeId}."),
             new("Still open", d is { IsClosed: false }, d == null ? "—" : d.IsClosed ? $"The dispute is already closed ({d.State})." : "Open in KTC.")
         };
-        var typed = (q.ConfirmDisputeId ?? "").Trim();
-        checks.Add(new("Dispute number typed", d != null && typed == d.Id, d != null && typed == d.Id ? "OK" : "Type the dispute number to confirm."));
+        if (typed)
+        {
+            var t = (q.ConfirmDisputeId ?? "").Trim();
+            checks.Add(new("Dispute number typed", d != null && t == d.Id, d != null && t == d.Id ? "OK" : "Type the dispute number to confirm."));
+        }
+        // KTC's Change Dispute State dialog asks for a comment with the new state; the portal requires one.
         var (r, ok, detail) = CheckReason(q.Reason);
         reason = r;
-        checks.Add(new("Reason", ok, detail));
+        checks.Add(new("Comment", ok, detail));
         return checks;
     }
 
@@ -107,11 +112,12 @@ public class DisputeWriteService : IDisputeWriteService
     {
         var corr = Guid.NewGuid().ToString("N")[..12];
         var d = await _data.GetAsync(disputeId, q.AtmId, ct);
-        var checks = Common(disputeId, d, q, out var reason);
+        var checks = Common(disputeId, d, q, false, out var reason);
         var states = await _data.GetStatesAsync(ct);
-        var target = q.StateId is int sid ? states.FirstOrDefault(s => s.Id == sid) : null;
+        // State 0 is "All" in KTC's state list: it is the "all states" filter value, and KTC's Change Dispute State dialog does not offer it.
+        var target = q.StateId is int sid and not 0 ? states.FirstOrDefault(s => s.Id == sid) : null;
         checks.Add(new("New state", target != null && d?.StateId != target.Id,
-            target == null ? (states.Count == 0 ? "KTC returned no dispute states." : "Pick a state from KTC's list.")
+            target == null ? (states.Count == 0 ? "KTC returned no dispute states." : "Pick a new state from KTC's list.")
             : d?.StateId == target.Id ? $"The dispute is already in state {target.Id} ({target.Name})." : $"{target.Id} ({target.Name})"));
         StateChangeAllowed(checks);
         Enabled(checks);
@@ -143,7 +149,7 @@ public class DisputeWriteService : IDisputeWriteService
     {
         var corr = Guid.NewGuid().ToString("N")[..12];
         var d = await _data.GetAsync(disputeId, q.AtmId, ct);
-        var checks = Common(disputeId, d, q, out var reason);
+        var checks = Common(disputeId, d, q, true, out var reason);
         StateChangeAllowed(checks);
         Enabled(checks);
 
