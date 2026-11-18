@@ -231,12 +231,16 @@ public static partial class TicketRules
         return $"StatusByte {(sb.Length > 0 ? sb : "none")}{(ext.Length > 0 ? ", ExternalStatusByte " + ext : "")}, TimeClosed {(tc == null ? "none" : tc.Value.ToString("yyyy-MM-dd HH:mm:ss") + " UTC")}";
     }
 
-    /// <summary>POST api/v1/Comment body for a ticket comment (card numbers masked).</summary>
-    public static object CommentBody(string ticketId, string user, string comment, int table, int sendStatus, DateTime nowUtc)
+    /// <summary>
+    /// POST api/v1/Comment/User body for a ticket comment, exactly as KTC's Windows client sends it (trace of ticket 5992):
+    /// {"table":6,"rowID":5992,"kcComment":null,"strComment":"test","SendStatusParameter":19,"Confidential":false,"BusinessID":-1}.
+    /// table 6 = Ticket, SendStatusParameter = the ticket's ClientID, user taken from the token. Card numbers masked.
+    /// </summary>
+    public static object CommentBody(string ticketId, string comment, int table, long clientId)
     {
         var c = PanMasker.Mask(comment);
         var row = long.TryParse(ticketId, out var id) ? id : 0;
-        return new { table, rowID = row, kcComment = new { Timestamp = nowUtc, User = user, Comment = c, Confidential = false }, strComment = c, SendStatusParameter = sendStatus, Confidential = false, BusinessID = 0 };
+        return new { table, rowID = row, kcComment = (object?)null, strComment = c, SendStatusParameter = clientId, Confidential = false, BusinessID = -1 };
     }
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();

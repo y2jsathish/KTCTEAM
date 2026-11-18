@@ -82,8 +82,10 @@ public class TicketRulesTests
     [Fact]
     public void Comment_body_masks_card_numbers()
     {
-        var json = JsonSerializer.Serialize(TicketRules.CommentBody("543110", "alice", "card 4111111111111111 retained", 4, 2, DateTime.UtcNow));
-        Assert.DoesNotContain("4111111111111111", json); Assert.Contains("\"rowID\":543110", json); Assert.Contains("\"table\":4", json);
+        var json = JsonSerializer.Serialize(TicketRules.CommentBody("5992", "card 4111111111111111 retained", 6, 19));
+        Assert.DoesNotContain("4111111111111111", json);
+        // The shape KTC's Windows client sent for ticket 5992.
+        Assert.Equal("{\"table\":6,\"rowID\":5992,\"kcComment\":null,\"strComment\":\"card 411111******1111 retained\",\"SendStatusParameter\":19,\"Confidential\":false,\"BusinessID\":-1}", json);
     }
 
     private static readonly DateTime T0 = new(2026, 11, 18, 10, 0, 0, DateTimeKind.Utc);
@@ -143,4 +145,5 @@ public class TicketRulesTests
         Assert.StartsWith("1 comment, last: System 2026-11-18 10:27:47", TicketRules.CommentsText(t));
         Assert.Equal("no comments", TicketRules.CommentsText(J("{}")));
     }
+
 }
