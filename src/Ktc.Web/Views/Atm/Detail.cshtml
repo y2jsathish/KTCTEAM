@@ -10,6 +10,7 @@
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-app-counters" data-tab="app-counters" type="button" role="tab" aria-controls="tab-app-counters" aria-selected="false"><i class="bi bi-calculator"></i> Application Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-xfs-counters" data-tab="xfs-counters" type="button" role="tab" aria-controls="tab-xfs-counters" aria-selected="false"><i class="bi bi-gear-wide-connected"></i> XFS Counters <span id="xfsFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Counters at or over threshold"></span></button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-actions" data-tab="actions" type="button" role="tab" aria-controls="tab-actions" aria-selected="false"><i class="bi bi-lightning-charge"></i> Actions</button></li>
+  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-disputes" data-tab="disputes" type="button" role="tab" aria-controls="tab-disputes" aria-selected="false"><i class="bi bi-chat-square-text"></i> Disputes</button></li>
 </ul>
 <div class="tab-content">
 <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
@@ -67,6 +68,18 @@
   <div id="xfsPick" class="xfs-pick cardx py-2 mb-3" aria-label="Devices to show"></div>
   <div id="xfsKpis" class="kpis"></div>
   <div id="xfsCounters" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
+</div>
+<div class="tab-pane fade" id="tab-disputes" role="tabpanel">
+  <div class="counter-bar flex-wrap gap-2">
+    <label class="small text-muted" for="adState">Dispute states filter:</label><select class="form-select form-select-sm w-auto" id="adState"><option value="0">All</option></select>
+    <label class="small text-muted ms-2" for="adDays">Number of days to show:</label><input class="form-control form-control-sm" style="width:5.5rem" id="adDays" type="number" min="1" max="3650" value="14">
+    <span class="small text-muted ms-2" id="adMeta"></span>
+    <a class="btn btn-sm btn-outline-secondary ms-auto" id="adAll" href="/Disputes"><i class="bi bi-box-arrow-up-right"></i> All disputes</a>
+    <button class="btn btn-sm btn-outline-secondary" id="adRefresh"><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div id="adMsg"></div>
+  <div class="cardx"><div class="table-responsive"><table id="adTbl" class="table table-sm table-hover w-100 small text-nowrap"><thead><tr>
+    <th>Dispute Id</th><th>Transaction Id</th><th>Created At</th><th>Client</th><th>Status</th><th>Dispute Rules</th><th>Last Comment</th><th>Closed</th></tr></thead></table></div>
+    <div class="small text-muted mt-1">Double-click a dispute for its details. Card numbers are masked.</div></div>
 </div>
 <div class="tab-pane fade" id="tab-actions" role="tabpanel">
   <div class="counter-bar"><span class="small text-muted" id="actMeta"></span>
@@ -136,4 +149,4 @@
   </div>
   <div class="modal-footer"><button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-sm btn-danger" id="rbStart"><i class="bi bi-arrow-repeat"></i> Start guided reboot</button></div>
 </div></div></div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions-activity.js" asp-append-version="true"></script> }
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions-activity.js" asp-append-version="true"></script><script src="~/js/dispute-details.js" asp-append-version="true"></script><script src="~/js/pages/atm-disputes.js" asp-append-version="true"></script> }

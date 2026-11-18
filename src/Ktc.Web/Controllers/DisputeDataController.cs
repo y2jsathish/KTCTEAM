@@ -14,15 +14,16 @@ public class DisputeDataController : ControllerBase
     private readonly IKtcDisputeService _d;
     public DisputeDataController(IKtcDisputeService d) { _d = d; }
 
-    /// <param name="state">KTC dispute state id (from GET DisputeState).</param>
+    /// <param name="state">KTC dispute state id (from GET DisputeState), sent as statusfilter; 0 or none = all.</param>
+    /// <param name="days">"Number of days to show" (KTC's Numdays).</param>
     /// <param name="card">Last 4 digits of the card; only those are compared.</param>
     [HttpGet("")]
     [Audit("DisputeView", "Dispute search")]
-    public async Task<IActionResult> Search(DateTime? from, DateTime? to, int? state, string? atmId, decimal? minAmount, decimal? maxAmount, string? disputeId, string? card, CancellationToken ct)
+    public async Task<IActionResult> Search(int? days, int? state, string? atmId, decimal? minAmount, decimal? maxAmount, string? disputeId, string? card, CancellationToken ct)
     {
-        if (from > to) return BadRequest(new { error = "The start date is after the end date." });
+        if (days is < 1 or > 3650) return BadRequest(new { error = "Number of days to show must be 1 to 3650." });
         if (minAmount > maxAmount) return BadRequest(new { error = "The minimum amount is above the maximum." });
-        var r = await _d.SearchAsync(new DisputeQuery(from?.ToUniversalTime(), to?.ToUniversalTime(), state, atmId, minAmount, maxAmount, disputeId, card), ct);
+        var r = await _d.SearchAsync(new DisputeQuery(days, state, atmId, minAmount, maxAmount, disputeId, card), ct);
         var counts = r.Rows.GroupBy(x => x.State).Select(g => new { name = g.Key, stateId = g.First().StateId, count = g.Count() }).OrderByDescending(x => x.count).ToList();
         return Ok(new { data = r.Rows, states = r.States, counts, open = r.Rows.Count(x => !x.IsClosed), closed = r.Rows.Count(x => x.IsClosed),
             totalAmount = r.Rows.Where(x => x.Amount != null).GroupBy(x => x.Currency).Select(g => new { currency = g.Key, amount = g.Sum(x => x.Amount) }),

@@ -279,11 +279,14 @@ public class TicketWriteOptions
 }
 
 
-/// <summary>Disputes menu (KTC POST api/v1/DisputeManagement/Search), read-only.</summary>
+/// <summary>
+/// Disputes menu, read the way KTC's Windows client reads it: GET {group}/GroupDisputes or {client}/ClientDisputes ?statusfilter=&amp;Numdays=,
+/// where statusfilter is a dispute state id from GET DisputeState and 0 means all states.
+/// </summary>
 public class DisputeOptions
 {
     public const string Section = "Disputes";
-    /// <summary>Default date range of the list when no dates are given.</summary>
+    /// <summary>Default "Number of days to show" (KTC's Windows client shows 14).</summary>
     public int LookbackDays { get; set; } = 14;
     /// <summary>At most this many disputes are listed (newest first).</summary>
     public int MaxRows { get; set; } = 2000;
@@ -292,12 +295,6 @@ public class DisputeOptions
     /// default; the portal then shows "State 7" (the raw number) rather than guessing.
     /// </summary>
     public Dictionary<string, string> StateNames { get; set; } = new();
-    /// <summary>
-    /// KTC "statusfilter" values the list asks for (GET {groupid}/GroupDisputes?statusfilter=&amp;Numdays=, the call KTC's Windows client
-    /// makes). The client sends 0 by default and 1 for the second entry of its state box; what each means is not confirmed, so the
-    /// portal asks for both and merges the answers.
-    /// </summary>
-    public int[] StatusFilters { get; set; } = { 0, 1 };
     /// <summary>How far back a dispute is looked up when it is opened from a link or read back after a change.</summary>
     public int DetailLookupDays { get; set; } = 365;
 }
