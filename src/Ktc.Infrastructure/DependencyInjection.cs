@@ -21,6 +21,7 @@ public static class DependencyInjection
         s.Configure<NotificationOptions>(cfg.GetSection(NotificationOptions.Section));
         s.Configure<CashForecastOptions>(cfg.GetSection(CashForecastOptions.Section));
         s.Configure<KtcActionsOptions>(cfg.GetSection(KtcActionsOptions.Section));
+        s.Configure<TicketWriteOptions>(cfg.GetSection(TicketWriteOptions.Section));
         // One KtcOptions instance for the whole app. The HTTP pipeline (mock or live handler) is built from it at startup, so the
         // token provider, dashboard and jobs must read the very same values: before, they could disagree (pipeline live while
         // IOptions said UseMock=true), and the background jobs then sent the literal "mock-token" to the real KTC server.
@@ -47,6 +48,7 @@ public static class DependencyInjection
         s.AddScoped<IKtcDataService, KtcDataService>();
         s.AddScoped<IKtcActionService, Ktc.Infrastructure.KtcApi.KtcActionService>();
         s.AddScoped<IRebootService, Ktc.Infrastructure.KtcApi.RebootService>();
+        s.AddScoped<ITicketWriteService, Ktc.Infrastructure.KtcApi.TicketWriteService>();
         s.AddScoped<Ktc.Application.Logic.IRebootProbe, Ktc.Infrastructure.KtcApi.KtcRebootProbe>();
         s.AddScoped<IDashboardService, DashboardService>();
         s.AddScoped<ICashForecastService, CashForecastService>();

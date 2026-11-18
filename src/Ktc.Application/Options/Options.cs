@@ -248,3 +248,28 @@ public class RebootWorkflowOptions
     public bool AutoInService { get; set; } = true;
     public int TickSeconds { get; set; } = 5;
 }
+
+/// <summary>
+/// Writing to KTC tickets from the Ticket Details popup (add comment, close). OFF by default: the buttons show, every check runs,
+/// nothing is sent. KTC has no "close ticket" call: closing is GET Ticket/{id}, set StatusByte / TimeClosed / ClosureMode, then
+/// PUT Ticket/{id}; comments go through POST api/v1/Comment. The numbers below are KTC's and must be confirmed for your server.
+/// </summary>
+public class TicketWriteOptions
+{
+    public const string Section = "TicketWrite";
+    /// <summary>Master switch (env TicketWrite__Enabled=true).</summary>
+    public bool Enabled { get; set; }
+    /// <summary>POST api/v1/Comment "table" value for tickets (KTC's comment table enum; the API sample shows 4).</summary>
+    public int CommentTable { get; set; } = 4;
+    /// <summary>POST api/v1/Comment "SendStatusParameter" (the API sample shows 2).</summary>
+    public int SendStatusParameter { get; set; } = 2;
+    /// <summary>KTC StatusByte of a closed ticket. Empty = Close stays disabled (we do not guess it).</summary>
+    public int? ClosedStatusByte { get; set; }
+    /// <summary>KTC ClosureMode / ClosureModeByte for a manual close. Empty = left as KTC has it.</summary>
+    public int? ManualClosureMode { get; set; }
+    /// <summary>PUT Ticket/{id}?forceupdate= value.</summary>
+    public bool ForceUpdate { get; set; }
+    public int MinCommentLength { get; set; } = 10;
+    public int MaxCommentLength { get; set; } = 1000;
+}
+

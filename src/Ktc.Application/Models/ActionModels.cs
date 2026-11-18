@@ -52,3 +52,10 @@ public record AtmActionCatalog(string Route, DateTime ReadUtc, bool Demo, bool O
     /// <summary>KtcActions:SendEnabled. Off by default: the form can be filled and checked, but nothing is sent.</summary>
     public bool SendEnabled { get; init; }
 }
+
+/// <summary>Add a comment to, or close, a KTC ticket from the portal.</summary>
+public record TicketWriteRequest(string? Comment, string? ConfirmTicketId = null);
+/// <summary>What the Ticket Details popup may offer for this ticket.</summary>
+public record TicketWriteState(bool Enabled, bool CanComment, bool CanClose, string? CloseBlockedReason, int MinCommentLength, int MaxCommentLength);
+public record TicketWriteResult(bool Done, string Message, IReadOnlyList<ActionCheck> Checks, string CorrelationId);
+

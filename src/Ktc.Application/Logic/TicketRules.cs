@@ -121,5 +121,33 @@ public static partial class TicketRules
         return list;
     }
 
+    /// <summary>
+    /// The ticket as KTC returned it, changed to closed: StatusByte, TimeClosed, TimeUpdated and (when given) ClosureMode /
+    /// ClosureModeByte. Every other field is sent back unchanged, as KTC's PUT Ticket/{id} takes the whole record.
+    /// </summary>
+    public static System.Text.Json.Nodes.JsonObject CloseBody(JsonElement ticket, int closedStatusByte, int? closureMode, DateTime nowUtc)
+    {
+        var o = System.Text.Json.Nodes.JsonNode.Parse(ticket.GetRawText())!.AsObject();
+        void Set(string name, System.Text.Json.Nodes.JsonNode? v, bool onlyIfPresent = false)
+        {
+            var key = o.Select(p => p.Key).FirstOrDefault(k => k.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (key == null && onlyIfPresent) return;
+            o[key ?? name] = v;
+        }
+        var ts = nowUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+        Set("StatusByte", closedStatusByte);
+        Set("TimeClosed", ts); Set("TimeUpdated", ts, onlyIfPresent: true);
+        if (closureMode is int cm) { Set("ClosureMode", cm, onlyIfPresent: true); Set("ClosureModeByte", cm, onlyIfPresent: true); }
+        return o;
+    }
+
+    /// <summary>POST api/v1/Comment body for a ticket comment (card numbers masked).</summary>
+    public static object CommentBody(string ticketId, string user, string comment, int table, int sendStatus, DateTime nowUtc)
+    {
+        var c = PanMasker.Mask(comment);
+        var row = long.TryParse(ticketId, out var id) ? id : 0;
+        return new { table, rowID = row, kcComment = new { Timestamp = nowUtc, User = user, Comment = c, Confidential = false }, strComment = c, SendStatusParameter = sendStatus, Confidential = false, BusinessID = 0 };
+    }
+
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 }

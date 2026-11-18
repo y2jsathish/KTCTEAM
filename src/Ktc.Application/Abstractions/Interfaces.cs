@@ -173,6 +173,14 @@ public interface IExportService
     byte[] ToCsv(ReportData data);
 }
 
+/// <summary>Add comment / close on KTC tickets (behind TicketWrite:Enabled), audited.</summary>
+public interface ITicketWriteService
+{
+    Task<TicketWriteState> StateAsync(string ticketId, CancellationToken ct = default);
+    Task<TicketWriteResult> AddCommentAsync(string ticketId, TicketWriteRequest q, CancellationToken ct = default);
+    Task<TicketWriteResult> CloseAsync(string ticketId, TicketWriteRequest q, CancellationToken ct = default);
+}
+
 public interface IAuditService
 {
     Task LogAsync(string category, string action, string? target = null, string? details = null, bool success = true, string? userOverride = null);

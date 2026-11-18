@@ -112,7 +112,24 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)/SLA")).Success) { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t.SLADueTime == null ? Array.Empty<object>() : new object[] { new { level = 1, startTime = t.TimeCreated, expectedEndTime = t.SLADueTime, endTime = t.TimeClosed } }); }
         if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "GET") { var t = AllTickets(now).FirstOrDefault(x => x.ID == long.Parse(r.Groups[1].Value)); return t == null ? Resp(HttpStatusCode.NotFound, "null") : Ok(t); }
-        if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT") return Resp(HttpStatusCode.OK, "true");
+        if ((r = Rx(path, @"api/v1/Ticket/(\d+)")).Success && m == "PUT")
+        {
+            var tid = long.Parse(r.Groups[1].Value);
+            if (!AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.NotFound, "null");
+            using var d = JsonDocument.Parse(body);
+            if (d.RootElement.TryGetProperty("TimeClosed", out var tc) && tc.ValueKind == JsonValueKind.String && d.RootElement.TryGetProperty("StatusByte", out var sbe))
+                ClosedTickets[tid] = (sbe.GetInt32(), tc.GetDateTime().ToUniversalTime());
+            return Resp(HttpStatusCode.OK, "true");
+        }
+        if (Is(path, "api/v1/Comment") && m == "POST")
+        {
+            using var d = JsonDocument.Parse(body); var rt = d.RootElement;
+            var tid = rt.GetProperty("rowID").GetInt64(); var kc = rt.GetProperty("kcComment");
+            if (!AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.NotFound, "false");
+            var list = AddedComments.GetOrAdd(tid, _ => new());
+            lock (list) list.Add((now, kc.GetProperty("User").GetString() ?? "", kc.GetProperty("Comment").GetString() ?? ""));
+            return Resp(HttpStatusCode.OK, "true");
+        }
         if (Is(path, "api/v1/TransactionData/Search") && m == "POST") return Ok(Transactions(body, now));
         if ((r = Rx(path, @"api/v1/TransactionData/(\d+)")).Success) { var id = long.Parse(r.Groups[1].Value); return Ok(Transactions(null, now, id).FirstOrDefault()); }
         // Transaction details, as KTC's UI reads them when a transaction is opened.
@@ -344,7 +361,22 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         return x.Append("</Comments>").ToString();
     }
     private static readonly string[] Owners = { "a.rahman", "j.thomas", "m.khan", "s.nair", "l.fernandez" };
-    private static IEnumerable<MockTicket> Tickets(int i, DateTime now)
+    // Portal writes in demo mode: comments added and tickets closed (POST api/v1/Comment, PUT Ticket/{id}).
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, List<(DateTime T, string U, string C)>> AddedComments = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int Status, DateTime Closed)> ClosedTickets = new();
+    private static MockTicket Applied(MockTicket t)
+    {
+        if (ClosedTickets.TryGetValue(t.ID, out var c)) t = t with { StatusByte = c.Status, TimeClosed = c.Closed, TimeUpdated = c.Closed };
+        if (AddedComments.TryGetValue(t.ID, out var l))
+        {
+            List<(DateTime, string, string)> copy; lock (l) copy = l.ToList();
+            var extra = string.Concat(copy.Select(x => $"<Comment User=\"{System.Security.SecurityElement.Escape(x.Item2)}\" Timestamp=\"{x.Item1:yyyy-MM-ddTHH:mm:ssZ}\">{System.Security.SecurityElement.Escape(x.Item3)}</Comment>"));
+            t = t with { CommentsString = t.CommentsString.Replace("</Comments>", extra + "</Comments>"), LastChangeBy = copy[^1].Item2 };
+        }
+        return t;
+    }
+    private static IEnumerable<MockTicket> Tickets(int i, DateTime now) => TicketsRaw(i, now).Select(Applied);
+    private static IEnumerable<MockTicket> TicketsRaw(int i, DateTime now)
     {
         var b = Bucket(now);
         // one open ticket per open incident (L1/L2 always, others 60%)
