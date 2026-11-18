@@ -260,12 +260,15 @@ public class TicketWriteOptions
     /// <summary>Master switch (env TicketWrite__Enabled=true).</summary>
     public bool Enabled { get; set; }
     /// <summary>
-    /// How comments are written: "Ticket" (default) adds them to the ticket's own CommentsString in PUT Ticket/{id};
-    /// "CommentApi" uses POST api/v1/Comment with CommentTable (4 is KTC's Action table: "Action not found" for tickets).
+    /// How comments are written: "Ticket" (default) adds them to the ticket's own CommentsString in PUT Ticket/{id}, and falls
+    /// back to POST api/v1/Comment when the comment does not read back and CommentTable is set; "CommentApi" uses only POST api/v1/Comment.
     /// </summary>
     public string CommentVia { get; set; } = "Ticket";
-    /// <summary>POST api/v1/Comment "table" value, only for CommentVia = CommentApi. Must be KTC's value for tickets.</summary>
-    public int CommentTable { get; set; } = 4;
+    /// <summary>
+    /// POST api/v1/Comment "table" value for tickets (KTC's own number; 4 is the Action table: "Action not found"). Empty = the Comment
+    /// API is not used. We do not guess it, because a wrong table can put the comment on another kind of record with the same id.
+    /// </summary>
+    public int? CommentTable { get; set; }
     /// <summary>POST api/v1/Comment "SendStatusParameter" (the API sample shows 2).</summary>
     public int SendStatusParameter { get; set; } = 2;
     /// <summary>KTC StatusByte of a closed ticket. Empty = Close stays disabled (we do not guess it).</summary>
