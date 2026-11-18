@@ -141,9 +141,9 @@ public class KtcActionService : IKtcActionService
         else
         {
             var t = await _data.GetTicketAsync(ticketNo, ct);
-            if (t == null) Check("Ticket number", false, $"Ticket {ticketNo} was not found in KTC.");
+            if (t == null) Check("Ticket number", false, $"Ticket {ticketNo} was not found in KTC. Enter the KTC ticket number (digits, as in the Tickets list) for this ATM.{await OpenTicketsHintAsync(atm, ct)}");
             else if (atm != null && t.AtmId.Length > 0 && !t.AtmId.Equals(atm.Id, StringComparison.OrdinalIgnoreCase))
-                Check("Ticket number", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).");
+                Check("Ticket number", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).{await OpenTicketsHintAsync(atm, ct)}");
             else Check("Ticket number", true, $"Ticket {ticketNo} found in KTC{(t.AtmId.Length > 0 ? " for this ATM" : "")}.");
         }
         var reason = PanMasker.Mask((q.Reason ?? "").Trim());
@@ -153,6 +153,20 @@ public class KtcActionService : IKtcActionService
         return (atm, ticketNo, reason);
     }
 
+
+    /// <summary>" Open tickets for ADB05401: 5992, 6001." (or that it has none), to help when the typed ticket is wrong.</summary>
+    private async Task<string> OpenTicketsHintAsync(AtmDto? atm, CancellationToken ct)
+    {
+        if (atm == null) return "";
+        try
+        {
+            var open = (await _data.SearchTicketsAsync(new TicketQuery(AtmId: atm.Id, ClosedDays: 0), ct))
+                .Where(x => x.IsOpen && (x.AtmId.Length == 0 || x.AtmId.Equals(atm.Id, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(x => x.CreatedUtc).Select(x => x.Id).Take(5).ToList();
+            return open.Count == 0 ? $" {atm.Name} has no open ticket in KTC." : $" Open tickets for {atm.Name}: {string.Join(", ", open)}.";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { return ""; }
+    }
 
     public async Task<(bool Ok, string? ActionId, string? Error)> SendMappedAsync(string atmId, string commandKey, string comment, CancellationToken ct = default)
     {

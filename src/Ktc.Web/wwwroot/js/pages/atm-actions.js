@@ -123,8 +123,11 @@
   $id('actPlanned').innerHTML=planned(r);picker(r);
   document.dispatchEvent(new CustomEvent('ktc:actions-catalog',{detail:r}));
  }
+ // Suggest this ATM's open KTC tickets in the ticket boxes (the checks need a KTC ticket number for this ATM).
+ async function openTickets(){try{const r=await K.api(`/data/tickets?atmId=${encodeURIComponent(id)}&closedDays=0`);const dl=$id('atmOpenTickets');if(!dl)return;
+  dl.innerHTML=(r.data||[]).filter(t=>t.status!=='Closed'&&t.status!=='Resolved').slice(0,20).map(t=>`<option value="${K.esc(t.id)}">${K.esc(t.id)} · ${K.esc(t.ktcStatus||t.status)} · ${K.esc((t.errorText||t.description||'').slice(0,60))}</option>`).join('');}catch(e){}}
  async function load(refresh){
-  loaded=true;$id('actPlanned').innerHTML='<div class="col-12 text-muted small">Loading…</div>';
+  loaded=true;openTickets();$id('actPlanned').innerHTML='<div class="col-12 text-muted small">Loading…</div>';
   try{render(await K.api('/data/actions/command-types'+(refresh?'?refresh=true':'')));}
   catch(e){$id('actMsg').innerHTML=`<div class="alert alert-danger small">Command list unavailable: ${K.esc(e.message)}</div>`;$id('actPlanned').innerHTML='';}
  }
