@@ -50,7 +50,7 @@ public class DisputeDataController : ControllerBase
 
     // ---------- change state / close (DisputeWrite:Enabled) ----------
     [HttpGet("{id}/write")]
-    public async Task<IActionResult> WriteState(string id, string? atmId, [FromServices] IDisputeWriteService w, CancellationToken ct) => Ok(await w.StateAsync(id, atmId, ct));
+    public async Task<IActionResult> WriteState(string id, string? atmId, [FromServices] IDisputeWriteService w, CancellationToken ct) => Ok((await w.StateAsync(id, atmId, ct)) with { UserAllowed = User.IsInRole(Roles.Admin) || User.IsInRole(Roles.Operator) });
 
     [HttpPost("{id}/comment")]
     [Authorize(Policy = Policies.Operator)]

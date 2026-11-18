@@ -59,7 +59,11 @@ public record DisputeSetup(IReadOnlyList<DisputeStateDto> States, IReadOnlyList<
 
 /// <summary>Change a dispute's state, or close it, from the portal.</summary>
 public record DisputeWriteRequest(int? StateId, string? Reason, string? ConfirmDisputeId, string? AtmId = null);
-public record DisputeWriteState(bool Enabled, bool CanComment, bool StateChangeAllowed, bool CanChangeState, bool CanClose, string? BlockedReason, IReadOnlyList<DisputeStateDto> States, int MinReasonLength, int MaxReasonLength);
+public record DisputeWriteState(bool Enabled, bool CanComment, bool StateChangeAllowed, bool CanChangeState, bool CanClose, string? BlockedReason, IReadOnlyList<DisputeStateDto> States, int MinReasonLength, int MaxReasonLength)
+{
+    /// <summary>False when the signed-in portal user is not an Operator or Admin: the portal refuses writes from them.</summary>
+    public bool UserAllowed { get; init; } = true;
+}
 public record DisputeWriteResult(bool Done, string Message, IReadOnlyList<ActionCheck> Checks, string CorrelationId)
 {
     /// <summary>What KTC answered at each step and the state read back.</summary>

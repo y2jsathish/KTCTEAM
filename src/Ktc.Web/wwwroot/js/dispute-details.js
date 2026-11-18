@@ -88,16 +88,17 @@
  // ---------- Add Comment / Change Dispute State dialogs ----------
  function openDlg(what){
   const W=cur.w,x=cur.d&&cur.d.dispute;if(!x)return;
+  const role=W&&W.userAllowed===false?'<div class="alert alert-warning py-1 mb-2"><i class="bi bi-lock"></i> Your portal role is not Operator or Admin, so the portal will refuse this. Add your user name to Portal:OperatorUsers (or Portal:AdminUsers) in the portal settings and sign in again.</div>':'';
   const off=W&&!W.enabled?'<div class="alert alert-info py-1 mb-2"><i class="bi bi-info-circle"></i> Writing to KTC disputes is off (<code>DisputeWrite:Enabled</code>). OK runs the checks; nothing is sent.</div>':'';
   const lim=W?` <span class="text-muted">(${W.minReasonLength}–${W.maxReasonLength} characters; card numbers are masked before sending)</span>`:'';
   const ta=`<label class="form-label mb-1" for="dsDlgText">Enter a comment <span class="text-danger">*</span>${lim}</label><textarea class="form-control form-control-sm" id="dsDlgText" rows="5" maxlength="${W?W.maxReasonLength:500}"></textarea>`;
   let body;
   if(what==='state'){
    const opts=(W?W.states:[]).filter(s=>s.id!==x.stateId);
-   body=off+(W&&W.blockedReason?`<div class="text-muted mb-2"><i class="bi bi-lock"></i> ${K.esc(W.blockedReason)}</div>`:'')
+   body=role+off+(W&&W.blockedReason?`<div class="text-muted mb-2"><i class="bi bi-lock"></i> ${K.esc(W.blockedReason)}</div>`:'')
     +`<div class="row g-1 align-items-center mb-2"><div class="col-5">Old Record State:</div><div class="col-7 fw-semibold">${K.esc(x.state)}</div></div>
      <div class="row g-1 align-items-center mb-2"><label class="col-5" for="dsDlgState">New Record State:</label><div class="col-7"><select class="form-select form-select-sm" id="dsDlgState"><option value=""></option>${opts.map(s=>`<option value="${s.id}">${K.esc(s.name||'State '+s.id)}</option>`).join('')}</select></div></div>${ta}`;
-  }else body=off+ta;
+  }else body=role+off+ta;
   $id('dsDlgTitle').textContent=what==='state'?'Change Dispute State':'Add Comment';
   $id('dsDlgBody').innerHTML=body+'<div id="dsDlgRes" class="mt-2"></div>';
   $id('dsDlgOk').disabled=false;$id('dsDlgOk').onclick=()=>send(what);
@@ -106,15 +107,16 @@
  }
  function closeDlg(){$id('dsDlg').classList.add('d-none');$id('dsDlg').classList.remove('d-flex');}
 
- const resultBox=r=>`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message)} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
-  <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>
-  ${(r.ktcSteps||[]).length?`<details class="small mt-1"${r.done?'':' open'}><summary>What KTC answered</summary><ol class="mb-0 font-monospace" style="font-size:.75rem">${r.ktcSteps.map(s=>`<li>${K.esc(s)}</li>`).join('')}</ol></details>`:''}`;
+ const resultBox=r=>`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message||(r.done?'Done.':'KTC did not confirm the change.'))}${r.correlationId?` <span class="text-muted">· ref ${K.esc(r.correlationId)}</span>`:''}</div>
+  <ul class="list-unstyled small mb-0">${(r.checks||[]).map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>
+  ${(r.ktcSteps||[]).length?`<details class="small mt-1"${r.done?'':' open'}><summary>What KTC answered</summary><ol class="mb-0 font-monospace" style="font-size:.75rem">${(r.ktcSteps||[]).map(s=>`<li>${K.esc(s)}</li>`).join('')}</ol></details>`:''}`;
  async function send(what){
   const id=cur.id,text=$id('dsDlgText').value,st=$id('dsDlgState')?$id('dsDlgState').value:'';
   if(!text.trim()){$id('dsDlgRes').innerHTML='<div class="alert alert-warning py-1 small mb-0">Enter a comment.</div>';$id('dsDlgText').focus();return;}
   if(what==='state'&&!st){$id('dsDlgRes').innerHTML='<div class="alert alert-warning py-1 small mb-0">Pick the new record state.</div>';$id('dsDlgState').focus();return;}
   $id('dsDlgOk').disabled=true;
   try{const r=await K.api(`/data/disputes/${encodeURIComponent(id)}/${what==='state'?'state':'comment'}`,{json:{stateId:st?Number(st):null,reason:text,confirmDisputeId:null,atmId:cur.atmId||null}});
+   if(!r||typeof r!=='object'||!('done' in r))throw new Error('The portal sent no result for this change. Nothing is known to have been saved in KTC: reload the dispute and check its comments.');
    if(r.done){K.toast(r.message,'ok');closeDlg();await render();if($id('dsLastRes'))$id('dsLastRes').innerHTML=resultBox(r);if(cur.onChanged)cur.onChanged();}
    else{$id('dsDlgRes').innerHTML=resultBox(r);if((r.ktcSteps||[]).length&&cur.onChanged)cur.onChanged();}
   }catch(e){$id('dsDlgRes').innerHTML=`<div class="alert alert-danger py-1 small mb-0">${K.esc(e.message)}</div>`;}

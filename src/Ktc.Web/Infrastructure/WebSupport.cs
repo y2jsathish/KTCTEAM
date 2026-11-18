@@ -22,6 +22,21 @@ public static class CookieEvents
         { ctx.RejectPrincipal(); await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme); }
     }
 
+    /// <summary>
+    /// A signed-in user without the needed role (for example a Viewer posting a comment) gets 403 with a JSON error for /data calls.
+    /// Without this the cookie middleware redirected to the HTML "access denied" page, which the browser followed and read as a
+    /// successful but empty answer (the "Cannot read properties of undefined (reading 'map')" error in the dispute and ticket popups).
+    /// </summary>
+    public static async Task ApiAware403(RedirectContext<CookieAuthenticationOptions> ctx)
+    {
+        if (ctx.Request.Path.StartsWithSegments("/data"))
+        {
+            ctx.Response.StatusCode = 403;
+            await ctx.Response.WriteAsJsonAsync(new { error = "Your portal role does not allow this. Adding comments and changing KTC records needs the Operator or Admin role: add your user name to Portal:OperatorUsers (or Portal:AdminUsers) in the portal settings, then sign in again." });
+        }
+        else ctx.Response.Redirect(ctx.RedirectUri);
+    }
+
     public static Task ApiAware401(RedirectContext<CookieAuthenticationOptions> ctx)
     {
         if (ctx.Request.Path.StartsWithSegments("/data") || ctx.Request.Path.StartsWithSegments("/hubs")) ctx.Response.StatusCode = 401;

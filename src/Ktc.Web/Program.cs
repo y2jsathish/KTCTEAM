@@ -40,6 +40,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     o.LoginPath = "/Account/Login"; o.AccessDeniedPath = "/Account/Denied"; o.ExpireTimeSpan = TimeSpan.FromHours(8); o.SlidingExpiration = true;
     o.Events.OnValidatePrincipal = CookieEvents.ValidateAsync;
     o.Events.OnRedirectToLogin = CookieEvents.ApiAware401;
+    o.Events.OnRedirectToAccessDenied = CookieEvents.ApiAware403;
 });
 builder.Services.AddAuthorization(o =>
 {

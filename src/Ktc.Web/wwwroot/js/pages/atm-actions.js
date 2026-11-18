@@ -96,13 +96,13 @@
  function sendBtn(on,text){const b=$id('actSendBtn');b.disabled=!on;b.innerHTML=`<i class="bi bi-send"></i> ${K.esc(text)}`;}
  const body=()=>Object.assign({},pending,{confirmAtmId:$id('actTypeAtm').value.trim(),confirmCommandName:$id('actTypeCmd').value.trim(),acknowledgedRisk:$id('actAck').checked});
  function checksHtml(r){
-  return `<div class="alert ${r.sent?'alert-success':r.checks.every(c=>c.passed||c.name==='Sending enabled')?'alert-info':'alert-warning'} py-2 small mb-2">${K.esc(r.message)}${r.actionId?` <b>KTC action ${K.esc(r.actionId)}</b>`:''} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
-   <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>`;
+  return `<div class="alert ${r.sent?'alert-success':(r.checks||[]).every(c=>c.passed||c.name==='Sending enabled')?'alert-info':'alert-warning'} py-2 small mb-2">${K.esc(r.message)}${r.actionId?` <b>KTC action ${K.esc(r.actionId)}</b>`:''} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
+   <ul class="list-unstyled small mb-0">${(r.checks||[]).map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>`;
  }
  async function runChecks(){
   sendBtn(false,'Checking…');
   try{const r=await K.api('/data/actions/check',{json:body()});$id('actChecks').innerHTML=checksHtml(r);
-   const ok=r.checks.every(c=>c.passed||c.name==='Sending enabled');
+   const ok=(r.checks||[]).every(c=>c.passed||c.name==='Sending enabled');
    sendBtn(ok&&last.sendEnabled,!last.sendEnabled?'Sending is off':ok?'Send to ATM':'Fix the checks first');}
   catch(e){$id('actChecks').innerHTML=`<div class="alert alert-danger py-2 small">${K.esc(e.message)}</div>`;sendBtn(false,'Send to ATM');}
  }
