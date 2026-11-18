@@ -260,17 +260,12 @@ public class TicketWriteOptions
     /// <summary>Master switch (env TicketWrite__Enabled=true).</summary>
     public bool Enabled { get; set; }
     /// <summary>
-    /// How comments are written: "Ticket" (default) adds them to the ticket's own CommentsString in PUT Ticket/{id}, and falls
-    /// back to POST api/v1/Comment when the comment does not read back and CommentTable is set; "CommentApi" uses only POST api/v1/Comment.
+    /// How comments are written: "CommentApi" (default) uses POST api/v1/Comment/User, the call KTC's Windows client makes. "Ticket" puts
+    /// them in the ticket's CommentsString with PUT Ticket/{id}; the bank's server answers that with the comment but does not keep it.
     /// </summary>
-    public string CommentVia { get; set; } = "Ticket";
-    /// <summary>
-    /// POST api/v1/Comment "table" value for tickets (KTC's own number; 4 is the Action table: "Action not found"). Empty = the Comment
-    /// API is not used. We do not guess it, because a wrong table can put the comment on another kind of record with the same id.
-    /// </summary>
-    public int? CommentTable { get; set; }
-    /// <summary>POST api/v1/Comment "SendStatusParameter" (the API sample shows 2).</summary>
-    public int SendStatusParameter { get; set; } = 2;
+    public string CommentVia { get; set; } = "CommentApi";
+    /// <summary>POST api/v1/Comment/User "table" for tickets: 6, from KTC's client trace (4 is the Action table).</summary>
+    public int CommentTable { get; set; } = 6;
     /// <summary>KTC StatusByte of a closed ticket. Empty = Close stays disabled (we do not guess it).</summary>
     public int? ClosedStatusByte { get; set; }
     /// <summary>KTC ClosureMode / ClosureModeByte for a manual close. Empty = left as KTC has it.</summary>

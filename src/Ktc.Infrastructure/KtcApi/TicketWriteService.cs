@@ -67,28 +67,28 @@ public class TicketWriteService : ITicketWriteService
             var text = $"{comment} (via KTC Monitoring Portal, ref {corr})";
             var marker = "ref " + corr;
             bool seen = false; string? err = null; JsonElement? after = null;
-            if (!ViaCommentApi)
+            if (ViaCommentApi)
             {
-                (_, after, err) = await UpdateTicketAsync(t!.Id, o => TicketRules.WithComment(o, User, DateTime.UtcNow, text), steps, ct, marker);
-                seen = Has(after, marker);
-            }
-            // Comment API: the only way in CommentApi mode, and the fallback when the ticket update did not keep the comment.
-            if (!seen && (ViaCommentApi || _opt.CommentTable != null))
-            {
-                if (_opt.CommentTable == null) { err = "CommentVia is CommentApi but TicketWrite:CommentTable (KTC's table number for tickets) is not set. Nothing was sent."; steps.Add(err); }
+                // KTC's own comment call (what KTC's Windows client sends); the PUT Ticket route answers with the comment but does not keep it.
+                var before = await ReadAsync(Uri.EscapeDataString(t!.Id), ct);
+                if (before == null) err = "The ticket could not be read from KTC, so nothing was sent.";
                 else
                 {
-                    var r = await PostCommentAsync(t!.Id, text, ct);
-                    steps.Add($"POST api/v1/Comment (table {_opt.CommentTable}): " + (r ?? "accepted"));
+                    steps.Add("Comments before: " + TicketRules.CommentsText(before.Value));
+                    var r = await PostCommentAsync(t.Id, text, before.Value, steps, ct);
                     after = await ReadAsync(Uri.EscapeDataString(t.Id), ct);
                     if (after != null) steps.Add("Comments after: " + TicketRules.CommentsText(after.Value));
                     seen = Has(after, marker);
                     if (r != null) err = "KTC refused the comment: " + r;
                 }
             }
-            var closedNote = t!.IsOpen ? "" : $" The ticket is {t.KtcStatus} in KTC, and KTC may not keep changes to a closed ticket; please try an open ticket.";
+            else
+            {
+                (_, after, err) = await UpdateTicketAsync(t!.Id, o => TicketRules.WithComment(o, User, DateTime.UtcNow, text), steps, ct, marker);
+                seen = Has(after, marker);
+            }
             res = seen ? new(true, $"Comment added to ticket {t.Id}. KTC now shows {TicketRules.CommentsText(after!.Value)}.", checks, corr) { KtcSteps = steps }
-                : new(false, (err ?? $"KTC answered OK but the comment is not on ticket {t.Id} when read back, so it was not saved.") + closedNote, checks, corr) { KtcSteps = steps };
+                : new(false, (err ?? $"KTC answered OK but the comment is not on ticket {t.Id} when read back, so it was not saved."), checks, corr) { KtcSteps = steps };
         }
         Refresh();
         _log.LogInformation("Ticket comment {Ticket} by {User}: {Result} (ref {Ref}) {Steps}", ticketId, User, res.Done, corr, string.Join(" | ", res.KtcSteps));
@@ -121,8 +121,8 @@ public class TicketWriteService : ITicketWriteService
             string? cerr = null;
             if (ViaCommentApi)
             {
-                cerr = _opt.CommentTable == null ? "TicketWrite:CommentTable is not set." : await PostCommentAsync(t!.Id, text, ct);
-                steps.Add($"POST api/v1/Comment (table {_opt.CommentTable}): " + (cerr ?? "accepted"));
+                var before = await ReadAsync(Uri.EscapeDataString(t!.Id), ct);
+                cerr = before == null ? "the ticket could not be read from KTC." : await PostCommentAsync(t.Id, text, before.Value, steps, ct);
             }
             if (cerr != null) res = new(false, "Not closed: KTC refused the closing comment: " + cerr, checks, corr) { KtcSteps = steps };
             else
@@ -204,11 +204,17 @@ public class TicketWriteService : ITicketWriteService
         return (ok, after, ok ? null : $"KTC refused the update: {Answer(p)}");
     }
 
-    /// <summary>POST api/v1/Comment for the ticket (CommentVia = CommentApi). Null when KTC accepted it, else KTC's error.</summary>
-    private async Task<string?> PostCommentAsync(string ticketId, string text, CancellationToken ct)
+    /// <summary>
+    /// POST api/v1/Comment/User exactly as KTC's Windows client sends it (table 6 = Ticket, SendStatusParameter = the ticket's ClientID,
+    /// BusinessID -1, the user from the token). Null when KTC accepted it (it answers true), else KTC's error.
+    /// </summary>
+    private async Task<string?> PostCommentAsync(string ticketId, string text, JsonElement ticket, List<string> steps, CancellationToken ct)
     {
-        var body = TicketRules.CommentBody(ticketId, User, text, _opt.CommentTable!.Value, _opt.SendStatusParameter, DateTime.UtcNow);
-        var r = await _api.SendAsync(HttpMethod.Post, "api/v1/Comment", body, new KtcCallOptions { Idempotent = false }, ct);
-        return r.Success && !(r.Json is { ValueKind: JsonValueKind.False }) ? null : Answer(r);
+        var clientId = KtcJson.Int(ticket, 0, "ClientID", "ClientId");
+        var body = TicketRules.CommentBody(ticketId, text, _opt.CommentTable, clientId);
+        var r = await _api.SendAsync(HttpMethod.Post, "api/v1/Comment/User", body, new KtcCallOptions { Idempotent = false }, ct);
+        var err = r.Success && !(r.Json is { ValueKind: JsonValueKind.False }) ? null : Answer(r);
+        steps.Add($"POST api/v1/Comment/User (table {_opt.CommentTable}, rowID {ticketId}, SendStatusParameter {clientId}): HTTP {r.StatusCode} {Answer(r)}");
+        return err;
     }
 }

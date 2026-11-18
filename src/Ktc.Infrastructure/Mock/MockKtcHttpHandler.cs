@@ -128,17 +128,23 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
             if (cur.TimeClosed != null) return Ok(cur);
             if (d.RootElement.TryGetProperty("TimeClosed", out var tc) && tc.ValueKind == JsonValueKind.String && d.RootElement.TryGetProperty("StatusByte", out var sbe))
                 ClosedTickets[tid] = (sbe.GetInt32(), tc.GetDateTime().ToUniversalTime());
-            if (d.RootElement.TryGetProperty("CommentsString", out var cs) && cs.ValueKind == JsonValueKind.String) CommentsOverride[tid] = cs.GetString() ?? "";
+            // Like the bank's server: the CommentsString sent in a PUT is not kept (comments go through POST api/v1/Comment).
             return Ok(AllTickets(now).First(x => x.ID == tid));
         }
-        if (Is(path, "api/v1/Comment") && m == "POST")
+        if ((Is(path, "api/v1/Comment") || Is(path, "api/v1/Comment/User")) && m == "POST")
         {
             using var d = JsonDocument.Parse(body); var rt = d.RootElement;
-            if (rt.TryGetProperty("table", out var tb) && tb.GetInt32() == 4) return Resp(HttpStatusCode.InternalServerError, "{\"Message\":\"Exception: Action not found\"}");
-            var tid = rt.GetProperty("rowID").GetInt64(); var kc = rt.GetProperty("kcComment");
-            if (!AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.NotFound, "false");
+            // Like KTC: each table number is a kind of record, and an unknown record answers "<Table> not found" (table 4 = Action).
+            var tableNo = rt.TryGetProperty("table", out var tb) ? tb.GetInt32() : -1;
+            var tid = rt.GetProperty("rowID").GetInt64(); var kc = rt.TryGetProperty("kcComment", out var kce) ? kce : default;
+            var tableName = tableNo switch { 0 => "Client", 1 => "Business", 2 => "Error", 3 => "HistoricalError", 4 => "Action", 5 => "ActionRequest", 6 => "Ticket", 7 => "Incident", _ => null };
+            if (tableName == null) return Resp(HttpStatusCode.InternalServerError, "{\"Message\":\"Exception: Unknown table\"}");
+            if (tableNo != 6 || !AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.InternalServerError, $"{{\"Message\":\"Exception: {tableName} not found\"}}");
             var list = AddedComments.GetOrAdd(tid, _ => new());
-            lock (list) list.Add((now, kc.GetProperty("User").GetString() ?? "", kc.GetProperty("Comment").GetString() ?? ""));
+            // Comment/User takes the user from the token, like KTC (kcComment is null there).
+            var who = kc.ValueKind == JsonValueKind.Object ? kc.GetProperty("User").GetString() ?? "" : "demo";
+            var txt = rt.TryGetProperty("strComment", out var sc) && sc.ValueKind == JsonValueKind.String ? sc.GetString() ?? "" : kc.GetProperty("Comment").GetString() ?? "";
+            lock (list) list.Add((now, who, txt));
             return Resp(HttpStatusCode.OK, "true");
         }
         if (Is(path, "api/v1/TransactionData/Search") && m == "POST") return Ok(Transactions(body, now));
@@ -375,10 +381,8 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     // Portal writes in demo mode: comments added and tickets closed (POST api/v1/Comment, PUT Ticket/{id}).
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, List<(DateTime T, string U, string C)>> AddedComments = new();
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (int Status, DateTime Closed)> ClosedTickets = new();
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> CommentsOverride = new();
     private static MockTicket Applied(MockTicket t)
     {
-        if (CommentsOverride.TryGetValue(t.ID, out var cs)) t = t with { CommentsString = cs };
         if (ClosedTickets.TryGetValue(t.ID, out var c)) t = t with { StatusByte = c.Status, TimeClosed = c.Closed, TimeUpdated = c.Closed };
         if (AddedComments.TryGetValue(t.ID, out var l))
         {
