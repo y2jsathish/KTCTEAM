@@ -46,7 +46,8 @@ public static partial class DisputeRules
             if (e.ValueKind != JsonValueKind.Object) continue;
             var id = KtcJson.Int(e, int.MinValue, "ID", "Id", "DisputeStateID", "DisputeStateId", "StateID", "StateId", "StatusID");
             if (id == int.MinValue && !int.TryParse(k, out id)) continue;
-            var name = CommandTypeRules.Sanitize(KtcJson.Str(e, "Name", "StateName", "DisplayName", "Description", "Text", "Value"));
+            var name = CommandTypeRules.Sanitize(KtcJson.Str(e, "Name", "StateName", "DisputeStateName", "DisplayName", "Description", "Text", "Value"));
+            if (name.Length == 0) name = CommandTypeRules.Sanitize(FirstText(e));
             bool? fin = KtcJson.TryProp(e, out _, "IsFinal", "Final", "IsClosed", "Closed", "IsEndState", "EndState", "IsTerminal", "ClosesDispute")
                 ? KtcJson.Bool(e, false, "IsFinal", "Final", "IsClosed", "Closed", "IsEndState", "EndState", "IsTerminal", "ClosesDispute") : null;
             list.Add(new(id, name, fin));
@@ -64,10 +65,15 @@ public static partial class DisputeRules
             if (e.ValueKind != JsonValueKind.Object) continue;
             var id = KtcJson.Int(e, int.MinValue, "ID", "Id", "DisputeRuleID", "DisputeRuleId", "RuleID", "RuleId");
             if (id == int.MinValue && !int.TryParse(k, out id)) continue;
-            map.TryAdd(id, CommandTypeRules.Sanitize(KtcJson.Str(e, "Name", "RuleName", "DisputeRuleName", "Description", "Code")));
+            var rn = KtcJson.Str(e, "Name", "RuleName", "DisputeRuleName", "Description", "Code");
+            map.TryAdd(id, CommandTypeRules.Sanitize(rn.Length > 0 ? rn : FirstText(e)));
         }
         return map;
     }
+
+    /// <summary>The first non-numeric text property (a name, when KTC's name field is called something else).</summary>
+    private static string FirstText(JsonElement e) =>
+        e.EnumerateObject().Select(p => p.Value).FirstOrDefault(v => v.ValueKind == JsonValueKind.String && (v.GetString() ?? "").Trim().Length > 0 && !long.TryParse(v.GetString(), out _) && AnyDateValue(v) == null) is { ValueKind: JsonValueKind.String } t ? t.GetString()! : "";
 
     /// <summary>The state name KTC gives for a number; then the configured name; else "State 7" (we do not guess names).</summary>
     public static string StateName(int? id, IReadOnlyList<DisputeStateDto> states, IReadOnlyDictionary<string, string>? names = null)
@@ -102,33 +108,46 @@ public static partial class DisputeRules
         var stateText = CommandTypeRules.Sanitize(KtcJson.Str(e, StateNameF));
         if (stateText.Length == 0 && KtcJson.TryProp(e, out var st, "State", "Status") && st.ValueKind == JsonValueKind.String && !int.TryParse(st.GetString(), out _)) stateText = st.GetString() ?? "";
         if (stateText.Length == 0 && KtcJson.TryProp(e, out var so, "State", "DisputeState") && so.ValueKind == JsonValueKind.Object) stateText = KtcJson.Str(so, "Name", "StateName");
+        var leaves = Leaves(e);
+        if (stateId == null && stateText.Length == 0)
+        {
+            if (Find(leaves, StateRx, IsNum) is { } sl) stateId = int.TryParse(Text(sl.Value), out var x) ? x : null;
+            else if ((Find(leaves, StateTextRx, IsText) ?? Find(leaves, StateRx, IsText)) is { } stl) stateText = CommandTypeRules.Sanitize(Text(stl.Value));
+        }
         var state = stateText.Length > 0 ? stateText : StateName(stateId, states, names);
         if (state.Length == 0) state = "Unknown";
 
         var clientId = KtcJson.NormId(S("ClientID", "ClientId"));
+        if (clientId.Length == 0 && Find(leaves, ClientIdRx, IsNum) is { } cl) clientId = KtcJson.NormId(Text(cl.Value));
+        var clientName = CommandTypeRules.Sanitize(S("ClientName", "NodeName", "AtmName"));
+        if (clientName.Length == 0 && Find(leaves, ClientNameRx, IsText) is { } cnl) clientName = CommandTypeRules.Sanitize(Text(cnl.Value));
+        DateTime? FD(string[] exact, Regex rx) => KtcJson.Date(e, exact) ?? (Find(leaves, rx, IsDate) is { } dl ? AnyDateValue(dl.Value) : null);
         var a = clientId.Length > 0 ? atm(clientId) : null;
-        var closedUtc = KtcJson.Date(e, ClosedF);
+        var closedUtc = FD(ClosedF, ClosedRx);
         var final = stateId is int sid ? states.FirstOrDefault(x => x.Id == sid)?.IsFinal : null;
         var closed = closedUtc != null || (KtcJson.TryProp(e, out var cb, "IsClosed", "Closed") && cb.ValueKind == JsonValueKind.True) || final == true;
 
-        var cust = MapFields(e, CustomerF);
+        var cust = CustomerFields(e);
         string FromCustomer(params string[] keys) => cust.FirstOrDefault(f => keys.Any(k => f.Name.Equals(k, StringComparison.OrdinalIgnoreCase)))?.Value ?? "";
 
-        int? ruleId = KtcJson.Int(e, int.MinValue, "DisputeRuleID", "DisputeRuleId", "RuleID", "RuleId") is var ri && ri != int.MinValue ? ri : null;
+        int? ruleId = KtcJson.Int(e, int.MinValue, "DisputeRuleID", "DisputeRuleId", "RuleID", "RuleId") is var ri && ri != int.MinValue ? ri
+            : Find(leaves, RuleIdRx, IsNum) is { } rl && int.TryParse(Text(rl.Value), out var rli) ? rli : null;
         var rule = CommandTypeRules.Sanitize(KtcJson.Str(e, "DisputeRuleName", "RuleName", "DisputeRules"));
         if (rule.Length == 0 && KtcJson.TryProp(e, out var ro, "DisputeRule", "Rule"))
             rule = ro.ValueKind == JsonValueKind.Object ? CommandTypeRules.Sanitize(KtcJson.Str(ro, "Name", "RuleName")) : ro.ValueKind == JsonValueKind.String ? CommandTypeRules.Sanitize(ro.GetString()) : "";
+        if (rule.Length == 0 && Find(leaves, RuleTextRx, IsText) is { } rtl) rule = CommandTypeRules.Sanitize(Text(rtl.Value));
+        if (rule.Length == 0 && ruleId == null && Find(leaves, RuleTextRx, IsNum) is { } rnl && int.TryParse(Text(rnl.Value), out var rni)) ruleId = rni;
         if (rule.Length == 0 && ruleId is int rid) rule = rules != null && rules.TryGetValue(rid, out var rn) && rn.Length > 0 ? rn : $"Rule {rid}";
         var comments = TicketRules.Comments(e);
 
         return new DisputeDto
         {
             RuleId = ruleId, Rule = rule, LastComment = comments.Count > 0 ? comments[^1].Text : PanMasker.Mask(CommandTypeRules.Sanitize(KtcJson.Str(e, "LastComment", "LastCommentText"))),
-            Id = id, AtmId = clientId, AtmName = a?.Name ?? CommandTypeRules.Sanitize(S("ClientName", "NodeName", "AtmName")), Client = a?.Client ?? "",
+            Id = id, AtmId = clientId, AtmName = a?.Name is { Length: > 0 } an ? an : clientName, Client = a?.Client ?? "",
             StateId = stateId, State = state, IsClosed = closed,
-            CreatedUtc = KtcJson.Date(e, CreatedF), UpdatedUtc = KtcJson.Date(e, UpdatedF), ClosedUtc = closedUtc, TransactionUtc = D(TxTimeF),
+            CreatedUtc = FD(CreatedF, CreatedRx) ?? KtcJson.AnyDate(e), UpdatedUtc = FD(UpdatedF, UpdatedRx), ClosedUtc = closedUtc, TransactionUtc = D(TxTimeF),
             Amount = Amount(e) ?? (tx is { } t2 ? Amount(t2) : null) ?? ExtraAmount(e), Currency = CommandTypeRules.Sanitize(S("Currency", "CurrencyCode", "CurrencyName")),
-            Card = MaskCard(S(CardF)), TransactionId = TxId(S(TxIdF)), TransactionType = CommandTypeRules.Sanitize(S("TransactionType", "TransactionTypeName", "TxnType", "TransactionTypeID")),
+            Card = MaskCard(S(CardF)), TransactionId = TxId(S(TxIdF) is { Length: > 0 } txv ? txv : Find(leaves, TxIdRx, v => IsNum(v) || IsText(v)) is { } tl ? Text(tl.Value) : ""), TransactionType = CommandTypeRules.Sanitize(S("TransactionType", "TransactionTypeName", "TxnType", "TransactionTypeID")),
             Customer = CommandTypeRules.Sanitize(KtcJson.Str(e, "CustomerName") is { Length: > 0 } cn ? cn : FromCustomer("Name", "CustomerName", "FullName")),
             Reason = CommandTypeRules.Sanitize(KtcJson.Str(e, "Reason", "DisputeReason", "Description", "Details", "Comment")),
             CreatedBy = CommandTypeRules.Sanitize(KtcJson.Str(e, "CreatedBy", "CreatedByUser", "UserName", "User", "Operator", "RaisedBy")),
@@ -153,7 +172,7 @@ public static partial class DisputeRules
     /// </summary>
     private static decimal? ExtraAmount(JsonElement e)
     {
-        var x = MapFields(e, ExtraDataF);
+        var x = ExtraFields(e);
         var v = x.FirstOrDefault(f => f.Name.Equals("Amount", StringComparison.OrdinalIgnoreCase))?.Value
              ?? x.FirstOrDefault(f => f.Name.Equals("EffectiveAmount", StringComparison.OrdinalIgnoreCase))?.Value;
         return decimal.TryParse(v, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
@@ -166,6 +185,99 @@ public static partial class DisputeRules
         if (v.ValueKind == JsonValueKind.String && v.GetString() is { } s && s.TrimStart().StartsWith('{'))
             try { return JsonDocument.Parse(s).RootElement.Clone(); } catch (JsonException) { }
         return null;
+    }
+
+
+    // ---------------- tolerant field finding ----------------
+    // KTC's real GroupDisputes records did not use the names above for several fields (bank screenshot: transaction id, created
+    // time, client, state and rule came out empty). When no exact name matches, fields are found by the shape of their name at any
+    // depth (up to 3 levels), e.g. "TransactionDataID", "ATMID", "DateAdded", "DisputeStatus", "RuleID", "Transaction.ID".
+
+    private static readonly Regex Containers = new(@"customer|extra|comment|history|smsqueue|notification", RegexOptions.IgnoreCase);
+    public record Leaf(string Path, string Name, JsonElement Value);
+
+    /// <summary>Every primitive value of the record with its path ("Transaction.ID"), skipping customer info, extra data and comments.</summary>
+    public static List<Leaf> Leaves(JsonElement e)
+    {
+        var list = new List<Leaf>();
+        void Walk(JsonElement o, string path, string parent, int depth)
+        {
+            foreach (var p in o.EnumerateObject())
+            {
+                var full = path.Length == 0 ? p.Name : path + "." + p.Name;
+                if (p.Value.ValueKind == JsonValueKind.Object) { if (depth < 3 && !Containers.IsMatch(p.Name)) Walk(p.Value, full, p.Name, depth + 1); }
+                else if (p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } js && js.TrimStart().StartsWith('{') && depth < 3 && !Containers.IsMatch(p.Name))
+                {
+                    try { using var d = JsonDocument.Parse(js); if (d.RootElement.ValueKind == JsonValueKind.Object) Walk(d.RootElement.Clone(), full, p.Name, depth + 1); } catch (JsonException) { }
+                }
+                else if (p.Value.ValueKind is not (JsonValueKind.Array or JsonValueKind.Null or JsonValueKind.Undefined))
+                    // A nested object's plain "ID"/"Name" is named after its parent: Transaction.ID -> "TransactionID".
+                    list.Add(new(full, depth > 0 && Regex.IsMatch(p.Name, @"^(id|name|code|number|no)$", RegexOptions.IgnoreCase) ? parent + p.Name : p.Name, p.Value));
+            }
+        }
+        if (e.ValueKind == JsonValueKind.Object) Walk(e, "", "", 0);
+        return list;
+    }
+
+    private static readonly Regex TxIdRx = new(@"^(dispute_?)?(trans(action)?|txn|tran|trx)_?(data_?)?(id|no|num|number|uuid|ref)$", RegexOptions.IgnoreCase);
+    private static readonly Regex ClientIdRx = new(@"^(client|atm|terminal|node|device|machine)_?(id|no|num)$", RegexOptions.IgnoreCase);
+    private static readonly Regex ClientNameRx = new(@"^(client|atm|terminal|node|device|machine)_?(name|code|label|desc(ription)?)?$", RegexOptions.IgnoreCase);
+    private static readonly Regex CreatedRx = new(@"^((date|time)_?(created|added|inserted|raised|opened|logged|registered|of_?creation)|(created|added|inserted|raised|opened|logged|registered|creation)_?(date|time|on|at|stamp|datetime|timestamp)?)$", RegexOptions.IgnoreCase);
+    private static readonly Regex UpdatedRx = new(@"^((date|time)_?(updated|modified|changed|edited)|(last_?)?(updated|modified|changed|edited|update|modification|change)_?(date|time|on|at|stamp|datetime|timestamp)?)$", RegexOptions.IgnoreCase);
+    private static readonly Regex ClosedRx = new(@"^((date|time)_?closed|closed?_?(date|time|on|at|stamp|datetime|timestamp))$", RegexOptions.IgnoreCase);
+    private static readonly Regex StateRx = new(@"^(current_?|dispute_?|record_?)?(state|status)(_?(id|no|code|num|value))?$", RegexOptions.IgnoreCase);
+    private static readonly Regex StateTextRx = new(@"^(current_?|dispute_?|record_?)?(state|status)_?(name|text|desc(ription)?|label)$", RegexOptions.IgnoreCase);
+    private static readonly Regex RuleIdRx = new(@"^(dispute_?)?(management_?)?rules?_?(id|no|num)$", RegexOptions.IgnoreCase);
+    private static readonly Regex RuleTextRx = new(@"^(dispute_?)?(management_?)?rules?(_?(name|text|desc(ription)?|code|label))?$", RegexOptions.IgnoreCase);
+
+    private static Leaf? Find(List<Leaf> l, Regex rx, Func<JsonElement, bool>? ok = null) => l.FirstOrDefault(x => rx.IsMatch(x.Name) && (ok == null || ok(x.Value)));
+    private static bool IsNum(JsonElement v) => v.ValueKind == JsonValueKind.Number || (v.ValueKind == JsonValueKind.String && long.TryParse(v.GetString(), out _));
+    private static bool IsText(JsonElement v) => v.ValueKind == JsonValueKind.String && (v.GetString() ?? "").Trim().Length > 0 && !long.TryParse(v.GetString(), out _);
+    private static string Text(JsonElement v) => v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText();
+
+    /// <summary>A date in any form KTC uses: ISO text, "/Date(1731...)/", or epoch milliseconds; .NET / SQL "not set" dates give null.</summary>
+    public static DateTime? AnyDateValue(JsonElement v)
+    {
+        if (v.ValueKind == JsonValueKind.String)
+        {
+            var s = v.GetString() ?? "";
+            var m = Regex.Match(s, @"^/Date\((-?\d+)([+-]\d{4})?\)/$");
+            if (m.Success) { var d0 = DateTimeOffset.FromUnixTimeMilliseconds(long.Parse(m.Groups[1].Value)).UtcDateTime; return d0.Year <= 1901 ? null : d0; }
+            if (s.Length >= 8 && DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var d)) return d.Year <= 1901 ? null : d;
+        }
+        return null;
+    }
+    private static bool IsDate(JsonElement v) => AnyDateValue(v) != null;
+
+    /// <summary>The record's customer info map: the known names, else any property named like "customer…".</summary>
+    public static List<KtcField> CustomerFields(JsonElement e) => MapLike(e, CustomerF, @"customer");
+    /// <summary>The record's extra data map (Amount, EffectiveAmount, TSN): the known names, else any property named like "…extra…".</summary>
+    public static List<KtcField> ExtraFields(JsonElement e) => MapLike(e, ExtraDataF, @"extra");
+
+    private static List<KtcField> MapLike(JsonElement e, string[] names, string like)
+    {
+        var f = MapFields(e, names);
+        if (f.Count > 0 || e.ValueKind != JsonValueKind.Object) return f;
+        foreach (var p in e.EnumerateObject())
+            if (Regex.IsMatch(p.Name, like, RegexOptions.IgnoreCase) && p.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array or JsonValueKind.String)
+            {
+                f = MapFields(e, new[] { p.Name });
+                if (f.Count > 0) return f;
+            }
+        return f;
+    }
+
+    /// <summary>List columns that came out empty for this record (for the "field names not recognised" warning).</summary>
+    public static List<string> Missing(DisputeDto d)
+    {
+        var m = new List<string>();
+        if (d.TransactionId.Length == 0) m.Add("Transaction Id");
+        if (d.CreatedUtc == null) m.Add("Created At");
+        if (d.AtmId.Length == 0 && d.AtmName.Length == 0) m.Add("Client");
+        if (d.StateId == null && d.State is "" or "Unknown") m.Add("Status");
+        if (d.Rule.Length == 0) m.Add("Dispute Rules");
+        return m;
     }
 
     // ---------------- masking ----------------

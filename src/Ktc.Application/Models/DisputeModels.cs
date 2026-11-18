@@ -65,3 +65,6 @@ public record DisputeWriteResult(bool Done, string Message, IReadOnlyList<Action
     /// <summary>What KTC answered at each step and the state read back.</summary>
     public IReadOnlyList<string> KtcSteps { get; init; } = Array.Empty<string>();
 }
+
+/// <summary>KTC's raw dispute records (card data masked) and every field path with a sample value, to see KTC's real field names.</summary>
+public record DisputeRawSample(string Source, int Count, IReadOnlyList<KtcField> Fields, IReadOnlyList<string> Records, IReadOnlyList<string> Warnings);
