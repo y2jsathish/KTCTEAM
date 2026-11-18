@@ -12,8 +12,9 @@ using Microsoft.Extensions.Options;
 namespace Ktc.Infrastructure.KtcApi;
 
 /// <summary>
-/// Disputes menu, read-only. List: POST api/v1/DisputeManagement/Search once per KTC business (like Ticket/Search), with every state id
-/// from GET DisputeState. Details: GET Dispute/{id} and the dispute's entries in GET SMSQueue. Set-up: GET DisputeState and DisputeRule.
+/// Disputes menu, read-only, using the calls KTC's Windows client makes (bank trace): list GET {group}/GroupDisputes, one ATM's
+/// GET {client}/ClientDisputes, states GET DisputeState, rules GET DisputeRule, templates GET DisputeMessageTemplate, and the
+/// dispute's queued customer messages POST SMSQueue/Disputes [id]. GET Dispute/{id} is only a fallback (not seen in the trace).
 /// ATM names come from GET Client. No dispute write call is made here; see <see cref="DisputeWriteService"/>.
 /// </summary>
 public class KtcDisputeService : IKtcDisputeService
@@ -71,13 +72,6 @@ public class KtcDisputeService : IKtcDisputeService
             return map;
         }, m => m.Count > 0);
 
-    private Task<List<int>> BusinessIdsAsync(List<string> w, CancellationToken ct) =>
-        Cached("business-ids", TimeSpan.FromMinutes(10), async () =>
-        {
-            var json = await Fetch("api/v1/Business?includeDefault=false", w, ct: ct);
-            return KtcJson.Items(json).Select(e => KtcJson.Int(e, -1, "ID", "Id", "BusinessID")).Where(i => i >= 0).Distinct().Take(Math.Max(1, _ktc.MaxBusinessesPerSearch)).ToList();
-        }, l => l.Count > 0);
-
     private Task<int> AllClientsGroupAsync(List<string> w, CancellationToken ct) =>
         Cached("group-all", TimeSpan.FromMinutes(30), async () =>
         {
@@ -97,40 +91,44 @@ public class KtcDisputeService : IKtcDisputeService
 
     // ---------------- list ----------------
 
+    /// <summary>
+    /// The disputes KTC lists for a group or one ATM, the way KTC's Windows client reads them (trace): GET {groupid}/GroupDisputes or
+    /// {clientid}/ClientDisputes ?statusfilter=&amp;Numdays=. Every configured statusfilter is asked for and the answers merged.
+    /// </summary>
+    private async Task<(List<JsonElement> Rows, List<string> Warnings, List<string> Sources)> ListAsync(string scope, int days, CancellationToken ct)
+    {
+        var w = new List<string>(); var src = new List<string>(); var found = new List<JsonElement>();
+        var filters = (_opt.StatusFilters is { Length: > 0 } f ? f : new[] { 0 }).Distinct().ToArray();
+        await Task.WhenAll(filters.Select(async sf =>
+        {
+            var url = $"{Root}/{scope}?statusfilter={sf}&Numdays={days}";
+            var json = await Fetch(url, w, ct: ct);
+            var items = KtcJson.Items(json).Where(e => e.ValueKind == JsonValueKind.Object).Select(e => e.Clone()).ToList();
+            lock (found) { found.AddRange(items); src.Add($"GET {Root}/{scope}?statusfilter={sf}&Numdays={days} ({items.Count})"); }
+        }));
+        return (found, w, src.OrderBy(x => x).ToList());
+    }
+
+    private DisputeDto? MapRow(JsonElement e, List<DisputeStateDto> states, Dictionary<string, Atm> atms) =>
+        DisputeRules.Map(e, states, _opt.StateNames, id => atms.TryGetValue(id, out var a) ? (a.Name, a.Client) : null);
+
     public async Task<DisputeSearchResult> SearchAsync(DisputeQuery q, CancellationToken ct = default)
     {
-        var to = q.To ?? DateTime.UtcNow.AddMinutes(5);
-        var from = q.From ?? to.AddDays(-Math.Max(1, _opt.LookbackDays));
+        var now = DateTime.UtcNow;
+        var to = q.To ?? now.AddMinutes(5);
+        var from = q.From ?? now.AddDays(-Math.Max(1, _opt.LookbackDays));
+        var days = Math.Clamp((int)Math.Ceiling((now - from).TotalDays), 1, 3650);
         var w = new List<string>();
         var (states, _) = await StatesCoreAsync(w, ct);
         var atms = await AtmsAsync(w, ct);
-        var (rows, warn) = await Cached($"search:{from:yyyyMMddHHmm}:{to:yyyyMMddHHmm}", TimeSpan.FromSeconds(30), async () =>
-        {
-            var sw = new List<string>();
-            var biz = await BusinessIdsAsync(sw, ct); var gid = await AllClientsGroupAsync(sw, ct);
-            var targets = biz.Count == 0 ? new List<int?> { 0 } : biz.Select(i => (int?)i).ToList();
-            var ids = states.Select(s => s.Id).ToList();
-            if (ids.Count == 0) sw.Add("KTC returned no dispute states (GET DisputeManagement/DisputeState), so the search was sent without a state list.");
-            var found = new List<JsonElement>();
-            using var gate = new SemaphoreSlim(Math.Max(1, _ktc.MaxParallelCalls));
-            await Task.WhenAll(targets.Select(async b =>
-            {
-                await gate.WaitAsync(ct);
-                try
-                {
-                    var json = await Fetch($"{Root}/Search", sw, HttpMethod.Post, DisputeRules.SearchBody(b, gid, from, to, ids), ct);
-                    var items = KtcJson.Items(json).Select(e => e.Clone()).ToList();
-                    lock (found) found.AddRange(items);
-                }
-                finally { gate.Release(); }
-            }));
-            return (found, sw);
-        }, x => x.Item2.Count == 0);
+        var gid = await AllClientsGroupAsync(w, ct);
+        var (rows, warn, sources) = await Cached($"search:{gid}:{days}", TimeSpan.FromSeconds(30), () => ListAsync($"{gid}/GroupDisputes", days, ct), x => x.Warnings.Count == 0);
         w.AddRange(warn);
-        var mapped = rows.Select(e => DisputeRules.Map(e, states, _opt.StateNames, id => atms.TryGetValue(id, out var a) ? (a.Name, a.Client) : null))
-            .Where(d => d != null).Select(d => d!).GroupBy(d => d.Id).Select(g => g.First()).ToList();
-        if (rows.Count > 0 && mapped.Count == 0 && rows[0].ValueKind == JsonValueKind.Object)
+        var mapped = rows.Select(e => MapRow(e, states, atms)).Where(d => d != null).Select(d => d!).GroupBy(d => d.Id).Select(g => g.First()).ToList();
+        if (rows.Count > 0 && mapped.Count == 0)
             _log.LogWarning("KTC returned {Rows} dispute records but none had an id; fields of the first: {Fields}", rows.Count, string.Join(", ", rows[0].EnumerateObject().Take(40).Select(p => p.Name)));
+        // Numdays is counted back from now; the end of the range (and a start inside the first day) is applied here.
+        mapped = mapped.Where(d => (d.CreatedUtc ?? d.TransactionUtc) is not { } c || (c >= from && c <= to)).ToList();
 
         Func<DisputeDto, bool>? atmMatch = null;
         if (!string.IsNullOrWhiteSpace(q.AtmId))
@@ -140,50 +138,84 @@ public class KtcDisputeService : IKtcDisputeService
         }
         var amountKnown = mapped.Count == 0 || mapped.Any(d => d.Amount != null);
         if ((q.MinAmount != null || q.MaxAmount != null) && !amountKnown)
-            w.Add("The amount filter could not be applied: KTC's dispute records carry no amount field the portal recognises. Send a sample record so it can be mapped.");
+            w.Add("The amount filter could not be applied: KTC's dispute records carry no amount (neither an amount field nor extra data \"Amount\"). Send a sample record so it can be mapped.");
         var list = DisputeRules.Filter(mapped, amountKnown ? q : q with { MinAmount = null, MaxAmount = null }, atmMatch)
             .OrderByDescending(d => d.CreatedUtc ?? d.TransactionUtc ?? DateTime.MinValue).Take(Math.Max(1, _opt.MaxRows)).ToList();
-        return new DisputeSearchResult(list, states, w.Distinct().ToList(), new[] { $"POST {Root}/Search", $"GET {Root}/DisputeState" }, amountKnown);
+        return new DisputeSearchResult(list, states, w.Distinct().ToList(), sources.Append($"GET {Root}/DisputeState").ToList(), amountKnown);
     }
 
     // ---------------- one dispute ----------------
 
-    private async Task<(JsonElement? Raw, DisputeDto? Dto, List<DisputeStateDto> States)> ReadAsync(string id, List<string> w, CancellationToken ct)
+    /// <summary>
+    /// One dispute as KTC holds it: from its ATM's ClientDisputes list (what the Windows client shows in its details window) when the
+    /// ATM is known, else GET Dispute/{id}; each is the fallback of the other.
+    /// </summary>
+    private async Task<(JsonElement? Raw, DisputeDto? Dto, string Source)> ReadAsync(string id, string? atmId, List<string> w, CancellationToken ct)
     {
         var (states, _) = await StatesCoreAsync(w, ct);
         var atms = await AtmsAsync(w, ct);
-        var json = await Fetch($"{Root}/Dispute/{Uri.EscapeDataString(id)}", w, ct: ct);
-        var rec = KtcJson.Items(json).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object);
-        if (rec.ValueKind != JsonValueKind.Object) return (null, null, states);
-        var dto = DisputeRules.Map(rec, states, _opt.StateNames, x => atms.TryGetValue(x, out var a) ? (a.Name, a.Client) : null);
-        return (rec.Clone(), dto, states);
+        var cid = KtcJson.NormId(atmId ?? "");
+        async Task<(JsonElement? Raw, DisputeDto? Dto, string Source)> FromClient(string c)
+        {
+            var (rows, warn, _) = await ListAsync($"{Uri.EscapeDataString(c)}/ClientDisputes", Math.Max(_opt.LookbackDays, _opt.DetailLookupDays), ct);
+            w.AddRange(warn);
+            foreach (var r in rows) if (KtcJson.NormId(KtcJson.Str(r, DisputeRules.IdF)) == KtcJson.NormId(id)) return (r, MapRow(r, states, atms), $"GET {Root}/{c}/ClientDisputes");
+            return (null, null, "");
+        }
+        async Task<(JsonElement? Raw, DisputeDto? Dto, string Source)> ById()
+        {
+            var rec = KtcJson.Items(await Fetch($"{Root}/Dispute/{Uri.EscapeDataString(id)}", w, ct: ct)).FirstOrDefault(e => e.ValueKind == JsonValueKind.Object);
+            if (rec.ValueKind != JsonValueKind.Object || KtcJson.Str(rec, DisputeRules.IdF).Length == 0) return (null, null, "");
+            return (rec.Clone(), MapRow(rec, states, atms), $"GET {Root}/Dispute/{id}");
+        }
+        if (cid.Length > 0 && long.TryParse(cid, out _))
+        {
+            var a = await FromClient(cid);
+            if (a.Dto != null) return a;
+        }
+        var b = await ById();
+        if (b.Dto != null || cid.Length > 0) return b;
+        return (null, null, "");
     }
 
-    public async Task<DisputeDto?> GetAsync(string id, CancellationToken ct = default) => (await ReadAsync(id, new(), ct)).Dto;
+    public async Task<DisputeDto?> GetAsync(string id, string? atmId = null, CancellationToken ct = default) => (await ReadAsync(id, atmId, new(), ct)).Dto;
 
-    public async Task<DisputeDetails?> GetDetailsAsync(string id, CancellationToken ct = default)
+    public async Task<DisputeDetails?> GetDetailsAsync(string id, string? atmId = null, CancellationToken ct = default)
     {
         var w = new List<string>();
-        var (raw, d, _) = await ReadAsync(id, w, ct);
+        var (raw, d, src) = await ReadAsync(id, atmId, w, ct);
         if (raw is not { } e || d == null) return null;
-        var sources = new List<string> { $"GET {Root}/Dispute/{id}" };
-        // KTC's GET SMSQueue lists queued customer messages; only this dispute's entries are shown. POST SMSQueue/Disputes is never
-        // called because it may queue messages to customers.
-        var sms = await Cached("sms", TimeSpan.FromMinutes(1), async () => (await Fetch($"{Root}/SMSQueue", w, ct: ct))?.Clone(), x => x != null);
-        sources.Add($"GET {Root}/SMSQueue");
+        var sources = new List<string> { src };
+        // The Windows client's details window reads the dispute's queued customer messages with POST SMSQueue/Disputes [id] (trace),
+        // which answers {smsQueueId: SMSQueue}; it is a read.
+        var notes = new List<IReadOnlyList<KtcField>>();
+        if (long.TryParse(d.Id, out var lid))
+        {
+            var sms = await Fetch($"{Root}/SMSQueue/Disputes", w, HttpMethod.Post, new[] { lid }, ct);
+            notes = KtcJson.Items(sms).Where(x => x.ValueKind == JsonValueKind.Object).Select(x => (IReadOnlyList<KtcField>)DisputeRules.Fields(x)).ToList();
+            sources.Add($"POST {Root}/SMSQueue/Disputes [{d.Id}]");
+        }
         var maps = DisputeRules.CustomerF.Concat(DisputeRules.ExtraDataF).Concat(DisputeRules.SessionF).Concat(DisputeRules.TransactionF).Concat(DisputeRules.HistoryF)
             .Concat(new[] { "Comments", "CommentList", "CommentsString", "CommentString" }).ToArray();
         return new DisputeDetails(d, DisputeRules.Fields(e, maps), DisputeRules.MapFields(e, DisputeRules.CustomerF), DisputeRules.MapFields(e, DisputeRules.ExtraDataF),
             DisputeRules.MapFields(e, DisputeRules.SessionF), DisputeRules.MapFields(e, DisputeRules.TransactionF), TicketRules.Comments(e), DisputeRules.History(e),
-            DisputeRules.NotificationsFor(sms, d.Id), sources, w.Distinct().ToList());
+            notes, sources, w.Distinct().ToList());
+    }
+
+    /// <summary>Comments KTC holds on the dispute (read straight from KTC, not cached), for write read-back.</summary>
+    public async Task<(DisputeDto? Dispute, IReadOnlyList<TicketComment> Comments)> ReadCommentsAsync(string id, string? atmId, CancellationToken ct = default)
+    {
+        var (raw, d, _) = await ReadAsync(id, atmId, new(), ct);
+        return (d, raw is { } e ? TicketRules.Comments(e) : Array.Empty<TicketComment>());
     }
 
     public async Task<DisputeSetup> GetSetupAsync(CancellationToken ct = default)
     {
         var w = new List<string>();
         var (states, raw) = await StatesCoreAsync(w, ct);
-        var rules = await Fetch($"{Root}/DisputeRule", w, ct: ct);
-        return new DisputeSetup(states, KtcJson.Items(raw).Where(x => x.ValueKind == JsonValueKind.Object).Select(x => (IReadOnlyList<KtcField>)DisputeRules.Fields(x)).ToList(),
-            KtcJson.Items(rules).Where(x => x.ValueKind == JsonValueKind.Object).Select(x => (IReadOnlyList<KtcField>)DisputeRules.Fields(x)).ToList(), w);
+        var rules = Fetch($"{Root}/DisputeRule", w, ct: ct); var tpl = Fetch($"{Root}/DisputeMessageTemplate", w, ct: ct);
+        await Task.WhenAll(rules, tpl);
+        static List<IReadOnlyList<KtcField>> All(JsonElement? j) => KtcJson.Items(j).Where(x => x.ValueKind == JsonValueKind.Object).Select(x => (IReadOnlyList<KtcField>)DisputeRules.Fields(x)).ToList();
+        return new DisputeSetup(states, All(raw), All(rules.Result), All(tpl.Result), w);
     }
 }

@@ -90,6 +90,27 @@ public class DisputeRulesTests
     }
 
     [Fact]
+    public void Comment_body_matches_the_windows_client_trace()
+    {
+        var c = JsonSerializer.SerializeToElement(DisputeRules.CommentBody("10325", "tesst 4111111111111111", 13, 5));
+        Assert.Equal(13, c.GetProperty("table").GetInt32());
+        Assert.Equal(10325, c.GetProperty("rowID").GetInt64());
+        Assert.Equal(JsonValueKind.Null, c.GetProperty("kcComment").ValueKind);
+        Assert.Equal(5, c.GetProperty("SendStatusParameter").GetInt64());
+        Assert.Equal(-1, c.GetProperty("BusinessID").GetInt32());
+        Assert.False(c.GetProperty("Confidential").GetBoolean());
+        Assert.Equal("tesst 411111******1111", c.GetProperty("strComment").GetString());
+    }
+
+    [Fact]
+    public void Amount_falls_back_to_the_amount_extra_data_ktc_defines()
+    {
+        var d = DisputeRules.Map(J("""{"ID":1,"ExtraData":"<ExtraDataValues><ExtraData Name=\"Amount\" Value=\"250.00\"/><ExtraData Name=\"TSN\" Value=\"0042\"/></ExtraDataValues>"}"""), States, null, _ => null)!;
+        Assert.Equal(250m, d.Amount);
+        Assert.Equal(400m, DisputeRules.Map(J("""{"ID":1,"ExtraData":{"EffectiveAmount":400}}"""), States, null, _ => null)!.Amount);
+    }
+
+    [Fact]
     public void Search_and_change_state_bodies_follow_the_ktc_shapes()
     {
         var s = JsonSerializer.SerializeToElement(DisputeRules.SearchBody(2, 2, new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 11, 18, 0, 0, 0, DateTimeKind.Utc), new[] { 1, 2 }));
@@ -136,8 +157,11 @@ public class DisputeServiceTests
     {
         var svc = Service();
         var row = (await svc.SearchAsync(new DisputeQuery())).Rows.First(d => d.IsClosed);
-        var d = await svc.GetDetailsAsync(row.Id);
+        var d = await svc.GetDetailsAsync(row.Id, row.AtmId);
         Assert.NotNull(d);
+        Assert.StartsWith($"GET api/v1/DisputeManagement/{row.AtmId}/ClientDisputes", d!.Sources[0]);
+        Assert.Contains(d.Sources, x => x.StartsWith("POST api/v1/DisputeManagement/SMSQueue/Disputes"));
+        Assert.NotNull(d.Dispute.Amount);      // from extra data "Amount"
         Assert.Contains(d!.Customer, f => f.Name == "CardNumber" && f.Value.Contains('*'));
         Assert.Equal("(hidden)", d.ExtraData.Single(f => f.Name == "Track2Data").Value);
         Assert.NotEmpty(d.History);
@@ -164,7 +188,7 @@ public class DisputeServiceTests
     [Fact]
     public async Task Change_state_and_close_are_verified_by_reading_the_dispute_back()
     {
-        var (svc, audit) = Writer(enabled: true);
+        var (svc, audit) = Writer(enabled: true, allowState: true);
         var data = Service();
         var open = (await data.SearchAsync(new DisputeQuery())).Rows.Where(d => !d.IsClosed).OrderBy(d => d.Id).ToList();
         var a = open[^1]; var b = open[^2];
@@ -187,14 +211,40 @@ public class DisputeServiceTests
         Assert.Contains(audit.Entries, x => x.Contains("Dispute closed"));
     }
 
+    [Fact]
+    public async Task Comments_go_through_comment_api_table_13_and_are_read_back()
+    {
+        var (svc, audit) = Writer(enabled: true);
+        var data = Service();
+        var d = (await data.SearchAsync(new DisputeQuery())).Rows.Where(x => !x.IsClosed).OrderBy(x => x.Id).Skip(2).First();
+        var r = await svc.AddCommentAsync(d.Id, new DisputeWriteRequest(null, "Customer sent receipt for card 4111111111111111", null, d.AtmId));
+        Assert.True(r.Done, r.Message);
+        Assert.Contains(r.KtcSteps, x => x.Contains("table 13") && x.Contains($"SendStatusParameter {d.AtmId}"));
+        var after = await data.GetDetailsAsync(d.Id, d.AtmId);
+        Assert.Contains(after!.Comments, c => c.Text.Contains("Customer sent receipt") && c.Text.Contains("411111******1111"));
+        Assert.DoesNotContain(audit.Entries, x => x.Contains("4111111111111111"));
+    }
+
+    [Fact]
+    public async Task State_change_and_close_stay_off_until_confirmed_even_when_writing_is_on()
+    {
+        var (svc, _) = Writer(enabled: true);
+        var d = (await Service().SearchAsync(new DisputeQuery())).Rows.First(x => !x.IsClosed);
+        var st = await svc.StateAsync(d.Id, d.AtmId);
+        Assert.True(st.CanComment); Assert.False(st.CanChangeState); Assert.False(st.CanClose);
+        var r = await svc.CloseAsync(d.Id, new DisputeWriteRequest(null, "Refund paid to the customer", d.Id, d.AtmId));
+        Assert.False(r.Done); Assert.Empty(r.KtcSteps);
+        Assert.Contains(r.Checks, c => c.Name == "State change confirmed" && !c.Passed);
+    }
+
     private static KtcDisputeService Service() =>
         new(new MockClient(), Microsoft.Extensions.Options.Options.Create(new KtcOptions()), Microsoft.Extensions.Options.Options.Create(new DisputeOptions()),
             new MemoryCache(new MemoryCacheOptions()), new HttpContextAccessor(), NullLogger<KtcDisputeService>.Instance);
 
-    private static (DisputeWriteService, FakeAudit) Writer(bool enabled)
+    private static (DisputeWriteService, FakeAudit) Writer(bool enabled, bool allowState = false)
     {
         var a = new FakeAudit();
-        return (new DisputeWriteService(new MockClient(), Service(), Microsoft.Extensions.Options.Options.Create(new DisputeWriteOptions { Enabled = enabled }), a,
+        return (new DisputeWriteService(new MockClient(), Service(), Microsoft.Extensions.Options.Options.Create(new DisputeWriteOptions { Enabled = enabled, AllowStateChange = allowState }), a,
             new HttpContextAccessor(), NullLogger<DisputeWriteService>.Instance), a);
     }
 

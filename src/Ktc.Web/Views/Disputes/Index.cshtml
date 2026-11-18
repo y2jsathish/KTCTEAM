@@ -11,14 +11,14 @@
   <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fId">Dispute ID</label><input name="disputeId" id="fId" class="form-control form-control-sm" value="@ViewBag.DisputeId"/></div>
   <div class="col-6 col-md-1"><label class="form-label small mb-1" for="fCard">Card last 4</label><input name="card" id="fCard" class="form-control form-control-sm" inputmode="numeric" maxlength="4" pattern="\d{0,4}" autocomplete="off"/></div>
   <div class="col-6 col-md-2 col-lg-auto"><button class="btn btn-sm btn-primary w-100"><i class="bi bi-search"></i> Search</button></div>
-</form><div class="small text-muted mt-1">Default range: the last @ViewBag.Days days. Only the last 4 card digits are ever compared; full card numbers are never shown.</div></div>
+</form><div class="small text-muted mt-1">Default range: the last @ViewBag.Days days (KTC's Windows client also shows 14). Only the last 4 card digits are ever compared; full card numbers are never shown.</div></div>
 <div class="kpis" id="dsTiles"></div>
 <div class="cardx"><div class="table-responsive"><table id="tbl" class="table table-sm table-hover w-100 small text-nowrap"><thead><tr>
   <th>Dispute ID</th><th>ATM</th><th>Bank</th><th>State</th><th>Raised</th><th>Transaction Time</th><th>Transaction Type</th><th>Amount</th><th>Card</th>
   <th>Customer</th><th>Reason</th><th>Raised By</th><th>Last Change By</th><th>Last Change</th><th>Closed</th></tr></thead></table></div>
   <div class="small text-muted mt-1" id="dsSrc"></div></div>
 
-<details class="cardx mt-3" id="dsSetup"><summary class="small fw-semibold">KTC dispute states and rules (read-only)</summary><div id="dsSetupBody" class="pt-2 small text-muted">Open to load.</div></details>
+<details class="cardx mt-3" id="dsSetup"><summary class="small fw-semibold">KTC dispute states, rules and message templates (read-only)</summary><div id="dsSetupBody" class="pt-2 small text-muted">Open to load.</div></details>
 
 <div class="modal fade" id="dsModal" tabindex="-1" aria-labelledby="dsTitle" aria-hidden="true"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
   <div class="modal-header"><h5 class="modal-title" id="dsTitle">Dispute Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
