@@ -73,3 +73,51 @@ public class ApiMappingSchedulerJob : BackgroundService
         } while (await timer.WaitForNextTickAsync(stop));
     }
 }
+
+/// <summary>
+/// Daily cash snapshot for the Cash Forecasting menu: once a day after CashForecast:SnapshotHour (portal time), and at start-up when
+/// today has no run yet, stores notes per cash unit and actual cash per day, and recalculates the estate forecast.
+/// </summary>
+public class CashSnapshotJob : BackgroundService
+{
+    private readonly IServiceScopeFactory _sf; private readonly PortalOptions _portal; private readonly KtcOptions _ktc; private readonly CashForecastOptions _o;
+    private readonly Services.PortalClock _clock; private readonly ILogger<CashSnapshotJob> _log;
+    public CashSnapshotJob(IServiceScopeFactory sf, IOptions<PortalOptions> p, IOptions<KtcOptions> k, IOptions<CashForecastOptions> o, Services.PortalClock clock, ILogger<CashSnapshotJob> log)
+    { _sf = sf; _portal = p.Value; _ktc = k.Value; _o = o.Value; _clock = clock; _log = log; }
+
+    /// <summary>
+    /// True when a run is due: at start-up when today has no run yet; otherwise once the snapshot hour has passed and the last run was before it,
+    /// so the end-of-day counts are the ones kept.
+    /// </summary>
+    public static bool Due(DateTime? lastRunLocal, DateTime nowLocal, int snapshotHour, bool startup)
+    {
+        if (startup && lastRunLocal?.Date != nowLocal.Date) return true;
+        var mark = nowLocal.Date.AddHours(Math.Clamp(snapshotHour, 0, 23));
+        return nowLocal >= mark && (lastRunLocal == null || lastRunLocal < mark);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stop)
+    {
+        if (!_portal.EnableBackgroundJobs || !_o.EnableSnapshotJob) return;
+        if (!_ktc.UseMock && !_ktc.ServiceAccount.Configured) { _log.LogWarning("Ktc:ServiceAccount not configured - the daily cash snapshot is disabled (Cash Forecasting can still be recalculated by hand)."); return; }
+        await Task.Delay(TimeSpan.FromSeconds(40), stop);
+        var startup = true;
+        var timer = new PeriodicTimer(TimeSpan.FromMinutes(10));
+        do
+        {
+            try
+            {
+                using var scope = _sf.CreateScope();
+                var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                var last = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.FirstOrDefaultAsync(
+                    uow.Repo<Ktc.Domain.Entities.DashboardCache>().Query(), x => x.Key == "cash:forecast", stop);
+                var nowLocal = _clock.ToLocal(DateTime.UtcNow);
+                if (Due(last == null ? null : _clock.ToLocal(last.UpdatedUtc), nowLocal, _o.SnapshotHour, startup))
+                    await scope.ServiceProvider.GetRequiredService<ICashForecastService>().RunAsync(startup ? "start-up" : "daily snapshot", stop);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { _log.LogError(ex, "Cash snapshot cycle failed"); }
+            startup = false;
+        } while (await timer.WaitForNextTickAsync(stop));
+    }
+}

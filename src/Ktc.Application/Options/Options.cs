@@ -122,3 +122,37 @@ public class SmtpOptions
     public string? Password { get; set; }
     public string From { get; set; } = "ktc-portal@localhost";
 }
+
+/// <summary>Cash Forecasting menu: run-out estimates, replenishment suggestions and the daily cash snapshot. All results are estimates.</summary>
+public class CashForecastOptions
+{
+    public const string Section = "CashForecast";
+    /// <summary>Portal-local hour (0-23) after which the daily snapshot is taken (once a day). It also runs at start-up when today has none.</summary>
+    public int SnapshotHour { get; set; } = 23;
+    /// <summary>Turns the daily snapshot job off (the page can still be recalculated by hand).</summary>
+    public bool EnableSnapshotJob { get; set; } = true;
+    /// <summary>A cassette counts as out of cash at or below this many notes.</summary>
+    public long LowNotes { get; set; } = 50;
+    /// <summary>Suggested visit = earliest run-out minus this many days.</summary>
+    public double BufferDays { get; set; } = 1;
+    /// <summary>A replenishment is suggested only when a cassette runs out within this many days.</summary>
+    public int HorizonDays { get; set; } = 14;
+    /// <summary>Suggested load covers this many days of use after the visit.</summary>
+    public int CoverDays { get; set; } = 7;
+    /// <summary>Extra notes on top of the expected use, in percent.</summary>
+    public double SafetyStockPct { get; set; } = 20;
+    /// <summary>Notes a cassette holds (KTC PhysicalCassettes capacity; 2500 in the KTC data seen so far).</summary>
+    public long CassetteCapacity { get; set; } = 2500;
+    /// <summary>Day-to-day drops needed before the daily snapshots are used instead of the counters since the last reset.</summary>
+    public int MinHistoryDays { get; set; } = 3;
+    /// <summary>Days of withdrawals needed before weekday patterns (e.g. busier Fridays) are used.</summary>
+    public int MinDaysForWeekdayPattern { get; set; } = 14;
+    /// <summary>Reconciliation: two sources are compared only when their reset / report times are this close.</summary>
+    public int ReconcileToleranceMinutes { get; set; } = 120;
+    /// <summary>Days of EJ read for the latest counter report on the ATM forecast page.</summary>
+    public int EjDays { get; set; } = 2;
+    /// <summary>ATMs read at the same time when the whole estate is recalculated.</summary>
+    public int MaxParallel { get; set; } = 3;
+    /// <summary>Daily snapshots older than this are deleted.</summary>
+    public int RetentionDays { get; set; } = 400;
+}

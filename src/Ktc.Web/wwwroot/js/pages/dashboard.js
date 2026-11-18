@@ -28,8 +28,22 @@
  async function critical(){
   try{const r=await K.api('/data/atms?status=Critical');document.getElementById('critList').innerHTML=r.data.length?r.data.slice(0,30).map(a=>`<div class="d-flex justify-content-between border-bottom py-1"><a href="/Atm/Detail/${encodeURIComponent(a.id)}">${K.esc(a.name)}</a><span class="text-muted">${K.esc(a.healthReason)}</span></div>`).join(''):'<span class="text-muted">No critical ATMs</span>';}catch(e){}
  }
- async function load(force){try{render(await K.api('/data/summary'+(force?'?refresh=true':'')));critical();}catch(e){K.toast(e.message,'error');}}
+ // Cash: actual daily withdrawals (stored history) and the stored run-out estimates (Cash Forecasting menu).
+ let cashLast;
+ function cashRender(f){
+  cashLast=f;const P=K.pal(),d=f.daily||[],day=x=>new Date(x).toLocaleDateString([], {day:'numeric',month:'short'});
+  K.chart('cCashDaily',{type:'bar',data:{labels:d.map(x=>day(x.day)+(x.partial?' (so far)':'')),datasets:[{label:'Withdrawn',data:d.map(x=>x.withdrawn),backgroundColor:d.map(x=>x.partial?K.css('--grid'):P[0]),borderRadius:4,maxBarThickness:24}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+  document.getElementById('cashDailyNote').textContent=d.length?`Successful customer withdrawals, ${d.length} stored day(s).`:'No daily cash history stored yet.';
+  const n=s=>f.atms.filter(a=>a.status===s).length, cash=f.atms.reduce((t,a)=>t+(a.cashAmount||0),0);
+  const soon=f.atms.filter(a=>['Out','Critical','Warning'].includes(a.status)).slice(0,8);
+  document.getElementById('cashOutlook').innerHTML=`<div class="d-flex flex-wrap gap-3 mb-2"><div><div class="text-muted">Cash in ATMs</div><b>${Math.round(cash).toLocaleString()}</b></div><div><div class="text-muted">Out now</div><b>${n('Out')}</b></div><div><div class="text-muted">Within 1 day</div><b>${n('Critical')}</b></div><div><div class="text-muted">Within 3 days</div><b>${n('Warning')}</b></div></div>`
+   +(soon.length?soon.map(a=>`<div class="d-flex justify-content-between border-bottom py-1"><a href="/Cash/Atm/${encodeURIComponent(a.atmId)}">${K.esc(a.atmName)}</a><span class="text-muted">${a.status==='Out'?'out now':a.daysLeft!=null?'about '+a.daysLeft+' day(s)':''}</span></div>`).join(''):'<span class="text-muted">No ATM is estimated to run out within 3 days.</span>')
+   +`<div class="text-muted mt-1">Calculated ${K.local(f.generatedUtc)}.</div>`;
+ }
+ let cashAt=0;
+ async function cash(){if(Date.now()-cashAt<300000&&cashLast)return;cashAt=Date.now();try{cashRender(await K.api('/data/cash/forecast'));}catch(e){document.getElementById('cashOutlook').textContent='Cash forecast not available: '+e.message;}}
+ async function load(force){try{render(await K.api('/data/summary'+(force?'?refresh=true':'')));critical();cash();}catch(e){K.toast(e.message,'error');}}
  document.getElementById('refreshBtn').onclick=()=>load(true);
- K.hooks.dashboard.push(()=>load(false)); document.addEventListener('ktc-theme',()=>last&&render(last));
+ K.hooks.dashboard.push(()=>load(false)); document.addEventListener('ktc-theme',()=>{last&&render(last);cashLast&&cashRender(cashLast);});
  load(false); setInterval(()=>load(false),60000);
 })();

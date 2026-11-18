@@ -11,5 +11,7 @@
   <div class="cardx"><h6>Transaction volume today (per hour)</h6><div class="chart-box"><canvas id="cTxVol"></canvas></div></div>
   <div class="cardx"><h6>Transaction failures today (per hour)</h6><div class="chart-box"><canvas id="cTxFail"></canvas></div></div>
   <div class="cardx"><h6>Attention required — critical ATMs</h6><div id="critList" class="small" style="max-height:230px;overflow:auto"></div></div>
+  <div class="cardx"><h6>Cash withdrawn per day (actual, all ATMs)</h6><div class="chart-box"><canvas id="cCashDaily"></canvas></div><div class="small text-muted" id="cashDailyNote"></div></div>
+  <div class="cardx"><h6>Cash outlook <span class="sbadge warn" title="Run-out dates are estimates">Estimates</span> <a class="small ms-2" href="/Cash">Cash Forecasting</a></h6><div id="cashOutlook" class="small">Loading…</div></div>
 </div>
 @section Scripts { <script src="~/js/pages/dashboard.js" asp-append-version="true"></script> }

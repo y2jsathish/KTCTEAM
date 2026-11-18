@@ -21,6 +21,8 @@ public class KtcDbContext : DbContext
     public DbSet<ApiMapping> ApiMappings => Set<ApiMapping>();
     public DbSet<ApiFieldMapping> ApiFieldMappings => Set<ApiFieldMapping>();
     public DbSet<IncidentAction> IncidentActions => Set<IncidentAction>();
+    public DbSet<CashSnapshot> CashSnapshots => Set<CashSnapshot>();
+    public DbSet<CashDailyUsage> CashDailyUsages => Set<CashDailyUsage>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -78,5 +80,17 @@ public class KtcDbContext : DbContext
             e.HasOne(x => x.ApiMapping).WithMany(x => x.Fields).HasForeignKey(x => x.ApiMappingId).OnDelete(DeleteBehavior.Cascade);
         });
         b.Entity<IncidentAction>(e => { e.HasIndex(x => x.IncidentKey); e.Property(x => x.IncidentKey).HasMaxLength(100); e.Property(x => x.UserName).HasMaxLength(200); e.Property(x => x.Value).HasMaxLength(2000); });
+        b.Entity<CashSnapshot>(e =>
+        {
+            e.HasIndex(x => new { x.AtmId, x.Day, x.Unit }).IsUnique(); e.HasIndex(x => x.Day);
+            e.Property(x => x.AtmId).HasMaxLength(100); e.Property(x => x.AtmName).HasMaxLength(200); e.Property(x => x.Unit).HasMaxLength(50);
+            e.Property(x => x.UnitType).HasMaxLength(100); e.Property(x => x.Denomination).HasPrecision(18, 2);
+        });
+        b.Entity<CashDailyUsage>(e =>
+        {
+            e.HasIndex(x => new { x.AtmId, x.Day }).IsUnique(); e.HasIndex(x => x.Day);
+            e.Property(x => x.AtmId).HasMaxLength(100); e.Property(x => x.AtmName).HasMaxLength(200); e.Property(x => x.Client).HasMaxLength(200);
+            e.Property(x => x.AmountWithdrawn).HasPrecision(18, 2); e.Property(x => x.AmountDeposited).HasPrecision(18, 2);
+        });
     }
 }

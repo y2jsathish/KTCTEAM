@@ -71,6 +71,8 @@ public interface IKtcDataService
     Task<AtmGeneral?> GetAtmGeneralAsync(string atmId, CancellationToken ct = default);
     /// <summary>Replenishment tab of one ATM; null when no ATM matches.</summary>
     Task<AtmReplenishment?> GetReplenishmentAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Cash units of one ATM now (KTC CurrentCashUnitStatus); Units is null when KTC did not answer or no ATM matches.</summary>
+    Task<(IReadOnlyList<CashUnitLevel>? Units, IReadOnlyList<string> Warnings)> GetCashUnitsAsync(string atmId, CancellationToken ct = default);
     /// <summary>Cash counter reports the ATM printed to its EJ (on restart) in the last <paramref name="days"/> days; null when no ATM matches.</summary>
     Task<AtmEjCounters?> GetEjCountersAsync(string atmId, int days, CancellationToken ct = default);
     /// <summary>Transaction details for the popup: the record, session, STX fields, EJ lines and dispense counters. Null when the transaction is not found.</summary>
@@ -92,6 +94,19 @@ public interface IDashboardService
     Task<AtmDetail?> GetAtmDetailAsync(string atmId, CancellationToken ct = default);
     Task<RcaResult> GetRootCauseAsync(int days, CancellationToken ct = default);
     Task<IReadOnlyList<GlobalSearchResult>> GlobalSearchAsync(string term, CancellationToken ct = default);
+}
+
+/// <summary>Cash Forecasting menu (phase 1). Results are estimates, except the counts and the daily cash history.</summary>
+public interface ICashForecastService
+{
+    /// <summary>The latest stored estate forecast; computed when none exists yet.</summary>
+    Task<EstateCashForecast> GetEstateAsync(CancellationToken ct = default);
+    /// <summary>Reads every ATM's cash units and the transactions, stores the daily snapshot and daily cash history, and stores the estate forecast.</summary>
+    Task<EstateCashForecast> RunAsync(string trigger, CancellationToken ct = default);
+    /// <summary>One ATM, live: forecast (with notes per denomination since the reset), reconciliation XFS / EJ / application counters, history.</summary>
+    Task<AtmCashForecastDetail?> GetAtmAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Actual cash withdrawn / deposited per day across the estate from the stored history (last <paramref name="days"/> days).</summary>
+    Task<IReadOnlyList<CashDailyPoint>> GetDailyAsync(int days, CancellationToken ct = default);
 }
 
 public interface IAlertEngine
