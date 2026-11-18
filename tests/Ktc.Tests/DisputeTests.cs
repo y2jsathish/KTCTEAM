@@ -122,6 +122,18 @@ public class DisputeRulesTests
         Assert.Equal(4, c.GetProperty("Item1").GetInt32());
         Assert.DoesNotContain("4111111111111111", c.GetProperty("Item2").GetString());
     }
+
+    [Fact]
+    public void Rules_and_last_comment_come_from_ktc_records()
+    {
+        using var rules = JsonDocument.Parse("""{"3":{"ID":3,"Name":"CIM-ITEMS-RETRACTED_CashDepositToAccount"}}""");
+        Assert.Equal("CIM-ITEMS-RETRACTED_CashDepositToAccount", DisputeRules.ParseRules(rules.RootElement)[3]);
+        using var rec = JsonDocument.Parse("""{"ID":10325,"ClientID":5,"DisputeRuleID":3,"CommentsString":"<Comments><Comment User=\"System\" Timestamp=\"2026-11-11 12:45:18\">Dispute created automatically based on matching rule.</Comment><Comment User=\"ops\" Timestamp=\"2026-11-18 16:57:24\">card 4111111111111111 checked</Comment></Comments>"}""");
+        var d = DisputeRules.Map(rec.RootElement, new List<DisputeStateDto>(), null, _ => null, DisputeRules.ParseRules(rules.RootElement))!;
+        Assert.Equal("CIM-ITEMS-RETRACTED_CashDepositToAccount", d.Rule);
+        Assert.Equal("card 411111******1111 checked", d.LastComment);
+        Assert.Equal("Rule 9", DisputeRules.Map(JsonDocument.Parse("""{"ID":1,"DisputeRuleID":9}""").RootElement, new List<DisputeStateDto>(), null, _ => null)!.Rule);
+    }
 }
 
 public class DisputeServiceTests
@@ -134,7 +146,10 @@ public class DisputeServiceTests
         var r = await Service().SearchAsync(new DisputeQuery());
         Assert.NotEmpty(r.Rows);
         Assert.Empty(r.Warnings);
-        Assert.Contains(r.States, s => s.Name == "Under Investigation");
+        Assert.Contains(r.States, s => s.Id == 0 && s.Name == "All");
+        Assert.Contains(r.Sources, x => x.Contains("GroupDisputes?statusfilter=0&Numdays=14"));
+        Assert.Contains(r.Rows, d => d.Rule.Length > 0 && !d.Rule.StartsWith("Rule "));
+        Assert.All(r.Rows, d => Assert.NotEmpty(d.LastComment));
         Assert.All(r.Rows, d => Assert.Contains('*', d.Card));
         Assert.Contains(r.Rows, d => d.IsClosed);
         Assert.Contains(r.Rows, d => !d.IsClosed);
@@ -147,8 +162,13 @@ public class DisputeServiceTests
     {
         var svc = Service();
         var all = (await svc.SearchAsync(new DisputeQuery())).Rows;
-        var s = all.First().StateId!.Value;
-        Assert.All((await svc.SearchAsync(new DisputeQuery(StateId: s))).Rows, d => Assert.Equal(s, d.StateId));
+        var s = all.First(d => d.StateId > 0).StateId!.Value;
+        // statusfilter: the state id, sent to KTC; 0 = all states.
+        var one = await svc.SearchAsync(new DisputeQuery(StateId: s));
+        Assert.NotEmpty(one.Rows);
+        Assert.All(one.Rows, d => Assert.Equal(s, d.StateId));
+        Assert.Contains(one.Sources, x => x.Contains($"statusfilter={s}&"));
+        Assert.Equal(all.Count, (await svc.SearchAsync(new DisputeQuery(StateId: 0))).Rows.Count);
         Assert.All((await svc.SearchAsync(new DisputeQuery(MinAmount: 1000))).Rows, d => Assert.True(d.Amount >= 1000));
     }
 
@@ -162,9 +182,9 @@ public class DisputeServiceTests
         Assert.StartsWith($"GET api/v1/DisputeManagement/{row.AtmId}/ClientDisputes", d!.Sources[0]);
         Assert.Contains(d.Sources, x => x.StartsWith("POST api/v1/DisputeManagement/SMSQueue/Disputes"));
         Assert.NotNull(d.Dispute.Amount);      // from extra data "Amount"
-        Assert.Contains(d!.Customer, f => f.Name == "CardNumber" && f.Value.Contains('*'));
-        Assert.Equal("(hidden)", d.ExtraData.Single(f => f.Name == "Track2Data").Value);
-        Assert.NotEmpty(d.History);
+        Assert.Contains(d!.Customer, f => f.Name == "customerName" && f.Value.Length > 0);
+        Assert.Equal(new[] { "Amount", "EffectiveAmount", "TSN" }, d.ExtraData.Select(f => f.Name));
+        Assert.Contains(d.Fields, f => f.Name == "PAN" && f.Value.Contains('*'));
         Assert.NotEmpty(d.Comments);
         Assert.NotEmpty(d.Notifications);
         Assert.DoesNotContain(TestPans, JsonSerializer.Serialize(d).Contains);
@@ -193,13 +213,16 @@ public class DisputeServiceTests
         var open = (await data.SearchAsync(new DisputeQuery())).Rows.Where(d => !d.IsClosed).OrderBy(d => d.Id).ToList();
         var a = open[^1]; var b = open[^2];
 
-        var bad = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(3 == a.StateId ? 2 : 3, "Asked the customer for a receipt", "wrong"));
-        Assert.False(bad.Done); Assert.Empty(bad.KtcSteps);
+        // KTC's Change Dispute State dialog: a comment is required, and state 0 ("All") is not offered.
+        var noComment = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(4 == a.StateId ? 5 : 4, "", null));
+        Assert.False(noComment.Done); Assert.Empty(noComment.KtcSteps); Assert.Contains(noComment.Checks, c => c.Name == "Comment" && !c.Passed);
+        var toAll = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(0, "Asked the customer for a receipt", null));
+        Assert.False(toAll.Done); Assert.Contains(toAll.Checks, c => c.Name == "New state" && !c.Passed);
         var unknown = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(99, "Asked the customer for a receipt", a.Id));
         Assert.False(unknown.Done); Assert.Contains(unknown.Checks, c => c.Name == "New state" && !c.Passed);
 
-        var target = a.StateId == 3 ? 2 : 3;
-        var ok = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(target, "Asked the customer for a receipt", a.Id));
+        var target = a.StateId == 4 ? 5 : 4;
+        var ok = await svc.ChangeStateAsync(a.Id, new DisputeWriteRequest(target, "Asked the customer for a receipt", null));
         Assert.True(ok.Done, ok.Message);
         Assert.Equal(target, (await data.GetAsync(a.Id))!.StateId);
 

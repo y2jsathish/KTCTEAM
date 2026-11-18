@@ -54,6 +54,21 @@ public static partial class DisputeRules
         return list.GroupBy(s => s.Id).Select(g => g.First()).OrderBy(s => s.Id).ToList();
     }
 
+    /// <summary>KTC's GET DisputeRule answer (Dictionary&lt;short, DisputeRules&gt;, an array or a wrapped list) as rule id -> name.</summary>
+    public static Dictionary<int, string> ParseRules(JsonElement? root)
+    {
+        var map = new Dictionary<int, string>();
+        foreach (var (k, e) in KtcJson.Rows(root))
+        {
+            if (e.ValueKind == JsonValueKind.String && int.TryParse(k, out var kid)) { map.TryAdd(kid, CommandTypeRules.Sanitize(e.GetString())); continue; }
+            if (e.ValueKind != JsonValueKind.Object) continue;
+            var id = KtcJson.Int(e, int.MinValue, "ID", "Id", "DisputeRuleID", "DisputeRuleId", "RuleID", "RuleId");
+            if (id == int.MinValue && !int.TryParse(k, out id)) continue;
+            map.TryAdd(id, CommandTypeRules.Sanitize(KtcJson.Str(e, "Name", "RuleName", "DisputeRuleName", "Description", "Code")));
+        }
+        return map;
+    }
+
     /// <summary>The state name KTC gives for a number; then the configured name; else "State 7" (we do not guess names).</summary>
     public static string StateName(int? id, IReadOnlyList<DisputeStateDto> states, IReadOnlyDictionary<string, string>? names = null)
     {
@@ -67,7 +82,8 @@ public static partial class DisputeRules
     // ---------------- records ----------------
 
     /// <summary>One KTC dispute record as a list row. atm(clientId) gives the ATM name and bank for a KTC client id.</summary>
-    public static DisputeDto? Map(JsonElement e, IReadOnlyList<DisputeStateDto> states, IReadOnlyDictionary<string, string>? names, Func<string, (string Name, string Client)?> atm)
+    public static DisputeDto? Map(JsonElement e, IReadOnlyList<DisputeStateDto> states, IReadOnlyDictionary<string, string>? names, Func<string, (string Name, string Client)?> atm,
+        IReadOnlyDictionary<int, string>? rules = null)
     {
         if (e.ValueKind != JsonValueKind.Object) return null;
         var id = KtcJson.Str(e, IdF);
@@ -98,8 +114,16 @@ public static partial class DisputeRules
         var cust = MapFields(e, CustomerF);
         string FromCustomer(params string[] keys) => cust.FirstOrDefault(f => keys.Any(k => f.Name.Equals(k, StringComparison.OrdinalIgnoreCase)))?.Value ?? "";
 
+        int? ruleId = KtcJson.Int(e, int.MinValue, "DisputeRuleID", "DisputeRuleId", "RuleID", "RuleId") is var ri && ri != int.MinValue ? ri : null;
+        var rule = CommandTypeRules.Sanitize(KtcJson.Str(e, "DisputeRuleName", "RuleName", "DisputeRules"));
+        if (rule.Length == 0 && KtcJson.TryProp(e, out var ro, "DisputeRule", "Rule"))
+            rule = ro.ValueKind == JsonValueKind.Object ? CommandTypeRules.Sanitize(KtcJson.Str(ro, "Name", "RuleName")) : ro.ValueKind == JsonValueKind.String ? CommandTypeRules.Sanitize(ro.GetString()) : "";
+        if (rule.Length == 0 && ruleId is int rid) rule = rules != null && rules.TryGetValue(rid, out var rn) && rn.Length > 0 ? rn : $"Rule {rid}";
+        var comments = TicketRules.Comments(e);
+
         return new DisputeDto
         {
+            RuleId = ruleId, Rule = rule, LastComment = comments.Count > 0 ? comments[^1].Text : PanMasker.Mask(CommandTypeRules.Sanitize(KtcJson.Str(e, "LastComment", "LastCommentText"))),
             Id = id, AtmId = clientId, AtmName = a?.Name ?? CommandTypeRules.Sanitize(S("ClientName", "NodeName", "AtmName")), Client = a?.Client ?? "",
             StateId = stateId, State = state, IsClosed = closed,
             CreatedUtc = KtcJson.Date(e, CreatedF), UpdatedUtc = KtcJson.Date(e, UpdatedF), ClosedUtc = closedUtc, TransactionUtc = D(TxTimeF),
