@@ -51,10 +51,14 @@ public static partial class CommandTypeRules
             var id = KtcJson.Int(e, int.TryParse(key, out var k) ? k : 0, IdF);
             var name = Sanitize(KtcJson.Str(e, NameF));
             if (id == 0 && name.Length == 0) continue;
-            list.Add(new KtcCommandTypeDto(id, name, Sanitize(KtcJson.Str(e, "Description")), Sanitize(KtcJson.Str(e, "Category")),
+            var dto = new KtcCommandTypeDto(id, name, Sanitize(KtcJson.Str(e, "Description")), Sanitize(KtcJson.Str(e, "Category")),
                 Sanitize(KtcJson.Str(e, "ParameterListTemplateString", "ParameterListTemplate")), Sanitize(KtcJson.Str(e, "SubCommandListString", "SubCommandList")),
                 OptBool(e, "AllowClientInitiation"), OptInt(e, "MaxRetries"), OptInt(e, "RetryWaitTime"), OptInt(e, "MaxSimultaneous"),
-                OptInt(e, "TargetTypeByte", "TargetType"), OptBool(e, "IsUserDefined"), OptInt(e, "DualAuthModeByte", "DualAuthMode")));
+                OptInt(e, "TargetTypeByte", "TargetType"), OptBool(e, "IsUserDefined"), OptInt(e, "DualAuthModeByte", "DualAuthMode"));
+            // Fields come from the PAN-masked template (not the display copy, whose secret hiding could clip attribute names);
+            // the parser itself drops defaults of secret fields.
+            var (fields, note) = CommandParameterRules.Parse(PanMasker.Mask(KtcJson.Str(e, "ParameterListTemplateString", "ParameterListTemplate")));
+            list.Add(dto with { Parameters = fields, ParametersNote = note });
         }
         return list.OrderBy(c => c.Category.Length == 0).ThenBy(c => c.Category, StringComparer.OrdinalIgnoreCase).ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
@@ -84,5 +88,29 @@ public static partial class CommandTypeRules
             res.Add(new PlannedAtmAction(key, label, desc, cfg, hit?.Id, hit?.Name, hit?.RequiresDualAuth, sugg, false, status));
         }
         return res;
+    }
+
+    /// <summary>
+    /// Marks each command: high-risk (extra confirmation), or blocked from the generic form because it is a special flow (reboot,
+    /// resets, in/out of service: mapped in config or named like one, except high-risk ones like Emergency Reboot), needs a second
+    /// login (not supported yet), or matches the blocked pattern.
+    /// </summary>
+    public static List<KtcCommandTypeDto> Classify(IReadOnlyList<KtcCommandTypeDto> commands, IReadOnlyList<PlannedAtmAction> planned, string? highRisk, string? blocked)
+    {
+        Regex? hr = string.IsNullOrWhiteSpace(highRisk) ? null : new(highRisk, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        Regex? bl = string.IsNullOrWhiteSpace(blocked) ? null : new(blocked, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100));
+        var mapped = planned.Where(p => p.CommandTypeId != null).ToDictionary(p => p.CommandTypeId!.Value, p => p.Label);
+        return commands.Select(c =>
+        {
+            var risky = hr != null && (hr.IsMatch(c.Name) || hr.IsMatch(c.Description));
+            var special = mapped.TryGetValue(c.Id, out var lbl) ? lbl
+                : risky ? null : Planned.FirstOrDefault(p => p.Looks.IsMatch(c.Name)).Label;
+            var why = special != null ? $"{special} has its own guided flow (coming next), not this form."
+                : c.RequiresDualAuth ? "Needs a second login (dual authorization), which is not supported yet."
+                : bl != null && (bl.IsMatch(c.Name) || bl.IsMatch(c.Description)) ? "Blocked by configuration (KtcActions:BlockedPattern)."
+                : c.ParametersNote != null ? c.ParametersNote
+                : null;
+            return c with { HighRisk = risky, SendBlockedReason = why };
+        }).ToList();
     }
 }
