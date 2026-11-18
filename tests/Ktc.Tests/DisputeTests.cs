@@ -132,6 +132,8 @@ public class DisputeRulesTests
         var d = DisputeRules.Map(rec.RootElement, new List<DisputeStateDto>(), null, _ => null, DisputeRules.ParseRules(rules.RootElement))!;
         Assert.Equal("CIM-ITEMS-RETRACTED_CashDepositToAccount", d.Rule);
         Assert.Equal("card 411111******1111 checked", d.LastComment);
+        using var tx = JsonDocument.Parse("""{"ID":2,"TransactionID":1775843605200}""");
+        Assert.Equal("1775843605200", DisputeRules.Map(tx.RootElement, new List<DisputeStateDto>(), null, _ => null)!.TransactionId);
         Assert.Equal("Rule 9", DisputeRules.Map(JsonDocument.Parse("""{"ID":1,"DisputeRuleID":9}""").RootElement, new List<DisputeStateDto>(), null, _ => null)!.Rule);
     }
 }

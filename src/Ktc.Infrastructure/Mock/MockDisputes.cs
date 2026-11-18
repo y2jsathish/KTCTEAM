@@ -59,6 +59,20 @@ public sealed partial class MockKtcHttpHandler
         return new MockDispute(id, i, cur.Item1, rule, created, cur.Item2, final ? cur.Item2 : null, tx, type, amount, pan, reason, Customers[Hash(n, 911) % Customers.Length], hist);
     }
 
+    /// <summary>A demo transaction of the dispute's ATM at or before its transaction time, so the Transaction tab finds it (same id scheme as Transactions()).</summary>
+    private static (long Id, DateTime Time) DisputedTx(MockDispute d)
+    {
+        var i = d.AtmIndex;
+        var h0 = new DateTime(d.TransactionTime.Year, d.TransactionTime.Month, d.TransactionTime.Day, d.TransactionTime.Hour, 0, 0, DateTimeKind.Utc);
+        for (var hour = h0; hour > h0.AddHours(-72); hour = hour.AddHours(-1))
+        {
+            int hi = (int)(hour.Ticks / TimeSpan.TicksPerHour);
+            int weight = hour.Hour is >= 6 and <= 20 ? 2 : 1;
+            if (Hash(i, hi, 41) % (weight * 3 + 1) > 0 && !IsOffline(i, hour)) return ((long)hi * 100000 + i * 100, hour.AddSeconds(Hash(i, hi, 50) % 3600));
+        }
+        return (42000L + d.ID % 100_000 * 7, d.TransactionTime);
+    }
+
     private static object DisputeJson(MockDispute d)
     {
         var name = $"{Banks[d.AtmIndex % 3][..3].ToUpper()}-ATM-{d.AtmIndex + 1:000}";
@@ -72,7 +86,7 @@ public sealed partial class MockKtcHttpHandler
         {
             ID = d.ID, ClientID = Id(d.AtmIndex), ClientName = name, StateID = d.StateID, StateName = st.Name, DisputeRuleID = d.RuleID, BusinessID = d.AtmIndex % 3 + 1,
             TimeCreated = d.TimeCreated, TimeUpdated = d.History.Count > 1 ? d.TimeUpdated : (DateTime?)null, TimeClosed = d.TimeClosed,
-            TransactionID = 42000L + d.ID % 100_000 * 7, TransactionTime = d.TransactionTime, TransactionType = d.TransactionType, PAN = d.Pan,
+            TransactionID = DisputedTx(d).Id, TransactionTime = DisputedTx(d).Time, TransactionType = d.TransactionType, PAN = d.Pan,
             CustomerDetails = new Dictionary<string, object?>
             {
                 ["customerName"] = d.Customer, ["customerTelephone"] = "", ["customerMobileNumber"] = $"+9715{Hash((int)d.ID, 912) % 10}{Hash((int)d.ID, 913) % 9000000 + 1000000}",

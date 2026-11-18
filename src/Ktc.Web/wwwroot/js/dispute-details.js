@@ -1,6 +1,6 @@
 // Dispute Details, laid out like KTC's Windows client (bank screenshots): KTC.disputeDetails(id, atmId, onChanged) opens a modal with the
-// tabs "Dispute Information" (dispute fields with Transaction "Open" and Status "Change", Customer Info, Extra Data, Comments) and
-// "Queued SMS", plus "All KTC fields". Add Comment and Change open small dialogs like the client's; the server checks everything, sends
+// tabs "Dispute Information" (dispute fields with Status "Change", Customer Info, Extra Data, Comments), "Transaction" (the dispute's
+// transaction: details, EJ, session, fields, dispense, as in the transaction popup), "Queued SMS" and "All KTC fields". Add Comment and Change open small dialogs like the client's; the server checks everything, sends
 // only when DisputeWrite is on, reads the dispute back and audits each attempt. Data: GET /data/disputes/{id}/details and /write.
 // KTC.disputeColumns() and KTC.disputeStateOptions() give the list columns and the "Dispute states filter" of the client's Disputes tab.
 // Card numbers arrive masked from the server; nothing here ever sees a full number.
@@ -32,9 +32,10 @@
    <div class="modal-header"><h5 class="modal-title" id="dsTitle">Dispute Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
    <div class="modal-body"><ul class="nav nav-tabs small" role="tablist">
      <li class="nav-item" role="presentation"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#dsInfo" type="button" role="tab">Dispute Information</button></li>
+     <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsTx" type="button" role="tab" id="dsTxTab">Transaction</button></li>
      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsSms" type="button" role="tab">Queued SMS <span class="badge text-bg-secondary d-none" id="dsSmsN"></span></button></li>
      <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#dsAll" type="button" role="tab">All KTC fields</button></li>
-    </ul><div class="tab-content pt-2"><div class="tab-pane fade show active" id="dsInfo" role="tabpanel"></div><div class="tab-pane fade" id="dsSms" role="tabpanel"></div><div class="tab-pane fade" id="dsAll" role="tabpanel"></div></div></div>
+    </ul><div class="tab-content pt-2"><div class="tab-pane fade show active" id="dsInfo" role="tabpanel"></div><div class="tab-pane fade" id="dsTx" role="tabpanel"></div><div class="tab-pane fade" id="dsSms" role="tabpanel"></div><div class="tab-pane fade" id="dsAll" role="tabpanel"></div></div></div>
    <div class="modal-footer"><span class="small text-muted me-auto" id="dsSrcD"></span><a class="btn btn-sm btn-outline-secondary" id="dsAtm" href="#"><i class="bi bi-hdd-rack"></i> Open ATM</a>
     <button type="button" class="btn btn-sm btn-outline-primary" id="dsAddBtn"><i class="bi bi-chat-left-dots"></i> Add Comment</button><button type="button" class="btn btn-sm btn-primary" data-bs-dismiss="modal">OK</button></div>
    <div id="dsDlg" class="d-none position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center" style="background:rgba(0,0,0,.35);z-index:20;border-radius:inherit">
@@ -47,6 +48,11 @@
   $id('dsDlg').addEventListener('click',e=>{if(e.target.closest('[data-dlg-cancel]'))closeDlg();});
   $id('dsModal').addEventListener('keydown',e=>{if(e.key==='Escape'&&!$id('dsDlg').classList.contains('d-none')){e.stopPropagation();e.preventDefault();closeDlg();}},true);
   $id('dsAddBtn').onclick=()=>cur&&openDlg('comment');
+  // Transaction tab: the dispute's transaction (details, EJ, session, fields, dispense), read from KTC the first time the tab is opened.
+  $id('dsTxTab').addEventListener('shown.bs.tab',()=>{const x=cur&&cur.d&&cur.d.dispute;if(!x||cur.txLoaded)return;cur.txLoaded=true;
+   if(!x.transactionId){$id('dsTx').innerHTML='<div class="small text-muted">This dispute has no transaction id in KTC.</div>';return;}
+   if(!K.txPanel){$id('dsTx').innerHTML='<div class="small text-muted">Transaction details are not available on this page.</div>';return;}
+   K.txPanel($id('dsTx'),{id:x.transactionId,atmId:x.atmId||cur.atmId,timeUtc:x.transactionUtc});});
   return modal;}
 
  const field=(l,v,btn)=>`<div class="row g-1 align-items-center mb-1"><div class="col-4 text-muted">${K.esc(l)}</div><div class="col${btn?'-6':''}"><div class="form-control form-control-sm bg-body-tertiary text-truncate" style="min-height:1.9rem" title="${K.esc(v||'')}">${K.esc(v||'')}</div></div>${btn?`<div class="col-2">${btn}</div>`:''}</div>`;
@@ -62,7 +68,7 @@
   $id('dsAtm').classList.toggle('d-none',!cur.atmId||!!cur.onAtmPage);$id('dsAtm').href='/Atm/Detail/'+encodeURIComponent(cur.atmId||'');
   const info=`<fieldset class="border rounded p-2 h-100"><legend class="float-none w-auto px-1 small fw-semibold mb-1">Dispute Information</legend>
     ${field('Dispute Id',x.id)}
-    ${field('Transaction Id',x.transactionId,x.transactionId?'<button type="button" class="btn btn-sm btn-outline-secondary w-100" id="dsTxOpen">Open</button>':'')}
+    ${field('Transaction Id',x.transactionId)}
     ${field('Client Name',x.atmName||x.atmId)}${field('Dispute Rules',x.rule)}
     ${field('Dispute Status',x.state,'<button type="button" class="btn btn-sm btn-outline-secondary w-100" id="dsChange">Change</button>')}
     ${field('Added Time',ktcDate(x.createdUtc))}${field('Last updated on',ktcDate(x.updatedUtc))}${field('Closed Time',ktcDate(x.closedUtc))}</fieldset>`;
@@ -71,20 +77,12 @@
   const com=`<fieldset class="border rounded p-2 mt-2"><legend class="float-none w-auto px-1 small fw-semibold mb-1">Comments</legend>${d.comments.length?`<div class="table-responsive"><table class="table table-sm small mb-0"><thead><tr><th>User</th><th>Time</th><th>Comment</th></tr></thead><tbody>${d.comments.map(c=>`<tr><td class="text-nowrap">${K.esc(c.user||'')}</td><td class="text-nowrap">${K.esc(ktcDate(c.utc))}</td><td class="text-break">${K.esc(c.text)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="text-muted small">No comments on the KTC record.</div>'}</fieldset>`;
   $id('dsInfo').innerHTML=(d.warnings.length?`<div class="alert alert-warning py-1 small">${d.warnings.map(K.esc).join('<br>')}</div>`:'')
    +`<div class="row g-2 small"><div class="col-lg-5">${info}</div><div class="col-lg-4">${cust}</div><div class="col-lg-3">${extra}</div></div>${com}<div id="dsLastRes" class="mt-2"></div>`;
-  if($id('dsTxOpen'))$id('dsTxOpen').onclick=()=>openTx(x);
   $id('dsChange').onclick=()=>openDlg('state');
   $id('dsSms').innerHTML=d.notifications.length?d.notifications.map(n=>kv(n)).join('<hr>'):'<div class="small text-muted">No queued SMS for this dispute in KTC (POST SMSQueue/Disputes).</div>';
   $id('dsSmsN').textContent=d.notifications.length;$id('dsSmsN').classList.toggle('d-none',!d.notifications.length);
   $id('dsAll').innerHTML=`<div class="small text-muted mb-1">Every field of the KTC record. Card numbers masked, track / CVV / PIN data hidden.</div>${kv(d.fields)}`;
   $id('dsSrcD').textContent='From KTC: '+d.sources.join(', ');
- }
-
- // Transaction "Open": the portal's transaction popup. The dispute window is hidden meanwhile and comes back when it closes.
- function openTx(x){
-  if(!K.txDetails){location.href='/Transactions?id='+encodeURIComponent(x.transactionId);return;}
-  const back=cur;$id('dsModal').addEventListener('hidden.bs.modal',()=>{K.txDetails({id:x.transactionId,atmId:x.atmId,timeUtc:x.transactionUtc});
-   const tm=$id('txModal');if(tm)tm.addEventListener('hidden.bs.modal',()=>{cur=back;modal.show();},{once:true});},{once:true});
-  modal.hide();
+  if($id('dsTx').classList.contains('active')&&!cur.txLoaded)$id('dsTxTab').dispatchEvent(new Event('shown.bs.tab'));
  }
 
  // ---------- Add Comment / Change Dispute State dialogs ----------
@@ -125,6 +123,7 @@
 
  K.disputeDetails=function(id,atmId,onChanged,opts){
   if(!id)return;shell();cur={id:String(id),atmId,onChanged,onAtmPage:!!(opts&&opts.onAtmPage)};closeDlg();
+  $id('dsTx').innerHTML='<div class="text-muted small">Loading from KTC…</div>';
   $id('dsTitle').textContent='Dispute Details · '+id;$id('dsSrcD').textContent='';
   bootstrap.Tab.getOrCreateInstance(document.querySelector('#dsModal [data-bs-target="#dsInfo"]')).show();modal.show();render();
  };
