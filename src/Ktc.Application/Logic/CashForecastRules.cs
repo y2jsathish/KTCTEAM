@@ -130,8 +130,9 @@ public static class CashForecastRules
                 var total = disp.Sum(x => x.Amount ?? 0);
                 if (total > 0) { rate = (double)(i.WithdrawnPerDay.Value * ((u.Amount ?? 0) / total) / u.Value.Value); source = SourceAmounts; conf = "Very low"; }
             }
+            rate = rate is { } rr ? Math.Round(rr, 1) : null;   // the stored rate, so a later Rethreshold gives the same days left
             var left = DaysLeft(u.Count, o.LowNotes, rate, factors, i.NowLocal);
-            units.Add(new CashUnitForecast(u.Device, u.Unit, u.Type, u.Value, u.Count, u.Amount, rate is { } r0 ? Math.Round(r0, 1) : null, source,
+            units.Add(new CashUnitForecast(u.Device, u.Unit, u.Type, u.Value, u.Count, u.Amount, rate, source,
                 Math.Round(rateDays, 1), conf, left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? i.NowUtc.AddDays(l1) : null, StatusFor(u.Count, o.LowNotes, left)));
         }
         if (units.Count > 0 && units.All(u => u.NotesPerDay == null))
@@ -146,7 +147,28 @@ public static class CashForecastRules
         var confidence = rated.Count == 0 ? "None" : rated.OrderByDescending(u => ConfidenceRank(u.Confidence)).First().Confidence;
         return new AtmCashForecast(i.AtmId, i.AtmName, i.Client, i.NowUtc, i.LastReplenishmentUtc,
             disp.Sum(u => u.Amount ?? 0), disp.Sum(u => u.Count), units, first?.RunOutUtc, first?.DaysLeft, status, confidence, factors != null,
-            Suggest(units, i.NowUtc, o), warnings);
+            Suggest(units, i.NowUtc, o), warnings, factors);
+    }
+
+    /// <summary>
+    /// The same forecast with another low-cash threshold (o.LowNotes): days left, run-out date and status of each cassette, the ATM's
+    /// status and earliest run-out, and the suggested replenishment are recalculated from the stored usage per day, as of when the
+    /// forecast was made (<paramref name="generatedLocal"/> = its GeneratedUtc in portal time). Counts, usage and sources do not change.
+    /// </summary>
+    public static AtmCashForecast Rethreshold(AtmCashForecast f, CashForecastOptions o, DateTime generatedLocal)
+    {
+        var units = f.Units.Select(u =>
+        {
+            var left = DaysLeft(u.Notes, o.LowNotes, u.NotesPerDay, f.WeekdayFactors, generatedLocal);
+            return u with { DaysLeft = left is { } l0 ? Math.Round(l0, 1) : null, RunOutUtc = left is { } l1 ? f.GeneratedUtc.AddDays(l1) : null, Status = StatusFor(u.Notes, o.LowNotes, left) };
+        }).ToList();
+        var first = units.Where(u => u.DaysLeft.HasValue).OrderBy(u => u.DaysLeft).FirstOrDefault();
+        return f with
+        {
+            Units = units, EarliestRunOutUtc = first?.RunOutUtc, DaysLeft = first?.DaysLeft,
+            Status = units.Count == 0 ? StatusUnknown : units.OrderBy(u => Rank(u.Status)).First().Status,
+            Suggestion = Suggest(units, f.GeneratedUtc, o)
+        };
     }
 
     /// <summary>

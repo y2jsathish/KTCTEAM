@@ -9,7 +9,8 @@
  const day=u=>u?new Date(u.endsWith('Z')?u:u+'Z').toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}):'';
  const conf=c=>`<span class="small ${c==='Medium'?'':'text-muted'}" title="How much to trust the usage estimate">${K.esc(c)}</span>`;
  const src=f=>{const s=[...new Set(f.units.filter(u=>u.notesPerDay!=null).map(u=>u.rateSource))];return s.length?s.map(K.esc).join(', '):'<span class="text-muted">none</span>';};
- const link=f=>`<a href="/Cash/Atm/${encodeURIComponent(f.atmId)}">${K.esc(f.atmName||f.atmId)}</a>`;
+ const atmUrl=id=>`/Cash/Atm/${encodeURIComponent(id)}${K.cashPct.qs()?'?'+K.cashPct.qs():''}`;
+ const link=f=>`<a href="${atmUrl(f.atmId)}">${K.esc(f.atmName||f.atmId)}</a>`;
 
  function unitsTable(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
@@ -20,14 +21,14 @@
   K.details(f.atmName||f.atmId,`<div class="small text-muted mb-2">${K.esc(f.client)} · cash now ${num(f.cashAmount)} (${num(f.notes)} notes)${f.lastReplenishmentUtc?' · last replenished '+K.local(f.lastReplenishmentUtc):''}</div>${unitsTable(f)}`
    +(s?`<div class="small"><b>Suggested visit by ${K.local(s.visitByUtc)}</b> (estimate). ${K.esc(s.reason)} Load to add about ${num(s.addAmount)}.</div>`:'<div class="small text-muted">No replenishment needed in the forecast horizon.</div>')
    +((f.warnings||[]).length?`<div class="alert alert-warning py-1 small mt-2">${f.warnings.map(K.esc).join('<br>')}</div>`:'')
-   +`<a class="btn btn-sm btn-primary mt-2" href="/Cash/Atm/${encodeURIComponent(f.atmId)}">Open cash forecast and reconciliation</a>`);
+   +`<a class="btn btn-sm btn-primary mt-2" href="${atmUrl(f.atmId)}">Open cash forecast and reconciliation</a>`);
  }
  function render(){
   const fc=$id('fClient').value,fs=$id('fStatus').value;
   const rows=data.atms.filter(a=>(!fc||a.client===fc)&&(!fs||a.status===fs));
   const by=s=>rows.filter(a=>a.status===s).length, cash=rows.reduce((t,a)=>t+(a.cashAmount||0),0);
   $id('kpis').innerHTML=kpi('Cash in ATMs',Math.round(cash).toLocaleString(),'info',`${rows.length} ATMs · actual`)
-   +kpi('Out of cash now',by('Out'),by('Out')?'crit':'ok','at or below the low-notes level')
+   +kpi('Out of cash now',by('Out'),by('Out')?'crit':'ok',`at or below ${data.lowPct}% of capacity (${num(data.lowNotes)} notes)`)
    +kpi('Run out within 1 day',by('Critical'),by('Critical')?'crit':'ok','estimate')
    +kpi('Run out within 3 days',by('Warning'),by('Warning')?'warn':'ok','estimate')
    +kpi('No usage data',by('No usage data'),by('No usage data')?'warn':'ok','no estimate possible')
@@ -53,16 +54,26 @@
  }
  function show(f){
   data=f;
-  $id('gen').textContent=`Calculated ${K.local(f.generatedUtc)} (${f.trigger}) · daily snapshot runs every night`;
+  $id('gen').textContent=`Calculated ${K.local(f.generatedUtc)} (${f.trigger}) · low cash at ${f.lowPct}% of capacity = ${Number(f.lowNotes).toLocaleString()} notes`;
+  $id('lowPct').value=f.lowPct;
   $id('warnings').innerHTML=(f.warnings||[]).length?`<div class="alert alert-warning py-2 small">${f.warnings.map(K.esc).join('<br>')}</div>`:'';
   const cl=[...new Set(f.atms.map(a=>a.client).filter(Boolean))].sort(),sel=$id('fClient'),cur=sel.value;
   sel.innerHTML='<option value="">All clients</option>'+cl.map(c=>`<option${c===cur?' selected':''}>${K.esc(c)}</option>`).join('');
   render();chart();
  }
- async function load(){show(await K.api('/data/cash/forecast'));}
+ const q=()=>K.cashPct.qs()?'?'+K.cashPct.qs():'';
+ async function load(){show(await K.api('/data/cash/forecast'+q()));}
+ function applyPct(v){
+  if(v!==''&&(!isFinite(+v)||+v<0||+v>100)){K.toast('Enter a percent from 0 to 100.','warn');return;}
+  K.cashPct.set(v);if(new URLSearchParams(location.search).has('lowPct'))history.replaceState(null,'',location.pathname);
+  load().catch(e=>K.toast(e.message,'error'));
+ }
+ $id('lowApply').onclick=()=>applyPct($id('lowPct').value.trim());
+ $id('lowPct').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();applyPct($id('lowPct').value.trim());}};
+ $id('lowReset').onclick=()=>applyPct('');
  $id('fClient').onchange=render;$id('fStatus').onchange=render;
  const rb=$id('recalc');if(rb)rb.onclick=async()=>{rb.disabled=true;rb.innerHTML='<span class="spinner-border spinner-border-sm"></span> Recalculating…';
-  try{show(await K.api('/data/cash/recalculate',{method:'POST'}));K.toast('Cash forecast recalculated','ok');}catch(e){K.toast(e.message,'error');}
+  try{show(await K.api('/data/cash/recalculate'+q(),{method:'POST'}));K.toast('Cash forecast recalculated','ok');}catch(e){K.toast(e.message,'error');}
   finally{rb.disabled=false;rb.innerHTML='<i class="bi bi-arrow-clockwise"></i> Recalculate';}};
  document.addEventListener('ktc-theme',()=>data&&chart());
  load().catch(e=>{$id('gen').textContent='';K.toast(e.message,'error');});

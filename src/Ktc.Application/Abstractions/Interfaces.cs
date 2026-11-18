@@ -99,12 +99,15 @@ public interface IDashboardService
 /// <summary>Cash Forecasting menu (phase 1). Results are estimates, except the counts and the daily cash history.</summary>
 public interface ICashForecastService
 {
-    /// <summary>The latest stored estate forecast; computed when none exists yet.</summary>
-    Task<EstateCashForecast> GetEstateAsync(CancellationToken ct = default);
+    /// <summary>
+    /// The latest stored estate forecast (computed when none exists yet). <paramref name="lowPct"/> = low-cash threshold as a percent of
+    /// cassette capacity; null keeps CashForecast:LowNotes. Status, run-out and suggestions are recalculated for it.
+    /// </summary>
+    Task<EstateCashForecast> GetEstateAsync(double? lowPct = null, CancellationToken ct = default);
     /// <summary>Reads every ATM's cash units and the transactions, stores the daily snapshot and daily cash history, and stores the estate forecast.</summary>
     Task<EstateCashForecast> RunAsync(string trigger, CancellationToken ct = default);
     /// <summary>One ATM, live: forecast (with notes per denomination since the reset), reconciliation XFS / EJ / application counters, history.</summary>
-    Task<AtmCashForecastDetail?> GetAtmAsync(string atmId, CancellationToken ct = default);
+    Task<AtmCashForecastDetail?> GetAtmAsync(string atmId, double? lowPct = null, CancellationToken ct = default);
     /// <summary>Actual cash withdrawn / deposited per day across the estate from the stored history (last <paramref name="days"/> days).</summary>
     Task<IReadOnlyList<CashDailyPoint>> GetDailyAsync(int days, CancellationToken ct = default);
 }

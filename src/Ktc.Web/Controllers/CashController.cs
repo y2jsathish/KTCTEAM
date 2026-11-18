@@ -17,25 +17,30 @@ public class CashController : Controller
     [Audit("CashView", "Cash forecast of one ATM")]
     public IActionResult Atm(string id) { ViewBag.AtmId = id; return View(); }
 
-    /// <summary>The latest stored estate forecast (computed on first use).</summary>
+    /// <summary>The latest stored estate forecast (computed on first use). lowPct = low-cash threshold, % of cassette capacity (empty = configured).</summary>
     [HttpGet("/data/cash/forecast")]
-    public async Task<IActionResult> Forecast(CancellationToken ct) => Ok(await _cash.GetEstateAsync(ct));
+    public async Task<IActionResult> Forecast(double? lowPct, CancellationToken ct)
+        => Bad(lowPct) is { } e ? BadRequest(new { error = e }) : Ok(await _cash.GetEstateAsync(lowPct, ct));
+
+    private static string? Bad(double? lowPct) => lowPct is { } p && (!double.IsFinite(p) || p < 0 || p > 100) ? "The low-cash threshold must be a percent from 0 to 100." : null;
 
     /// <summary>Recalculates the estate now (reads every ATM's cash units; takes a while on a large estate).</summary>
     [HttpPost("/data/cash/recalculate"), Authorize(Policy = Policies.Operator)]
-    public async Task<IActionResult> Recalculate(CancellationToken ct)
+    public async Task<IActionResult> Recalculate(double? lowPct, CancellationToken ct)
     {
+        if (Bad(lowPct) is { } e) return BadRequest(new { error = e });
         var f = await _cash.RunAsync("by " + (User.Identity?.Name ?? "user"), ct);
         await _audit.LogAsync("CashForecast", "Recalculate", null, $"{f.Atms.Count} ATMs");
-        return Ok(f);
+        return Ok(await _cash.GetEstateAsync(lowPct, ct));
     }
 
     /// <summary>One ATM, live: forecast, reconciliation XFS / EJ / application counters, daily cash and snapshots.</summary>
     [HttpGet("/data/cash/atm/{id}")]
-    public async Task<IActionResult> AtmData(string id, CancellationToken ct)
+    public async Task<IActionResult> AtmData(string id, double? lowPct, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(id)) return BadRequest(new { error = "Select an ATM." });
-        var d = await _cash.GetAtmAsync(id.Trim(), ct);
+        if (Bad(lowPct) is { } e) return BadRequest(new { error = e });
+        var d = await _cash.GetAtmAsync(id.Trim(), lowPct, ct);
         return d == null ? NotFound(new { error = $"No ATM matches \"{id.Trim()}\"." }) : Ok(d);
     }
 

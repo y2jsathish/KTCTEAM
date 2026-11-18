@@ -90,5 +90,12 @@ window.KTC = (function () {
   document.addEventListener('click', e => { if (!box.contains(e.target) && e.target !== gs) box.classList.add('d-none'); });
   document.addEventListener('keydown', e => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); gs.focus(); } });
   sess(); pills(); realtime(); setInterval(() => pills(), 60000);
-  return { api, qs, esc, css, toast, local, ago, health, sev, slaBadge, table, reload, details, chart, pal, status, legend, hooks, csrf, pills };
+  // Cash Forecasting low-cash threshold (% of cassette capacity), remembered per browser; '' = the configured default.
+  const cashPct = {
+    key: 'ktc.cash.lowPct',
+    get() { try { const u = new URLSearchParams(location.search).get('lowPct'); if (u !== null && u !== '' && isFinite(+u)) return String(+u); const v = localStorage.getItem(this.key); return v !== null && v !== '' && isFinite(+v) ? v : ''; } catch { return ''; } },
+    set(v) { try { if (v === '' || v == null) localStorage.removeItem(this.key); else localStorage.setItem(this.key, String(v)); } catch { /* storage blocked */ } },
+    qs() { const v = this.get(); return v === '' ? '' : 'lowPct=' + encodeURIComponent(v); }
+  };
+  return { api, qs, esc, css, toast, local, ago, health, sev, slaBadge, table, reload, details, chart, pal, status, legend, hooks, csrf, pills, cashPct };
 })();

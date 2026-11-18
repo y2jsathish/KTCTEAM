@@ -184,4 +184,40 @@ public class CashForecastTests
         Assert.True(CashSnapshotJob.Due(day.AddHours(8), day.AddHours(23.2), 23, startup: false));
         Assert.False(CashSnapshotJob.Due(day.AddHours(23.1), day.AddHours(23.5), 23, startup: false));
     }
+
+    [Fact]
+    public void Threshold_percent_converts_to_notes_and_defaults_to_today()
+    {
+        Assert.Equal(2, O.DefaultLowPct);                          // 50 of 2500
+        Assert.Equal(50, O.LowNotesFor(2));
+        Assert.Equal(250, O.LowNotesFor(10));
+        Assert.Equal(13, O.LowNotesFor(0.5));                       // 12.5 rounded up
+        Assert.Equal(2500, O.LowNotesFor(150));                     // clamped
+        var c = O.WithLowNotes(250);
+        Assert.Equal(250, c.LowNotes);
+        Assert.Equal(50, O.LowNotes);                               // the original is unchanged
+    }
+
+    [Fact]
+    public void Rethreshold_with_the_same_threshold_changes_nothing_and_a_higher_one_brings_run_out_forward()
+    {
+        var units = new[] { U("1", 100, 650), U("2", 200, 2000) };
+        var notes = new[] { new NotesByDenomination("100", 100, "1", 200, 0), new NotesByDenomination("200", 200, "2", 100, 0) };
+        var f = CashForecastRules.Build(In(units, notes: notes, reset: Now.AddDays(-2)), O);   // unit 1: 100/day, 600 usable -> 6 days
+        var same = CashForecastRules.Rethreshold(f, O, Now.AddHours(4));
+        Assert.Equal(f.Units.Select(u => (u.DaysLeft, u.Status)), same.Units.Select(u => (u.DaysLeft, u.Status)));
+        Assert.Equal(f.Status, same.Status);
+        Assert.Equal("OK", f.Status);
+
+        var high = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(16)), Now.AddHours(4));   // 400 notes
+        Assert.Equal(2.5, high.Units[0].DaysLeft);
+        Assert.Equal("Warning", high.Units[0].Status);
+        Assert.Equal("Warning", high.Status);
+        Assert.Equal(2.5, high.DaysLeft);
+        Assert.Equal(Now.AddDays(1.5), high.Suggestion!.VisitByUtc);
+
+        var out26 = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(26)), Now.AddHours(4));  // 650 notes
+        Assert.Equal("Out", out26.Units[0].Status);
+        Assert.Equal("Out", out26.Status);
+    }
 }
