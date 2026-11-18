@@ -105,7 +105,7 @@
       <div id="actFields" class="row g-2"></div>
       <hr class="my-2">
       <div class="row g-2">
-        <div class="col-md-3 col-12"><label class="form-label small mb-1" for="actTicket">Ticket number <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="actTicket" maxlength="40" required></div>
+        <div class="col-md-3 col-12"><label class="form-label small mb-1" for="actTicket">Ticket / reference <span class="text-muted">(optional)</span></label><input class="form-control form-control-sm" id="actTicket" maxlength="40" list="atmOpenTickets" placeholder="Optional" autocomplete="off"><datalist id="atmOpenTickets"></datalist></div>
         <div class="col-md-9 col-12"><label class="form-label small mb-1" for="actReason">Reason <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="actReason" maxlength="500" required placeholder="Why this command is needed (card numbers are masked)"></div>
       </div>
       <div id="actFormErr" class="small text-danger mt-1"></div>
@@ -141,7 +141,7 @@
     <ol class="small mb-2"><li>Wait until no customer transaction is in progress.</li><li>Take the ATM out of service, then check again that it is idle.</li><li>Reboot, and watch the ATM go offline and come back.</li><li>Check the devices, then put the ATM back in service.</li></ol>
     <div class="small text-muted mb-2">If out of service fails, nothing else is sent. If the reboot fails, the ATM is put back in service. If it does not come back, or devices report faults, it stays out of service and an alert is raised.</div>
     <div class="row g-2">
-      <div class="col-md-4 col-12"><label class="form-label small mb-1" for="rbTicket">Ticket number <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="rbTicket" maxlength="40"></div>
+      <div class="col-md-4 col-12"><label class="form-label small mb-1" for="rbTicket">Ticket / reference <span class="text-muted">(optional)</span></label><input class="form-control form-control-sm" id="rbTicket" maxlength="40" list="atmOpenTickets" placeholder="Optional" autocomplete="off"></div>
       <div class="col-md-8 col-12"><label class="form-label small mb-1" for="rbReason">Reason <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="rbReason" maxlength="500"></div>
       <div class="col-md-6 col-12"><label class="form-label small mb-1" for="rbAtm">Type the ATM id to confirm</label><input class="form-control form-control-sm" id="rbAtm" autocomplete="off"></div>
     </div>

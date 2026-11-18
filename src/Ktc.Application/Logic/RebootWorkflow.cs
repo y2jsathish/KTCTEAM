@@ -29,7 +29,7 @@ public static class RebootWorkflow
     private static void Go(RebootRun r, RebootStep s, DateTime now) { r.Step = s; r.StepStartedUtc = now; r.Retries = 0; r.UpdatedUtc = now; }
     private static void End(RebootRun r, RebootState st, DateTime now, string msg, bool ok) { r.State = st; Log(r, now, msg, ok); }
     private static bool Over(RebootRun r, DateTime now, int minutes) => now - r.StepStartedUtc > TimeSpan.FromMinutes(Math.Max(1, minutes));
-    private static string Comment(RebootRun r, string what) => $"Ticket {r.Ticket}: {r.Reason} [guided reboot: {what}, requested by {r.User}] (via KTC Monitoring Portal, ref {r.Id})";
+    private static string Comment(RebootRun r, string what) => $"{(r.Ticket.Length > 0 ? $"Ticket {r.Ticket}: " : "")}{r.Reason} [guided reboot: {what}, requested by {r.User}] (via KTC Monitoring Portal, ref {r.Id})";
 
     public static async Task StepAsync(RebootRun r, IRebootProbe p, RebootWorkflowOptions o, DateTime now, CancellationToken ct = default)
     {
@@ -42,7 +42,7 @@ public static class RebootWorkflow
         switch (r.Step)
         {
             case RebootStep.Starting:
-                Log(r, now, $"Reboot requested by {r.User} (ticket {r.Ticket}).");
+                Log(r, now, $"Reboot requested by {r.User}{(r.Ticket.Length > 0 ? $" (ticket {r.Ticket})" : "")}.");
                 Go(r, RebootStep.WaitingForIdle, now);
                 Log(r, now, "Waiting until no customer transaction is in progress.");
                 return;

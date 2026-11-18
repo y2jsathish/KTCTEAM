@@ -198,7 +198,9 @@ public class KtcActionsOptions
     /// only after the real command list has been reviewed.
     /// </summary>
     public bool SendEnabled { get; set; }
-    /// <summary>The ticket number must exist in KTC (GET Ticket/{id}) and, when KTC says which ATM it is for, be for this ATM.</summary>
+    /// <summary>A ticket must be given for every command and reboot. Off by default (the bank's choice): the ticket is an optional reference.</summary>
+    public bool RequireTicket { get; set; }
+    /// <summary>With RequireTicket: the ticket must exist in KTC (GET Ticket/{id}) and, when KTC says which ATM it is for, be for this ATM.</summary>
     public bool VerifyTicketInKtc { get; set; } = true;
     /// <summary>Minimum length of the reason.</summary>
     public int MinReasonLength { get; set; } = 10;

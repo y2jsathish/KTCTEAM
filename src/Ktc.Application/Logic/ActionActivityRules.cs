@@ -11,7 +11,7 @@ namespace Ktc.Application.Logic;
 /// <summary>Reads KTC actions, their comments and uploaded files, and applies the PCI file rules. Pure and unit-tested.</summary>
 public static partial class ActionActivityRules
 {
-    [GeneratedRegex(@"Ticket\s+(?<t>[^\s:]+):\s*(?<r>.*?)\s*\(via KTC Monitoring Portal, ref (?<ref>\w+)\)", RegexOptions.Singleline)]
+    [GeneratedRegex(@"(?:Ticket\s+(?<t>[^\s:]+):\s*)?(?<r>.*?)\s*\(via KTC Monitoring Portal, ref (?<ref>\w+)\)", RegexOptions.Singleline)]
     private static partial Regex PortalComment();
     // Magnetic stripe track 1 (%B...^NAME^...?) and track 2 (;PAN=YYMM...?) data.
     [GeneratedRegex(@"%B\d{12,19}\^[^\^\r\n]{0,26}\^[^?\r\n]*\??|;?\d{12,19}=\d{4}[^?\s]*\??")]
@@ -44,7 +44,7 @@ public static partial class ActionActivityRules
             // Guided flows send with the service account and name the person: "... [guided reboot: out of service, requested by alice]".
             var r = m.Groups["r"].Value; var g = Regex.Match(r, @"\s*\[(?<what>guided [^\]]*?), requested by (?<u>[^\]]+)\]\s*$");
             if (g.Success) { r = r[..g.Index] + " (" + g.Groups["what"].Value + ")"; user = g.Groups["u"].Value; }
-            return (user, m.Groups["t"].Value, PanMasker.Mask(r), m.Groups["ref"].Value);
+            return (user, m.Groups["t"].Success ? m.Groups["t"].Value : null, PanMasker.Mask(r), m.Groups["ref"].Value);
         }
         return (user, null, texts.Count > 0 ? PanMasker.Mask(string.Join(" / ", texts)) : null, null);
     }

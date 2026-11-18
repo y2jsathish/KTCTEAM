@@ -70,4 +70,11 @@ public class ActionActivityTests
             "<Comments><Comment User=\"KTC Monitoring Portal\">Ticket 7: Frozen [guided reboot: reboot, requested by alice] (via KTC Monitoring Portal, ref r1)</Comment></Comments>");
         Assert.Equal("alice", user); Assert.Equal("7", ticket); Assert.Equal("Frozen (guided reboot: reboot)", reason);
     }
+
+    [Fact]
+    public void Portal_comment_without_a_ticket_is_read()
+    {
+        var (_, ticket, reason, re) = ActionActivityRules.ParseComments("ATM frozen on the welcome screen (via KTC Monitoring Portal, ref abc123)");
+        Assert.Null(ticket); Assert.Equal("ATM frozen on the welcome screen", reason); Assert.Equal("abc123", re);
+    }
 }

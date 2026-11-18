@@ -84,7 +84,7 @@
   const canCancel=r.state==='Running'&&['Starting','WaitingForIdle','TakingOutOfService','ReCheckingIdle'].includes(r.step);
   return `<div class="border rounded p-2 mb-2" data-run="${K.esc(r.id)}">
    <div class="d-flex flex-wrap align-items-center gap-2 small"><i class="bi bi-arrow-repeat text-danger"></i><b>Guided reboot</b><span class="sbadge ${stateCls[r.state]||'unknown'}">${K.esc(stateText[r.state]||r.state)}</span>
-    <span>Ticket <b>${K.esc(r.ticket)}</b> · ${K.esc(r.reason)}</span><span class="text-muted">by ${K.esc(r.user)} · started ${K.esc(t(r.createdUtc))}${r.finished?` · took ${dur(r.createdUtc,r.updatedUtc)}`:''}</span>
+    <span>${r.ticket?`Ticket <b>${K.esc(r.ticket)}</b> · `:''}${K.esc(r.reason)}</span><span class="text-muted">by ${K.esc(r.user)} · started ${K.esc(t(r.createdUtc))}${r.finished?` · took ${dur(r.createdUtc,r.updatedUtc)}`:''}</span>
     ${canCancel?`<button class="btn btn-sm btn-outline-secondary ms-auto" data-cancel="${K.esc(r.id)}"><i class="bi bi-x"></i> Cancel</button>`:''}</div>
    <div class="d-flex flex-wrap my-2">${steps}</div>
    <details${r.state!=='Completed'?' open':''}><summary class="small text-muted">Audit trail (${r.events.length})</summary><ul class="list-unstyled small mb-0 mt-1">${r.events.map(e=>`<li><span class="text-muted text-nowrap">${K.esc(t(e.utc))}</span> <i class="bi ${e.ok?'bi-check text-success':'bi-exclamation-triangle text-danger'}"></i> ${K.esc(e.message)}${e.actionId?` <span class="text-muted">(KTC action #${K.esc(e.actionId)})</span>`:''}</li>`).join('')}</ul></details></div>`;
