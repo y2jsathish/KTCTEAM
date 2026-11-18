@@ -58,13 +58,38 @@
    ['Received Time',val(E,'ReceivedTime','TimeReceived','TimeAdded')],['Error Code Closed',val(E,'TimeClosed','ClosedTime')],['Counts as Downtime',val(E,'CountsAsDowntime','IsDowntime','Downtime')]]);
   const ect=grid('Error Code Type Information',[['Error Text',val(C,'ErrorText','Text','Name')||t.errorText],['Error Description',val(C,'Description','ErrorDescription')],['Error Level',val(C,'Level','ErrorLevel')],['Category',val(C,'Category','CategoryName')],['Help Text',val(C,'HelpText','Help')]]);
   const com=`<h6 class="small fw-semibold mt-2">Comments <span class="text-muted fw-normal">(card numbers masked)</span></h6>${d.comments.length?`<div class="table-responsive"><table class="table table-sm small mb-0"><thead><tr><th>User</th><th>Time</th><th>Comment</th></tr></thead><tbody>${d.comments.map(c=>`<tr><td class="text-nowrap">${K.esc(c.user||'')}</td><td class="text-nowrap">${K.esc(ktcDate(c.utc))}</td><td class="text-break">${K.esc(c.text)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="text-muted small">No comments.</div>'}`;
+  const W=await K.api('/data/tickets/'+encodeURIComponent(id)+'/write').catch(()=>null);
+  const write=W?`<div class="border rounded p-2 mt-2" id="tkWrite"><h6 class="small fw-semibold mb-1"><i class="bi bi-chat-left-text"></i> Add to this ticket</h6>
+   ${W.enabled?'':'<div class="alert alert-info py-1 small mb-2"><i class="bi bi-info-circle"></i> Writing to KTC tickets is off (<code>TicketWrite:Enabled</code>). You can fill this in and run the checks; nothing is sent.</div>'}
+   <label class="form-label small mb-1" for="tkComment">Comment <span class="text-muted">(${W.minCommentLength}–${W.maxCommentLength} characters; card numbers are masked before sending)</span></label>
+   <textarea class="form-control form-control-sm" id="tkComment" rows="2" maxlength="${W.maxCommentLength}"></textarea>
+   <div class="d-flex flex-wrap gap-2 align-items-end mt-2">
+    <button class="btn btn-sm btn-primary" id="tkAddBtn"><i class="bi bi-chat-left-dots"></i> Add comment</button>
+    ${W.canClose?`<div><label class="form-label small mb-1" for="tkConfirm">To close, type the ticket number</label><input class="form-control form-control-sm" id="tkConfirm" autocomplete="off" style="max-width:12rem"></div>
+     <button class="btn btn-sm btn-danger" id="tkCloseBtn"><i class="bi bi-check2-square"></i> Close ticket with this comment</button>`
+     :`<span class="small text-muted"><i class="bi bi-lock"></i> Close: ${K.esc(W.closeBlockedReason||'not available')}</span>`}
+   </div><div id="tkWriteRes" class="mt-2"></div></div>`:'';
   $id('tkInfo').innerHTML=(d.warnings.length?`<div class="alert alert-warning py-1 small">${d.warnings.map(K.esc).join('<br>')}</div>`:'')
-   +`<div class="row g-2"><div class="col-lg-6">${info}</div><div class="col-lg-6">${type}</div><div class="col-lg-6">${err}</div><div class="col-lg-6">${ect}</div></div>${com}`;
+   +`<div class="row g-2"><div class="col-lg-6">${info}</div><div class="col-lg-6">${type}</div><div class="col-lg-6">${err}</div><div class="col-lg-6">${ect}</div></div>${com}${write}`;
+  if(W){$id('tkAddBtn').onclick=()=>writeTicket(id,atmId,'comment');if($id('tkCloseBtn'))$id('tkCloseBtn').onclick=()=>writeTicket(id,atmId,'close');}
   $id('tkSla').innerHTML=d.sla.length?d.sla.map((s,i)=>`<h6 class="small fw-semibold">SLA ${i+1}</h6>${kv(s)}`).join(''):`<div class="small">No SLA</div><div class="small text-muted">KTC (GET Ticket/${K.esc(id)}/SLA) returned no SLA for this ticket.</div>`;
   $id('tkNotif').innerHTML=d.notifications.length?d.notifications.map(kv).join('<hr>'):'<div class="small text-muted">No queued notifications on this ticket record. KTC\'s API has no read call for queued notifications, so only what the ticket itself carries is shown.</div>';
   $id('tkKids').innerHTML=d.children.length?`<table class="table table-sm small"><thead><tr><th>Ticket ID</th><th>Type</th><th>Status</th><th>Created</th><th>Closed</th></tr></thead><tbody>${d.children.map(c=>`<tr><td>${K.esc(c.id)}</td><td>${K.esc(c.typeName)}</td><td>${K.esc(c.ktcStatus)}</td><td>${K.esc(ktcDate(c.createdUtc))}</td><td>${K.esc(ktcDate(c.closedUtc))}</td></tr>`).join('')}</tbody></table>`:'<div class="small text-muted">No child tickets.</div>';
   $id('tkAll').innerHTML=`<h6 class="small fw-semibold">Ticket</h6>${kv(F)}${T?`<h6 class="small fw-semibold mt-2">Ticket type</h6>${kv(T)}`:''}${E?`<h6 class="small fw-semibold mt-2">Error</h6>${kv(E)}`:''}${C?`<h6 class="small fw-semibold mt-2">Error code type</h6>${kv(C)}`:''}`;
   $id('tkSrc').textContent='From KTC: '+d.sources.join(', ');
+ }
+
+ // Add comment / close: the server checks everything, sends only when TicketWrite:Enabled is on, and audits each attempt.
+ async function writeTicket(id,atmId,what){
+  const btns=['tkAddBtn','tkCloseBtn'].map($id).filter(Boolean);btns.forEach(b=>b.disabled=true);
+  const body={comment:$id('tkComment').value,confirmTicketId:$id('tkConfirm')?$id('tkConfirm').value:null};
+  try{const r=await K.api(`/data/tickets/${encodeURIComponent(id)}/${what}`,{json:body});
+   const box=`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message)} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
+    <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>`;
+   if(r.done){K.toast(r.message,'ok');await details(id,atmId);load().catch(()=>{});}
+   if($id('tkWriteRes'))$id('tkWriteRes').innerHTML=box;
+  }catch(e){if($id('tkWriteRes'))$id('tkWriteRes').innerHTML=`<div class="alert alert-danger py-1 small">${K.esc(e.message)}</div>`;}
+  btns.forEach(b=>{if(document.body.contains(b))b.disabled=false;});
  }
 
  $id('statusTiles').addEventListener('click',e=>{const t=e.target.closest('[data-s]');if(t){cat=t.dataset.s;$id('fStatus').value='';load();}});

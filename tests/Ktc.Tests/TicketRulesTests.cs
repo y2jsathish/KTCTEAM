@@ -68,4 +68,21 @@ public class TicketRulesTests
         Assert.Equal(3, f.Count);
         Assert.DoesNotContain("4111111111111111", f[1].Value);
     }
+
+    [Fact]
+    public void Close_body_keeps_the_record_and_sets_closed_fields()
+    {
+        var now = new DateTime(2026, 11, 18, 10, 0, 0, DateTimeKind.Utc);
+        var o = TicketRules.CloseBody(J("""{"ID":5,"StatusByte":1,"TimeClosed":null,"TimeUpdated":"2026-11-18T09:00:00Z","ClosureModeByte":1,"OwnerID":7}"""), 4, 0, now);
+        Assert.Equal(4, (int)o["StatusByte"]!); Assert.Equal(0, (int)o["ClosureModeByte"]!); Assert.Equal(7, (int)o["OwnerID"]!);
+        Assert.StartsWith("2026-11-18T10:00:00", (string)o["TimeClosed"]!); Assert.StartsWith("2026-11-18T10:00:00", (string)o["TimeUpdated"]!);
+        Assert.False(o.ContainsKey("ClosureMode"));                          // only fields KTC already had
+    }
+
+    [Fact]
+    public void Comment_body_masks_card_numbers()
+    {
+        var json = JsonSerializer.Serialize(TicketRules.CommentBody("543110", "alice", "card 4111111111111111 retained", 4, 2, DateTime.UtcNow));
+        Assert.DoesNotContain("4111111111111111", json); Assert.Contains("\"rowID\":543110", json); Assert.Contains("\"table\":4", json);
+    }
 }

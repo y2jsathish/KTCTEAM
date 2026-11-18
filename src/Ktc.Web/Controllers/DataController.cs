@@ -185,6 +185,20 @@ public class DataController : ControllerBase
         return d == null ? NotFound(new { error = $"KTC has no ticket {id}." }) : Ok(d);
     }
 
+    // ---------- ticket comment / close (TicketWrite:Enabled) ----------
+    [HttpGet("tickets/{id}/write")]
+    public async Task<IActionResult> TicketWriteState(string id, [FromServices] ITicketWriteService w, CancellationToken ct) => Ok(await w.StateAsync(id, ct));
+
+    [HttpPost("tickets/{id}/comment")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("atm-actions")]
+    public async Task<IActionResult> TicketComment(string id, [FromBody] TicketWriteRequest? q, [FromServices] ITicketWriteService w, CancellationToken ct) =>
+        q == null ? BadRequest(new { error = "Invalid request body." }) : Ok(await w.AddCommentAsync(id, q, ct));
+
+    [HttpPost("tickets/{id}/close")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("atm-actions")]
+    public async Task<IActionResult> TicketClose(string id, [FromBody] TicketWriteRequest? q, [FromServices] ITicketWriteService w, CancellationToken ct) =>
+        q == null ? BadRequest(new { error = "Invalid request body." }) : Ok(await w.CloseAsync(id, q, ct));
+
     // ---------- transactions ----------
     [HttpGet("transactions")]
     [Audit("Search", "Transaction search")]
