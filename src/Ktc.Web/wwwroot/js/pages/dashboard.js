@@ -32,8 +32,16 @@
  let cashLast;
  function cashRender(f){
   cashLast=f;const P=K.pal(),d=f.daily||[],day=x=>new Date(x).toLocaleDateString([], {day:'numeric',month:'short'});
-  K.chart('cCashDaily',{type:'bar',data:{labels:d.map(x=>day(x.day)+(x.partial?' (so far)':'')),datasets:[{label:'Withdrawn',data:d.map(x=>x.withdrawn),backgroundColor:d.map(x=>x.partial?K.css('--grid'):P[0]),borderRadius:4,maxBarThickness:24}]},options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
-  document.getElementById('cashDailyNote').textContent=d.length?`Successful customer withdrawals, ${d.length} stored day(s).`:'No daily cash history stored yet.';
+  // One bar chart per kind (amount per day; count in the tooltip); today's bar is grey because the day is not over.
+  const daily=(id,noteId,amt,cnt,color,what)=>{
+   K.chart(id,{type:'bar',data:{labels:d.map(x=>day(x.day)+(x.partial?' (so far)':'')),datasets:[{label:'Amount',data:d.map(x=>x[amt]||0),backgroundColor:d.map(x=>x.partial?K.css('--grid'):color),borderRadius:4,maxBarThickness:24}]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>'Amount: '+Number(c.parsed.y).toLocaleString(),afterLabel:c=>`${d[c.dataIndex][cnt]||0} ${what}`}}},scales:{y:{beginAtZero:true}}}});
+   const tot=d.filter(x=>!x.partial).reduce((t,x)=>t+(x[cnt]||0),0);
+   document.getElementById(noteId).textContent=!d.length?'No daily history stored yet.':tot===0&&!d.some(x=>x[cnt])?`No successful ${what} in the ${d.length} stored day(s).`:`Successful ${what}, ${d.length} stored day(s).`;
+  };
+  daily('cCashDaily','cashDailyNote','withdrawn','withdrawals',P[0],'cash withdrawals');
+  daily('cCashDep','cashDepNote','deposited','deposits',P[2],'cash deposits');
+  daily('cChqDep','chqDepNote','chequeDeposited','chequeDeposits',P[4],'cheque deposits');
   const n=s=>f.atms.filter(a=>a.status===s).length, cash=f.atms.reduce((t,a)=>t+(a.cashAmount||0),0);
   const soon=f.atms.filter(a=>['Out','Critical','Warning'].includes(a.status)).slice(0,8);
   document.getElementById('cashOutlook').innerHTML=`<div class="d-flex flex-wrap gap-3 mb-2"><div><div class="text-muted">Cash in ATMs</div><b>${Math.round(cash).toLocaleString()}</b></div><div><div class="text-muted">Out now</div><b>${n('Out')}</b></div><div><div class="text-muted">Within 1 day</div><b>${n('Critical')}</b></div><div><div class="text-muted">Within 3 days</div><b>${n('Warning')}</b></div></div>`

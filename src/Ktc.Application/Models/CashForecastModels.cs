@@ -22,7 +22,9 @@ public record AtmCashForecast(string AtmId, string AtmName, string Client, DateT
     double[]? WeekdayFactors = null);
 
 /// <summary>Cash moved by successful customer transactions on one portal-local day (actual, not an estimate). Partial = the day is not over.</summary>
-public record CashDailyPoint(DateTime Day, int Withdrawals, decimal Withdrawn, int Deposits, decimal Deposited, bool Partial);
+/// <remarks>Deposits / Deposited are cash deposits; ChequeDeposits / ChequeDeposited are cheque deposits (no notes move).</remarks>
+public record CashDailyPoint(DateTime Day, int Withdrawals, decimal Withdrawn, int Deposits, decimal Deposited, bool Partial,
+    int ChequeDeposits = 0, decimal ChequeDeposited = 0);
 
 /// <summary>Notes in one cash unit at the daily snapshot.</summary>
 public record CashSnapshotPoint(DateTime Day, string Unit, decimal? Denomination, long Notes);

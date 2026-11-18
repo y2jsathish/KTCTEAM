@@ -90,7 +90,7 @@ public class KtcDbContext : DbContext
         {
             e.HasIndex(x => new { x.AtmId, x.Day }).IsUnique(); e.HasIndex(x => x.Day);
             e.Property(x => x.AtmId).HasMaxLength(100); e.Property(x => x.AtmName).HasMaxLength(200); e.Property(x => x.Client).HasMaxLength(200);
-            e.Property(x => x.AmountWithdrawn).HasPrecision(18, 2); e.Property(x => x.AmountDeposited).HasPrecision(18, 2);
+            e.Property(x => x.AmountWithdrawn).HasPrecision(18, 2); e.Property(x => x.AmountDeposited).HasPrecision(18, 2); e.Property(x => x.AmountChequeDeposited).HasPrecision(18, 2);
         });
     }
 }

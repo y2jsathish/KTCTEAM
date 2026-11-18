@@ -185,11 +185,12 @@ public class CashForecastService : ICashForecastService
     }
 
     // ---------------- helpers ----------------
-    private static CashDailyPoint ToPoint(CashDailyUsage u) => new(u.Day, u.Withdrawals, u.AmountWithdrawn, u.Deposits, u.AmountDeposited, u.Partial);
+    private static CashDailyPoint ToPoint(CashDailyUsage u) => new(u.Day, u.Withdrawals, u.AmountWithdrawn, u.Deposits, u.AmountDeposited, u.Partial, u.ChequeDeposits, u.AmountChequeDeposited);
 
     private static List<CashDailyPoint> EstateDaily(IEnumerable<CashDailyUsage> rows, DateTime from) =>
         rows.Where(u => u.Day >= from).GroupBy(u => u.Day).OrderBy(g => g.Key)
-            .Select(g => new CashDailyPoint(g.Key, g.Sum(x => x.Withdrawals), g.Sum(x => x.AmountWithdrawn), g.Sum(x => x.Deposits), g.Sum(x => x.AmountDeposited), g.Any(x => x.Partial))).ToList();
+            .Select(g => new CashDailyPoint(g.Key, g.Sum(x => x.Withdrawals), g.Sum(x => x.AmountWithdrawn), g.Sum(x => x.Deposits), g.Sum(x => x.AmountDeposited), g.Any(x => x.Partial),
+                g.Sum(x => x.ChequeDeposits), g.Sum(x => x.AmountChequeDeposited))).ToList();
 
     /// <summary>Average amount withdrawn per full day over the last 28 stored days (null when none).</summary>
     private static decimal? WithdrawnPerDay(IReadOnlyList<CashDailyPoint> daily)
@@ -218,6 +219,7 @@ public class CashForecastService : ICashForecastService
                     else repo.Update(row);
                     row.AtmName = atm?.Name ?? g.First().AtmName; row.Client = atm?.Client ?? g.First().Client; row.CapturedUtc = nowUtc;
                     row.Withdrawals = d.Withdrawals; row.AmountWithdrawn = d.Withdrawn; row.Deposits = d.Deposits; row.AmountDeposited = d.Deposited; row.Partial = d.Partial;
+                    row.ChequeDeposits = d.ChequeDeposits; row.AmountChequeDeposited = d.ChequeDeposited;
                 }
             }
             await _uow.SaveChangesAsync(ct);

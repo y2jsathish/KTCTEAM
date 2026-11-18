@@ -547,3 +547,37 @@ GO
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261118061805_AddChequeDeposits'
+)
+BEGIN
+    ALTER TABLE [CashDailyUsages] ADD [AmountChequeDeposited] decimal(18,2) NOT NULL DEFAULT 0.0;
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261118061805_AddChequeDeposits'
+)
+BEGIN
+    ALTER TABLE [CashDailyUsages] ADD [ChequeDeposits] int NOT NULL DEFAULT 0;
+END;
+GO
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261118061805_AddChequeDeposits'
+)
+BEGIN
+    INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261118061805_AddChequeDeposits', N'8.0.11');
+END;
+GO
+
+COMMIT;
+GO
+

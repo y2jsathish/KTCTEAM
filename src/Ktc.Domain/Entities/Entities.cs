@@ -190,5 +190,7 @@ public class CashDailyUsage : Entity
     public decimal AmountWithdrawn { get; set; }
     public int Deposits { get; set; }
     public decimal AmountDeposited { get; set; }
+    public int ChequeDeposits { get; set; }
+    public decimal AmountChequeDeposited { get; set; }
     public bool Partial { get; set; }                // the day was not over when captured
 }
