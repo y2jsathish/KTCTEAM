@@ -122,8 +122,9 @@ public static partial class TicketRules
     }
 
     /// <summary>
-    /// The ticket as KTC returned it, changed to closed: StatusByte, TimeClosed, TimeUpdated and (when given) ClosureMode /
-    /// ClosureModeByte. Every other field is sent back unchanged, as KTC's PUT Ticket/{id} takes the whole record.
+    /// The ticket as KTC returned it, changed to closed: StatusByte, TimeClosed and (when given) ClosureMode / ClosureModeByte.
+    /// Every other field goes back unchanged, as KTC's PUT Ticket/{id} takes the whole record. TimeUpdated is kept as read:
+    /// with forceupdate=false KTC uses it to detect a concurrent change, and a new value can make it ignore the update.
     /// </summary>
     public static System.Text.Json.Nodes.JsonObject CloseBody(JsonElement ticket, int closedStatusByte, int? closureMode, DateTime nowUtc)
     {
@@ -136,9 +137,74 @@ public static partial class TicketRules
         }
         var ts = nowUtc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
         Set("StatusByte", closedStatusByte);
-        Set("TimeClosed", ts); Set("TimeUpdated", ts, onlyIfPresent: true);
+        Set("TimeClosed", ts);
         if (closureMode is int cm) { Set("ClosureMode", cm, onlyIfPresent: true); Set("ClosureModeByte", cm, onlyIfPresent: true); }
         return o;
+    }
+
+    /// <summary>
+    /// KTC's CommentsString with one more comment, written the way the existing comments are (same element name, attributes or
+    /// child elements, and timestamp format); a new &lt;Comments&gt; list when there is none. Card numbers masked.
+    /// </summary>
+    public static string AppendComment(string? commentsXml, string user, DateTime utc, string text)
+    {
+        text = PanMasker.Mask(text);
+        XElement root;
+        try { root = string.IsNullOrWhiteSpace(commentsXml) ? new XElement("Comments") : XElement.Parse(commentsXml); }
+        catch (System.Xml.XmlException) { root = new XElement("Comments"); }
+        var last = root.Elements().LastOrDefault();
+        var ts = utc.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture);
+        XElement n;
+        if (last != null && last.HasElements)
+        {
+            // <Comment><Timestamp/><User/><Comment/><Confidential/></Comment>
+            n = new XElement(last.Name);
+            foreach (var c in last.Elements())
+            {
+                var k = c.Name.LocalName;
+                n.Add(new XElement(c.Name, k.Equals("User", StringComparison.OrdinalIgnoreCase) || k.Equals("UserName", StringComparison.OrdinalIgnoreCase) ? user
+                    : k.Contains("Time", StringComparison.OrdinalIgnoreCase) || k.Contains("Date", StringComparison.OrdinalIgnoreCase) ? ts
+                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? "false"
+                    : k.Equals("Comment", StringComparison.OrdinalIgnoreCase) || k.Equals("Text", StringComparison.OrdinalIgnoreCase) ? text : c.Value));
+            }
+        }
+        else
+        {
+            // <Comment User="" Timestamp="" Confidential="">text</Comment> (also the form when there is no comment yet)
+            n = new XElement(last?.Name ?? "Comment");
+            var attrs = last?.Attributes().Select(a => a.Name).ToList() ?? new() { "User", "Timestamp", "Confidential" };
+            foreach (var a in attrs)
+            {
+                var k = a.LocalName;
+                n.SetAttributeValue(a, k.Equals("User", StringComparison.OrdinalIgnoreCase) || k.Equals("UserName", StringComparison.OrdinalIgnoreCase) ? user
+                    : k.Contains("Time", StringComparison.OrdinalIgnoreCase) || k.Contains("Date", StringComparison.OrdinalIgnoreCase) ? ts
+                    : k.Equals("Confidential", StringComparison.OrdinalIgnoreCase) ? "false"
+                    : k.Equals("Comment", StringComparison.OrdinalIgnoreCase) || k.Equals("Text", StringComparison.OrdinalIgnoreCase) ? text : last!.Attribute(a)!.Value);
+            }
+            if (!attrs.Any(a => a.LocalName.Equals("Comment", StringComparison.OrdinalIgnoreCase) || a.LocalName.Equals("Text", StringComparison.OrdinalIgnoreCase))) n.Value = text;
+        }
+        root.Add(n);
+        return root.ToString(SaveOptions.DisableFormatting);
+    }
+
+    /// <summary>The ticket record with one more comment in its CommentsString (the field name KTC used is kept).</summary>
+    public static System.Text.Json.Nodes.JsonObject WithComment(System.Text.Json.Nodes.JsonObject o, string user, DateTime utc, string text)
+    {
+        var key = o.Select(p => p.Key).FirstOrDefault(k => k.Equals("CommentsString", StringComparison.OrdinalIgnoreCase)) ?? "CommentsString";
+        o[key] = AppendComment(o[key]?.GetValue<string>(), user, utc, text);
+        return o;
+    }
+
+    /// <summary>True when KTC's record shows the ticket closed: a closed time, or the closed status number.</summary>
+    public static bool LooksClosed(JsonElement ticket, int? closedStatusByte) =>
+        KtcJson.Date(ticket, "TimeClosed", "ClosedDate", "Closed") != null
+        || (closedStatusByte is int c && KtcJson.Int(ticket, int.MinValue, "StatusByte") == c);
+
+    /// <summary>Short "StatusByte 1, TimeClosed none" description of a KTC ticket record, for the result and the audit.</summary>
+    public static string StateText(JsonElement ticket)
+    {
+        var sb = KtcJson.Str(ticket, "StatusByte"); var ext = KtcJson.Str(ticket, "ExternalStatusByte"); var tc = KtcJson.Date(ticket, "TimeClosed");
+        return $"StatusByte {(sb.Length > 0 ? sb : "none")}{(ext.Length > 0 ? ", ExternalStatusByte " + ext : "")}, TimeClosed {(tc == null ? "none" : tc.Value.ToString("yyyy-MM-dd HH:mm:ss") + " UTC")}";
     }
 
     /// <summary>POST api/v1/Comment body for a ticket comment (card numbers masked).</summary>

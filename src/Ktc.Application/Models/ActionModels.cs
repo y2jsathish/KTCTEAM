@@ -57,5 +57,9 @@ public record AtmActionCatalog(string Route, DateTime ReadUtc, bool Demo, bool O
 public record TicketWriteRequest(string? Comment, string? ConfirmTicketId = null);
 /// <summary>What the Ticket Details popup may offer for this ticket.</summary>
 public record TicketWriteState(bool Enabled, bool CanComment, bool CanClose, string? CloseBlockedReason, int MinCommentLength, int MaxCommentLength);
-public record TicketWriteResult(bool Done, string Message, IReadOnlyList<ActionCheck> Checks, string CorrelationId);
+public record TicketWriteResult(bool Done, string Message, IReadOnlyList<ActionCheck> Checks, string CorrelationId)
+{
+    /// <summary>What KTC answered at each step, and the ticket state read back (close only).</summary>
+    public IReadOnlyList<string> KtcSteps { get; init; } = Array.Empty<string>();
+}
 

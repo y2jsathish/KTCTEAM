@@ -75,7 +75,7 @@ public class TicketRulesTests
         var now = new DateTime(2026, 11, 18, 10, 0, 0, DateTimeKind.Utc);
         var o = TicketRules.CloseBody(J("""{"ID":5,"StatusByte":1,"TimeClosed":null,"TimeUpdated":"2026-11-18T09:00:00Z","ClosureModeByte":1,"OwnerID":7}"""), 4, 0, now);
         Assert.Equal(4, (int)o["StatusByte"]!); Assert.Equal(0, (int)o["ClosureModeByte"]!); Assert.Equal(7, (int)o["OwnerID"]!);
-        Assert.StartsWith("2026-11-18T10:00:00", (string)o["TimeClosed"]!); Assert.StartsWith("2026-11-18T10:00:00", (string)o["TimeUpdated"]!);
+        Assert.StartsWith("2026-11-18T10:00:00", (string)o["TimeClosed"]!); Assert.Equal("2026-11-18T09:00:00Z", (string)o["TimeUpdated"]!);
         Assert.False(o.ContainsKey("ClosureMode"));                          // only fields KTC already had
     }
 
@@ -84,5 +84,39 @@ public class TicketRulesTests
     {
         var json = JsonSerializer.Serialize(TicketRules.CommentBody("543110", "alice", "card 4111111111111111 retained", 4, 2, DateTime.UtcNow));
         Assert.DoesNotContain("4111111111111111", json); Assert.Contains("\"rowID\":543110", json); Assert.Contains("\"table\":4", json);
+    }
+
+    private static readonly DateTime T0 = new(2026, 11, 18, 10, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public void Append_comment_starts_a_list_when_there_is_none()
+    {
+        var x = TicketRules.AppendComment(null, "alice", T0, "Checked on site, card 4111111111111111");
+        Assert.StartsWith("<Comments><Comment ", x);
+        Assert.Contains("User=\"alice\"", x); Assert.Contains("2026-11-18T10:00:00.000Z", x); Assert.DoesNotContain("4111111111111111", x);
+        Assert.Single(TicketRules.ParseCommentsString(x));
+    }
+
+    [Fact]
+    public void Append_comment_copies_the_attribute_form()
+    {
+        var x = TicketRules.AppendComment("<Comments><Comment User=\"bob\" Timestamp=\"2026-11-17T08:00:00Z\">first</Comment></Comments>", "alice", T0, "second note");
+        var all = TicketRules.ParseCommentsString(x);
+        Assert.Equal(2, all.Count); Assert.Contains(all, c => c.Text == "second note" && c.User == "alice");
+    }
+
+    [Fact]
+    public void Append_comment_copies_the_child_element_form()
+    {
+        var x = TicketRules.AppendComment("<Comments><KtcComment><Timestamp>2026-11-17T08:00:00Z</Timestamp><User>bob</User><Comment>first</Comment></KtcComment></Comments>", "alice", T0, "second note");
+        Assert.Contains("<KtcComment><Timestamp>2026-11-18T10:00:00.000Z</Timestamp><User>alice</User><Comment>second note</Comment></KtcComment>", x);
+    }
+
+    [Fact]
+    public void Looks_closed_uses_the_closed_time_or_status()
+    {
+        Assert.True(TicketRules.LooksClosed(J("""{"StatusByte":1,"TimeClosed":"2026-11-18T10:00:00Z"}"""), null));
+        Assert.True(TicketRules.LooksClosed(J("""{"StatusByte":4,"TimeClosed":null}"""), 4));
+        Assert.False(TicketRules.LooksClosed(J("""{"StatusByte":1,"TimeClosed":null}"""), 4));
     }
 }

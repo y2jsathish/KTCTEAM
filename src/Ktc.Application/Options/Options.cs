@@ -259,7 +259,12 @@ public class TicketWriteOptions
     public const string Section = "TicketWrite";
     /// <summary>Master switch (env TicketWrite__Enabled=true).</summary>
     public bool Enabled { get; set; }
-    /// <summary>POST api/v1/Comment "table" value for tickets (KTC's comment table enum; the API sample shows 4).</summary>
+    /// <summary>
+    /// How comments are written: "Ticket" (default) adds them to the ticket's own CommentsString in PUT Ticket/{id};
+    /// "CommentApi" uses POST api/v1/Comment with CommentTable (4 is KTC's Action table: "Action not found" for tickets).
+    /// </summary>
+    public string CommentVia { get; set; } = "Ticket";
+    /// <summary>POST api/v1/Comment "table" value, only for CommentVia = CommentApi. Must be KTC's value for tickets.</summary>
     public int CommentTable { get; set; } = 4;
     /// <summary>POST api/v1/Comment "SendStatusParameter" (the API sample shows 2).</summary>
     public int SendStatusParameter { get; set; } = 2;
@@ -269,6 +274,8 @@ public class TicketWriteOptions
     public int? ManualClosureMode { get; set; }
     /// <summary>PUT Ticket/{id}?forceupdate= value.</summary>
     public bool ForceUpdate { get; set; }
+    /// <summary>When KTC's record still shows the ticket open after the PUT, also call PUT Ticket/{id}/ClosedDate, then check again.</summary>
+    public bool UseClosedDateCall { get; set; } = true;
     public int MinCommentLength { get; set; } = 10;
     public int MaxCommentLength { get; set; } = 1000;
 }
