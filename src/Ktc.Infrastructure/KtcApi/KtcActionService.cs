@@ -104,7 +104,7 @@ public class KtcActionService : IKtcActionService
         else
         {
             var xml = CommandParameterRules.BuildXml(cmd!.Parameters, values, _opt.ParametersRoot, _opt.ParameterElement, _opt.ParameterNameAttribute);
-            var comment = PanMasker.Mask($"Ticket {ticketNo}: {reason} (via KTC Monitoring Portal, ref {corr})");
+            var comment = PanMasker.Mask($"{(ticketNo.Length > 0 ? $"Ticket {ticketNo}: " : "")}{reason} (via KTC Monitoring Portal, ref {corr})");
             var body = new { Value1 = cmd.Id, Value2 = xml, Value3 = new[] { new { Timestamp = DateTime.UtcNow, User, Comment = comment, Confidential = false } } };
             // Not idempotent: never retried automatically, so one click sends at most one command.
             var r = await _api.SendAsync(HttpMethod.Post, $"api/v1/Client/{atm!.Id}/Actions", body, new KtcCallOptions { Idempotent = false }, ct);
@@ -135,16 +135,18 @@ public class KtcActionService : IKtcActionService
 
         // 2. Ticket and reason
         var ticketNo = (q.TicketNumber ?? "").Trim();
-        if (ticketNo.Length == 0) Check("Ticket number", false, "A ticket number is required.");
-        else if (ticketNo.Length > 40 || ticketNo.Any(c => char.IsControl(c))) Check("Ticket number", false, "The ticket number is not valid.");
-        else if (!_opt.VerifyTicketInKtc) Check("Ticket number", true, $"{ticketNo} (not checked in KTC: VerifyTicketInKtc is off)");
+        // The ticket is optional (the bank's choice): empty is fine, any reference is recorded in the comment and the audit,
+        // and a KTC ticket number is checked against KTC only when RequireTicket is on.
+        if (ticketNo.Length == 0) Check("Ticket", !_opt.RequireTicket, _opt.RequireTicket ? "A ticket number is required." : "None given (optional).");
+        else if (ticketNo.Length > 40 || ticketNo.Any(c => char.IsControl(c))) Check("Ticket", false, "The ticket or reference is not valid (40 characters at most, no control characters).");
+        else if (!_opt.RequireTicket || !_opt.VerifyTicketInKtc) Check("Ticket", true, $"{ticketNo} (recorded as a reference)");
         else
         {
             var t = await _data.GetTicketAsync(ticketNo, ct);
-            if (t == null) Check("Ticket number", false, $"Ticket {ticketNo} was not found in KTC. Enter the KTC ticket number (digits, as in the Tickets list) for this ATM.{await OpenTicketsHintAsync(atm, ct)}");
+            if (t == null) Check("Ticket", false, $"Ticket {ticketNo} was not found in KTC. Enter the KTC ticket number (digits, as in the Tickets list) for this ATM.{await OpenTicketsHintAsync(atm, ct)}");
             else if (atm != null && t.AtmId.Length > 0 && !t.AtmId.Equals(atm.Id, StringComparison.OrdinalIgnoreCase))
-                Check("Ticket number", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).{await OpenTicketsHintAsync(atm, ct)}");
-            else Check("Ticket number", true, $"Ticket {ticketNo} found in KTC{(t.AtmId.Length > 0 ? " for this ATM" : "")}.");
+                Check("Ticket", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).{await OpenTicketsHintAsync(atm, ct)}");
+            else Check("Ticket", true, $"Ticket {ticketNo} found in KTC{(t.AtmId.Length > 0 ? " for this ATM" : "")}.");
         }
         var reason = PanMasker.Mask((q.Reason ?? "").Trim());
         Check("Reason", reason.Length >= _opt.MinReasonLength && reason.Length <= 500,

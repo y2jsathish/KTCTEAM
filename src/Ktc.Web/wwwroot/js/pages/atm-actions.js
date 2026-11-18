@@ -20,7 +20,7 @@
  function formBtn(r,a){
   if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">Not mapped: KTC has no separate XFS reset command. Use Device reset; the ATM application handles out of service and the reset itself.</div>':''}`;
   const c=r.commands.find(x=>x.id===a.commandTypeId)||{},why=a.requiresDualAuth?'Needs a second login, not supported yet':c.sendBlockedReason||'';
-  return `<button class="btn btn-sm btn-outline-danger mt-2" data-useform="${a.commandTypeId}"${why?' disabled':''} title="${K.esc(why||'Fill in the parameters, ticket and reason, then confirm')}"><i class="bi ${why?'bi-lock':icons[a.key]||'bi-send'}"></i> ${K.esc(a.label)}…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;
+  return `<button class="btn btn-sm btn-outline-danger mt-2" data-useform="${a.commandTypeId}"${why?' disabled':''} title="${K.esc(why||'Fill in the parameters and reason, then confirm')}"><i class="bi ${why?'bi-lock':icons[a.key]||'bi-send'}"></i> ${K.esc(a.label)}…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;
  }
  function planned(r){
   return r.planned.map(a=>`<div class="col-xl-4 col-md-6 col-12"><div class="border rounded p-2 h-100">
@@ -85,7 +85,7 @@
    <tr><th class="w-25">ATM</th><td>${K.esc($id('title').textContent||id)} <span class="text-muted">(${K.esc(id)})</span></td></tr>
    <tr><th>Command</th><td>${K.esc(label(cur))} <code>${K.esc(cur.name)}</code> #${K.esc(cur.id)}</td></tr>
    ${cur.parameters.map(p=>`<tr><th>${K.esc(p.label)}</th><td>${v[p.name]===''?'<span class="text-muted">(empty)</span>':shown(p,v[p.name])}</td></tr>`).join('')}
-   <tr><th>Ticket</th><td>${K.esc(pending.ticketNumber)}</td></tr><tr><th>Reason</th><td>${K.esc(pending.reason)}</td></tr></tbody></table>`;
+   <tr><th>Ticket / reference</th><td>${pending.ticketNumber?K.esc(pending.ticketNumber):'<span class="text-muted">none</span>'}</td></tr><tr><th>Reason</th><td>${K.esc(pending.reason)}</td></tr></tbody></table>`;
   $id('actRisk').classList.toggle('d-none',!cur.highRisk);
   $id('actRisk').innerHTML=cur.highRisk?`<b>High-risk command.</b> ${K.esc(label(cur))} can take the ATM out of use or change it. Retype the command name <code>${K.esc(cur.name)}</code> and tick the box.`:'';
   $id('actTypeCmdBox').classList.toggle('d-none',!cur.highRisk);$id('actAckBox').classList.toggle('d-none',!cur.highRisk);
@@ -123,7 +123,7 @@
   $id('actPlanned').innerHTML=planned(r);picker(r);
   document.dispatchEvent(new CustomEvent('ktc:actions-catalog',{detail:r}));
  }
- // Suggest this ATM's open KTC tickets in the ticket boxes (the checks need a KTC ticket number for this ATM).
+ // Suggest this ATM's open KTC tickets in the optional ticket boxes.
  async function openTickets(){try{const r=await K.api(`/data/tickets?atmId=${encodeURIComponent(id)}&closedDays=0`);const dl=$id('atmOpenTickets');if(!dl)return;
   dl.innerHTML=(r.data||[]).filter(t=>t.status!=='Closed'&&t.status!=='Resolved').slice(0,20).map(t=>`<option value="${K.esc(t.id)}">${K.esc(t.id)} · ${K.esc(t.ktcStatus||t.status)} · ${K.esc((t.errorText||t.description||'').slice(0,60))}</option>`).join('');}catch(e){}}
  async function load(refresh){

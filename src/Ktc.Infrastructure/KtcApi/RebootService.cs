@@ -182,7 +182,7 @@ public class RebootWorkflowJob : BackgroundService
                 await audit.LogAsync("AtmActions", "Guided reboot: " + e.Step, run.AtmId, $"ref={run.Id}; {e.Message}{(e.ActionId != null ? "; action=" + e.ActionId : "")}", e.Ok, "system (guided reboot for " + run.User + ")");
             if (!wasFinished && run.State is RebootState.Failed or RebootState.NeedsAttention)
             {
-                var msg = $"Guided reboot {run.Id} of {run.AtmName} ({run.AtmId}) {(run.State == RebootState.Failed ? "failed" : "needs attention")}: {run.Events.Last().Message} Ticket {run.Ticket}, requested by {run.User}.";
+                var msg = $"Guided reboot {run.Id} of {run.AtmName} ({run.AtmId}) {(run.State == RebootState.Failed ? "failed" : "needs attention")}: {run.Events.Last().Message}{(run.Ticket.Length > 0 ? $" Ticket {run.Ticket}," : "")} Requested by {run.User}.";
                 _log.LogWarning("{Message}", msg);
                 try { await scope.ServiceProvider.GetRequiredService<IAlertEngine>().RaiseManualAsync(AlertRuleType.AtmOffline, run.State == RebootState.NeedsAttention ? Severity.P1 : Severity.P2, $"Guided reboot {(run.State == RebootState.Failed ? "failed" : "needs attention")}: {run.AtmName}", msg, "reboot:" + run.Id, ct); }
                 catch (Exception ex) { _log.LogError(ex, "Could not raise the alert for guided reboot {Id}", run.Id); }
