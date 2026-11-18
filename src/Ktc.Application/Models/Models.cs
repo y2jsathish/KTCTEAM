@@ -60,7 +60,34 @@ public record TicketDto
     public DateTime SlaDueUtc { get; init; }
     public SlaState Sla { get; init; }
     public bool IsOpen => Status != TicketStatus.Closed && Status != TicketStatus.Resolved;
+    // As KTC's own ticket list shows them.
+    /// <summary>KTC's status name (e.g. AutoClosed); Status above is the portal's category of it.</summary>
+    public string KtcStatus { get; init; } = "";
+    public int? StatusByte { get; init; }
+    public string TypeId { get; init; } = "";
+    public string TypeName { get; init; } = "";
+    public DateTime? OpenedUtc { get; init; }
+    public string ErrorId { get; init; } = "";
+    public string ErrorCodeTypeId { get; init; } = "";
+    public string ErrorCode { get; init; } = "";
+    public string ErrorText { get; init; } = "";
+    public string? LastChangeBy { get; init; }
+    public DateTime? LastChangeUtc { get; init; }
+    /// <summary>Last comment, card numbers masked.</summary>
+    public string LastComment { get; init; } = "";
+    /// <summary>"No SLA" when KTC gives the ticket no SLA time, else due / met / breached.</summary>
+    public string SlaSummary { get; init; } = "No SLA";
+    public bool HasKtcSla { get; init; }
 }
+
+public record TicketComment(string? User, DateTime? Utc, string Text);
+public record KtcField(string Name, string Value);
+
+/// <summary>Ticket Details popup: the ticket and the KTC records around it, each also as all the fields KTC returned.</summary>
+public record TicketDetails(TicketDto Ticket, IReadOnlyList<KtcField> TicketFields, IReadOnlyList<TicketComment> Comments,
+    IReadOnlyList<KtcField>? TicketType, IReadOnlyList<KtcField>? ErrorCodeType, IReadOnlyList<KtcField>? Error,
+    IReadOnlyList<IReadOnlyList<KtcField>> Sla, IReadOnlyList<IReadOnlyList<KtcField>> Notifications, IReadOnlyList<TicketDto> Children,
+    IReadOnlyList<string> Sources, IReadOnlyList<string> Warnings);
 
 public record TransactionDto
 {
@@ -165,7 +192,7 @@ public record ChartPoint(string Label, int Value);
 
 public record AtmFilter(string? Client = null, string? City = null, string? Region = null, string? Status = null);
 
-public record TicketQuery(string? AtmId = null, string? TicketId = null, string? Client = null, DateTime? From = null, DateTime? To = null);
+public record TicketQuery(string? AtmId = null, string? TicketId = null, string? Client = null, DateTime? From = null, DateTime? To = null, int? ClosedDays = null);
 
 public record TransactionQuery(string? AtmId = null, string? Client = null, string? Region = null, DateTime? From = null, DateTime? To = null, bool? Success = null);
 

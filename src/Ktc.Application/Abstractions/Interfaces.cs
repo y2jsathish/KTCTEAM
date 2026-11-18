@@ -65,6 +65,7 @@ public interface IKtcDataService
     Task<IReadOnlyList<IncidentDto>> GetHistoricalIncidentsAsync(DateTime from, DateTime to, string? atmId = null, CancellationToken ct = default);
     Task<IReadOnlyList<TicketDto>> SearchTicketsAsync(TicketQuery query, CancellationToken ct = default);
     Task<TicketDto?> GetTicketAsync(string id, CancellationToken ct = default);
+    Task<TicketDetails?> GetTicketDetailsAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<TransactionDto>> SearchTransactionsAsync(TransactionQuery query, CancellationToken ct = default);
     Task<TransactionDto?> GetTransactionAsync(string id, CancellationToken ct = default);
     /// <summary>General details of one ATM from its KTC Client record, with branch, business and region names. Null when no ATM matches.</summary>
