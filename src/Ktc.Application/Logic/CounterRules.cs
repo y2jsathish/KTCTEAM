@@ -223,6 +223,11 @@ public static class CounterRules
 
     /// <summary>True for supervisor / replenishment operations recorded as transactions (REPLENISH, ADD_CASH, CLR_CASH, PRNT_CNTRS, ...).</summary>
     public static bool IsSupervisorType(string type) => Supervisor.IsMatch(Flat(type));
+    private static readonly Regex ChequeWord = new("cheque|chq|check", RegexOptions.Compiled);
+    private static readonly Regex ChequeIn = new("chequein|chqin|chequescan|chequeaccept", RegexOptions.Compiled);
+    /// <summary>True for cheque deposits ("Cheque Deposit", "Check Deposit", "Deposit Cheque", "Cheque In", ...), which move no cash notes.</summary>
+    public static bool IsChequeType(string type) { var f = Flat(type); return ChequeWord.IsMatch(f) && f.Contains("deposit") || ChequeIn.IsMatch(f); }
+
     /// <summary>True for operations that reset the ATM counters (replenishment, clear cash, add cash).</summary>
     public static bool IsResetType(string type) => Reset.IsMatch(Flat(type));
 
@@ -230,7 +235,7 @@ public static class CounterRules
     public static readonly (string Category, string Name)[] ApplicationCounters =
     {
         ("Transactions", "Customer sessions"), ("Transactions", "Cash withdrawals"), ("Transactions", "Balance inquiries"), ("Transactions", "Mini statements"),
-        ("Transactions", "Fund transfers"), ("Transactions", "PIN changes"), ("Transactions", "Cash deposits"),
+        ("Transactions", "Fund transfers"), ("Transactions", "PIN changes"), ("Transactions", "Cash deposits"), ("Transactions", "Cheque deposits"),
         ("Exceptions", "Declined by host"), ("Exceptions", "Host timeouts"), ("Exceptions", "Reversals"), ("Exceptions", "Cards captured"), ("Exceptions", "Cash retracts"),
         ("Operations", "Supervisor entries"), ("Operations", "Application restarts"),
     };
@@ -245,6 +250,7 @@ public static class CounterRules
         else if (type.Contains("statement")) yield return "Mini statements";
         else if (type.Contains("transfer")) yield return "Fund transfers";
         else if (Regex.IsMatch(type, "pin(change|reset|unlock)")) yield return "PIN changes";
+        else if (IsChequeType(type)) yield return "Cheque deposits";
         else if (Regex.IsMatch(type, "deposit|cashin|paymentbycash")) yield return "Cash deposits";
         if (type.Contains("revers") || why.Contains("revers")) yield return "Reversals";
         if (why.Contains("declin")) yield return "Declined by host";

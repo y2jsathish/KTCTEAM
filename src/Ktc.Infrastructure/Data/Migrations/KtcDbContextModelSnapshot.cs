@@ -342,6 +342,10 @@ namespace Ktc.Infrastructure.Data.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<decimal>("AmountChequeDeposited")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<decimal>("AmountDeposited")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -362,6 +366,9 @@ namespace Ktc.Infrastructure.Data.Migrations
 
                     b.Property<DateTime>("CapturedUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<int>("ChequeDeposits")
+                        .HasColumnType("int");
 
                     b.Property<string>("Client")
                         .IsRequired()

@@ -251,16 +251,21 @@ public static class CashForecastRules
             app?.Sum(a => a.NotesDispensed), ej?.NotesDispensed, rows, overall, notes);
     }
 
-    /// <summary>Actual cash per portal-local day from successful customer withdrawals / deposits (CounterRules decides what counts).</summary>
+    /// <summary>
+    /// Actual cash per portal-local day from successful customer transactions (CounterRules decides what counts): cash withdrawals,
+    /// cash deposits and cheque deposits, with their amounts.
+    /// </summary>
     public static List<CashDailyPoint> Daily(IEnumerable<TransactionDto> tx, Func<DateTime, DateTime> toLocal, DateTime todayLocal)
     {
+        const string W = "Cash withdrawals", D = "Cash deposits", C = "Cheque deposits";
         return tx.Where(t => t.Success && !CounterRules.IsSupervisorType(t.Type))
             .Select(t => (Day: toLocal(t.TimeUtc).Date, Names: CounterRules.CountersFor(t).ToList(), t.Amount))
-            .Where(x => x.Names.Contains("Cash withdrawals") || x.Names.Contains("Cash deposits"))
+            .Where(x => x.Names.Contains(W) || x.Names.Contains(D) || x.Names.Contains(C))
             .GroupBy(x => x.Day).OrderBy(g => g.Key)
             .Select(g => new CashDailyPoint(g.Key,
-                g.Count(x => x.Names.Contains("Cash withdrawals")), g.Where(x => x.Names.Contains("Cash withdrawals")).Sum(x => x.Amount ?? 0),
-                g.Count(x => x.Names.Contains("Cash deposits")), g.Where(x => x.Names.Contains("Cash deposits")).Sum(x => x.Amount ?? 0),
-                g.Key >= todayLocal)).ToList();
+                g.Count(x => x.Names.Contains(W)), g.Where(x => x.Names.Contains(W)).Sum(x => x.Amount ?? 0),
+                g.Count(x => x.Names.Contains(D)), g.Where(x => x.Names.Contains(D)).Sum(x => x.Amount ?? 0),
+                g.Key >= todayLocal,
+                g.Count(x => x.Names.Contains(C)), g.Where(x => x.Names.Contains(C)).Sum(x => x.Amount ?? 0))).ToList();
     }
 }

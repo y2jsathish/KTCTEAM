@@ -220,4 +220,33 @@ public class CashForecastTests
         Assert.Equal("Out", out26.Units[0].Status);
         Assert.Equal("Out", out26.Status);
     }
+
+    [Theory]
+    [InlineData("Cheque Deposit", true)]
+    [InlineData("Check Deposit", true)]
+    [InlineData("DEPOSIT_CHEQUE", true)]
+    [InlineData("Cheque In", true)]
+    [InlineData("Deposit", false)]
+    [InlineData("Cash Deposit", false)]
+    [InlineData("Cheque Book Request", false)]
+    [InlineData("Check Password", false)]
+    public void Cheque_deposits_are_told_apart_from_cash_deposits(string type, bool cheque)
+    {
+        Assert.Equal(cheque, CounterRules.IsChequeType(type));
+        var names = CounterRules.CountersFor(new TransactionDto { Type = type, Success = true }).ToList();
+        if (cheque) { Assert.Contains("Cheque deposits", names); Assert.DoesNotContain("Cash deposits", names); }
+        else Assert.DoesNotContain("Cheque deposits", names);
+    }
+
+    [Fact]
+    public void Daily_counts_cheque_deposits_separately_and_they_are_not_cash_transactions()
+    {
+        TransactionDto Tx(string type, int hour, decimal amt) => new() { Id = hour.ToString(), Type = type, TimeUtc = Now.Date.AddHours(hour), Amount = amt, Success = true };
+        var tx = new[] { Tx("Deposit", 1, 200), Tx("Cheque Deposit", 2, 5000), Tx("Cheque Deposit", 3, 1500), Tx("Cash Withdrawal", 4, 100) };
+        var d = Assert.Single(CashForecastRules.Daily(tx, t => t, Now.Date.AddDays(1)));
+        Assert.Equal((1, 200m), (d.Deposits, d.Deposited));
+        Assert.Equal((2, 6500m), (d.ChequeDeposits, d.ChequeDeposited));
+        Assert.Equal((1, 100m), (d.Withdrawals, d.Withdrawn));
+        Assert.False(CounterRules.IsCashTransaction(tx[1]));
+    }
 }

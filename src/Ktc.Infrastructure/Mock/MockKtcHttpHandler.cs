@@ -175,6 +175,9 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     // KTC GET HistoricalCounter/ClientTransactionCounters?clientid=&transactionid=, as the live KTC answers: {ClientID, ComponentID, PropertyID,
     // DenominationID, Timestamp, Value (running), Delta (this transaction), Reset, TransactionID}, here per denomination. Decoded from the mock transaction id.
     private static readonly int[] Notes = { 1000, 500, 200, 100 };
+    /// <summary>About one deposit in three is a cheque deposit (cheque scanner); it moves no notes.</summary>
+    private static bool IsChequeDeposit(int h) => h / 11 % 3 == 0;
+
     private static IEnumerable<object> TransactionCounters(long txId)
     {
         long hi = txId / 100000; int i = (int)(txId % 100000 / 100), k = (int)(txId % 100);
@@ -183,6 +186,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         int h = Hash(i, (int)hi, 60 + k);
         var types = new[] { "Cash Withdrawal", "Cash Withdrawal", "Cash Withdrawal", "Balance Inquiry", "Deposit", "Transfer", "Reversal", "Mini Statement", "Cash Withdrawal", "PIN Change" };
         var type = types[h / 7 % types.Length];
+        if (type == "Deposit" && IsChequeDeposit(h)) type = "Cheque Deposit";
         bool fail = h % 100 < (Chronic.Contains(i) ? 28 : 4);
         if (fail || type is not ("Cash Withdrawal" or "Deposit")) yield break;
         var left = 100 * (1 + h % 20);
@@ -360,12 +364,13 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
                     int failPct = Chronic.Contains(i) ? 28 : hour.Hour == 14 && now.Date == hour.Date ? 9 : 4;
                     bool fail = h % 100 < failPct;
                     var type = types[h / 7 % types.Length];
+                    if (type == "Deposit" && IsChequeDeposit(h)) type = "Cheque Deposit";
                     var f = fails[(h / 13 + (Chronic.Contains(i) ? 3 : 0)) % fails.Length];
                     rows.Add(new
                     {
                         ID = id, UUID = TxUuid(id), sessionID = id / 2, startEJID = id % 1_000_000 * 10, endEJID = id % 1_000_000 * 10 + 7, ClientID = Id(i), ClientName = $"{Banks[i % 3][..3].ToUpper()}-ATM-{i + 1:000}",
                         TransactionTypeName = type, CompletionCodeName = fail ? f : "Completed OK", ReasonName = fail ? f : (string?)null, ErrorCode = fail ? $"E{100 + h % 60}" : "",
-                        Amount = type == "Cash Withdrawal" || type == "Deposit" ? (decimal)(100 * (1 + h % 20)) : 0m, Currency = "AED",
+                        Amount = type is "Cash Withdrawal" or "Deposit" ? (decimal)(100 * (1 + h % 20)) : type == "Cheque Deposit" ? (decimal)(500 * (1 + h % 40)) : 0m, Currency = "AED",
                         StartTime = t, EndTime = t.AddMilliseconds(fail ? 4000 + h % 9000 : 900 + h % 3200)
                     });
                     if (rows.Count > 40000) return rows;
