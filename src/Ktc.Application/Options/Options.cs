@@ -163,3 +163,21 @@ public class CashForecastOptions
     /// <summary>A copy with another low-cash threshold (in notes).</summary>
     public CashForecastOptions WithLowNotes(long lowNotes) { var c = (CashForecastOptions)MemberwiseClone(); c.LowNotes = Math.Max(0, lowNotes); return c; }
 }
+
+/// <summary>
+/// ATM Actions tab. Step 1 is read-only: the portal lists KTC's command types (GET api/v1/CommandType) and shows which KTC command
+/// each planned action would use. No command is sent to an ATM yet.
+/// </summary>
+public class KtcActionsOptions
+{
+    public const string Section = "KtcActions";
+    /// <summary>KTC route with the command types.</summary>
+    public string CommandTypesEndpoint { get; set; } = "api/v1/CommandType";
+    /// <summary>Minutes the command list is cached (the Refresh button reads it again).</summary>
+    public int CacheMinutes { get; set; } = 10;
+    /// <summary>
+    /// Planned action -> KTC CommandName (case-insensitive), e.g. KtcActions:Commands:Reboot = "REBOOT". Empty = not configured yet;
+    /// the tab then only suggests commands whose names look right. Keys: Reboot, XfsReset, DeviceReset, OutOfService, InService.
+    /// </summary>
+    public Dictionary<string, string?> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}

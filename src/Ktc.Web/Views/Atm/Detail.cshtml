@@ -9,6 +9,7 @@
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-ej-counters" data-tab="ej-counters" type="button" role="tab" aria-controls="tab-ej-counters" aria-selected="false"><i class="bi bi-journal-text"></i> EJ Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-app-counters" data-tab="app-counters" type="button" role="tab" aria-controls="tab-app-counters" aria-selected="false"><i class="bi bi-calculator"></i> Application Counters</button></li>
   <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-xfs-counters" data-tab="xfs-counters" type="button" role="tab" aria-controls="tab-xfs-counters" aria-selected="false"><i class="bi bi-gear-wide-connected"></i> XFS Counters <span id="xfsFlagged" class="badge rounded-pill text-bg-warning ms-1 d-none" title="Counters at or over threshold"></span></button></li>
+  <li class="nav-item" role="presentation"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-actions" data-tab="actions" type="button" role="tab" aria-controls="tab-actions" aria-selected="false"><i class="bi bi-lightning-charge"></i> Actions</button></li>
 </ul>
 <div class="tab-content">
 <div class="tab-pane fade show active" id="tab-overview" role="tabpanel">
@@ -67,5 +68,14 @@
   <div id="xfsKpis" class="kpis"></div>
   <div id="xfsCounters" class="row g-3"><div class="col-12 text-muted small">Loading…</div></div>
 </div>
+<div class="tab-pane fade" id="tab-actions" role="tabpanel">
+  <div class="counter-bar"><span class="small text-muted" id="actMeta"></span>
+    <button class="btn btn-sm btn-outline-secondary ms-auto" id="actJson" disabled><i class="bi bi-download"></i> Download command list (JSON)</button>
+    <button class="btn btn-sm btn-outline-secondary" data-actrefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
+  <div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <b>Read-only for now.</b> This tab lists the commands your KTC server offers (<code>GET api/v1/CommandType</code>) so the real command ids for reboot and resets can be confirmed. The action buttons stay disabled and nothing is sent to the ATM from this portal yet.</div>
+  <div id="actMsg"></div>
+  <div class="cardx mb-3"><h6><i class="bi bi-ui-checks-grid"></i> Planned actions</h6><div id="actPlanned" class="row g-2"><div class="col-12 text-muted small">Open this tab to read KTC's command list.</div></div></div>
+  <div class="cardx"><h6><i class="bi bi-list-task"></i> KTC command types <span class="small text-muted" id="actCount"></span></h6><div id="actCommands"></div></div>
 </div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script> }
+</div>
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script> }

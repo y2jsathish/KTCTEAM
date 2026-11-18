@@ -50,6 +50,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         if (!req.Headers.Contains("Authorization")) return Resp(HttpStatusCode.Unauthorized, "\"Missing bearer token\"");
 
         Match r;
+        if (Is(path, "api/v1/CommandType", m == "GET")) return Ok(CommandTypes);
         if (Is(path, "api/v1/Client", m == "GET")) return Ok(Enumerable.Range(0, AtmCount).Select(i => ClientJson(i)));
         if (Is(path, "api/v1/Business")) return Ok(Banks.Select((b, i) => new { ID = i + 1, Name = b }));
         if (Is(path, "api/v1/Region")) return Ok(Places.Select(p => p.Region).Distinct().Select((x, i) => new { ID = i + 1, Name = x }));
@@ -480,6 +481,26 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
     private static bool HasEj(dynamic t) { try { return t.startEJID != null; } catch { return false; } }
 
     // ------------- helpers -------------
+    // KTC CommandType records, shaped like the Postman collection's POST CommandType sample. Names are DEMO values, not a real server's.
+    private static readonly object[] CommandTypes =
+    {
+        Cmd(1, "UPLOAD", "Upload a file", "File Management", "<Params><Path /></Params>", true, 50, 0),
+        Cmd(2, "DOWNLOAD", "Send a file to the ATM", "File Management", "<Params><Path /><Hash /></Params>", false, 50, 0),
+        Cmd(3, "REBOOT", "Reboot the ATM", "Device Control", "<Params><WhenIdle>true</WhenIdle></Params>", false, 20, 0),
+        Cmd(4, "RESTART_APPLICATION", "Restart the ATM application", "Device Control", "<Params />", false, 20, 0),
+        Cmd(5, "XFS_RESET", "Reset all XFS devices", "Device Control", "<Params />", false, 20, 0),
+        Cmd(6, "DEVICE_RESET", "Reset one XFS device", "Device Control", "<Params><Device /></Params>", false, 20, 0),
+        Cmd(7, "OUT_OF_SERVICE", "Put the ATM out of service", "Device Control", "<Params><Reason /></Params>", false, 50, 0),
+        Cmd(8, "IN_SERVICE", "Put the ATM back in service", "Device Control", "<Params />", false, 50, 0),
+        Cmd(9, "CLEAR_COUNTERS", "Clear the cash counters", "Cash Management", "<Params />", false, 10, 1),
+        Cmd(10, "INSTALL_PACKAGE", "Install a software package", "Software Distribution", "<Params><PackageID /></Params>", false, 10, 1),
+    };
+    private static object Cmd(int id, string name, string desc, string cat, string tpl, bool clientInit, int maxSim, int dual) => new
+    {
+        ID = id, CommandName = name, Description = desc, ParameterListTemplateString = tpl, SubCommandListString = "", AllowClientInitiation = clientInit,
+        MaxRetries = 3, RetryWaitTime = 60, MaxSimultaneous = maxSim, TargetTypeByte = 0, IsUserDefined = false, Category = cat, DualAuthModeByte = dual
+    };
+
     private static bool Is(string path, string route, bool cond = true) => cond && path.Equals(route, StringComparison.OrdinalIgnoreCase);
     private static Match Rx(string path, string pattern) => Regex.Match(path, "^" + pattern + "$", RegexOptions.IgnoreCase);
     private static HttpResponseMessage Ok(object? o) => Resp(HttpStatusCode.OK, JsonSerializer.Serialize(o, J));
