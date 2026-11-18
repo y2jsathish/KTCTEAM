@@ -521,7 +521,7 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         Cmd(13, "KTC_GET_SETTING", "Get Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" Default=\"MultiLevelStore\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 0),
         Cmd(14, "KTC_SET_SETTING", "Set Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Value\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 1),
         Cmd(15, "KTC_SELF_TEST", "Run Device Self Test", "Device Management", "<Params />", 0),
-        Cmd(16, "KTC_RESET_DEVICE", "Reset one XFS device", "Device Management", "<Params><Param Name=\"Device\" Type=\"Choice\" Values=\"Dispenser,CardReader,ReceiptPrinter,JournalPrinter,PinPad,Depository,Sensors\" /></Params>", 0),
+        Cmd(16, "KTC_RESET_DEVICE", "Reset the ATM devices (the ATM application decides which)", "Device Management", "<Params />", 0),
         Cmd(17, "KTC_SUPERVISOR_ON", "Supervisor mode on (ATM out of service)", "Device Management", "<Params><Param Name=\"Reason\" Type=\"String\" /></Params>", 0),
         Cmd(18, "KTC_SUPERVISOR_OFF", "Supervisor mode off (ATM in service)", "Device Management", "<Params />", 0),
         Cmd(19, "KTC_UPLOAD_EJ", "Upload Journal Data", "Journal Data", "<Params><Param Name=\"Days\" Type=\"Int32\" Default=\"1\" Min=\"1\" Max=\"31\" /></Params>", 0),

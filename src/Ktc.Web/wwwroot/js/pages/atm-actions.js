@@ -18,7 +18,7 @@
  // reason, and the high-risk confirmation). XFS reset has no KTC command, so it stays unmapped.
  const icons={DeviceReset:'bi-tools',OutOfService:'bi-slash-circle',InService:'bi-check-circle',XfsReset:'bi-cpu'};
  function formBtn(r,a){
-  if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">KTC has no "reset all XFS devices" command. Use Device reset for each device, or map a command when one exists.</div>':''}`;
+  if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">Not mapped: KTC has no separate XFS reset command. Use Device reset; the ATM application handles out of service and the reset itself.</div>':''}`;
   const c=r.commands.find(x=>x.id===a.commandTypeId)||{},why=a.requiresDualAuth?'Needs a second login, not supported yet':c.sendBlockedReason||'';
   return `<button class="btn btn-sm btn-outline-danger mt-2" data-useform="${a.commandTypeId}"${why?' disabled':''} title="${K.esc(why||'Fill in the parameters, ticket and reason, then confirm')}"><i class="bi ${why?'bi-lock':icons[a.key]||'bi-send'}"></i> ${K.esc(a.label)}…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;
  }
@@ -29,7 +29,7 @@
    <div class="small">${K.esc(a.status)}</div>
    ${a.commandTypeId!=null?`<div class="small">KTC command: <code>${K.esc(a.matchedName)}</code> #${K.esc(a.commandTypeId)}${a.requiresDualAuth?' <span class="sbadge warn">Needs second login</span>':''}</div>`:''}
    ${a.suggestions.length&&a.commandTypeId==null?`<div class="small">Looks like: ${a.suggestions.map(s=>`<code>${K.esc(s)}</code>`).join(', ')}</div>`:''}
-   ${a.key==='Reboot'?rebootBtn(r):formBtn(r,a)}
+   ${a.key==='Reboot'?rebootBtn(r):formBtn(r,a)}${a.key==='DeviceReset'&&a.commandTypeId!=null?'<div class="small text-muted mt-1"><i class="bi bi-info-circle"></i> Sent as one command. The ATM application waits for the transaction, goes out of service and resets by itself; the portal does not send out of service first. Follow it in Activity.</div>':''}
   </div></div>`).join('')
   +`<div class="col-12 small text-muted mt-1">Mapping is set in configuration, e.g. <code>KtcActions:Commands:Reboot = "&lt;CommandName&gt;"</code>. Reboot runs only as the guided reboot; the others open "Run a command" with the extra confirmation.</div>`;
  }
