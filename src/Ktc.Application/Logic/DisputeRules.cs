@@ -103,7 +103,7 @@ public static partial class DisputeRules
             Id = id, AtmId = clientId, AtmName = a?.Name ?? CommandTypeRules.Sanitize(S("ClientName", "NodeName", "AtmName")), Client = a?.Client ?? "",
             StateId = stateId, State = state, IsClosed = closed,
             CreatedUtc = KtcJson.Date(e, CreatedF), UpdatedUtc = KtcJson.Date(e, UpdatedF), ClosedUtc = closedUtc, TransactionUtc = D(TxTimeF),
-            Amount = Amount(e) ?? (tx is { } t2 ? Amount(t2) : null), Currency = CommandTypeRules.Sanitize(S("Currency", "CurrencyCode", "CurrencyName")),
+            Amount = Amount(e) ?? (tx is { } t2 ? Amount(t2) : null) ?? ExtraAmount(e), Currency = CommandTypeRules.Sanitize(S("Currency", "CurrencyCode", "CurrencyName")),
             Card = MaskCard(S(CardF)), TransactionId = CommandTypeRules.Sanitize(S(TxIdF)), TransactionType = CommandTypeRules.Sanitize(S("TransactionType", "TransactionTypeName", "TxnType", "TransactionTypeID")),
             Customer = CommandTypeRules.Sanitize(KtcJson.Str(e, "CustomerName") is { Length: > 0 } cn ? cn : FromCustomer("Name", "CustomerName", "FullName")),
             Reason = CommandTypeRules.Sanitize(KtcJson.Str(e, "Reason", "DisputeReason", "Description", "Details", "Comment")),
@@ -118,6 +118,18 @@ public static partial class DisputeRules
         if (v.ValueKind == JsonValueKind.Number && v.TryGetDecimal(out var d)) return d;
         if (v.ValueKind == JsonValueKind.String && decimal.TryParse(v.GetString(), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var s)) return s;
         return null;
+    }
+
+    /// <summary>
+    /// The amount from the dispute's extra data. KTC's DisputeManagement configuration (DefaultDisputeExtraData, seen in the bank's
+    /// client trace) defines extra data "Amount" and "EffectiveAmount" (NUMBER) and "TSN" (STRING) on every dispute.
+    /// </summary>
+    private static decimal? ExtraAmount(JsonElement e)
+    {
+        var x = MapFields(e, ExtraDataF);
+        var v = x.FirstOrDefault(f => f.Name.Equals("Amount", StringComparison.OrdinalIgnoreCase))?.Value
+             ?? x.FirstOrDefault(f => f.Name.Equals("EffectiveAmount", StringComparison.OrdinalIgnoreCase))?.Value;
+        return decimal.TryParse(v, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : null;
     }
 
     private static JsonElement? Nested(JsonElement e, string[] names)
@@ -298,6 +310,22 @@ public static partial class DisputeRules
 
     /// <summary>POST Dispute/{id}/ChangeState body: KTC's Tuple&lt;int,string&gt; {"Item1": state id, "Item2": text}. Card numbers masked.</summary>
     public static object ChangeStateBody(int stateId, string reason) => new { Item1 = stateId, Item2 = PanMasker.Mask(reason) };
+
+    /// <summary>
+    /// POST api/v1/Comment/User body for a dispute comment, exactly as KTC's Windows client sends it (trace of dispute 10325):
+    /// {"table":13,"rowID":10325,"kcComment":null,"strComment":"...","SendStatusParameter":5,"Confidential":false,"BusinessID":-1}.
+    /// table 13 = Dispute, SendStatusParameter = the dispute's ClientID (KTC then raises DisputeChange for that ATM). Card numbers masked.
+    /// </summary>
+    public static object CommentBody(string disputeId, string comment, int table, long clientId) =>
+        new { table, rowID = long.TryParse(disputeId, out var id) ? id : 0, kcComment = (object?)null, strComment = PanMasker.Mask(comment), SendStatusParameter = clientId, Confidential = false, BusinessID = -1 };
+
+    /// <summary>"2 comments, last: a.rahman 2026-11-18 10:27:47" for the steps shown under "What KTC answered".</summary>
+    public static string CommentsText(IReadOnlyList<TicketComment> all)
+    {
+        if (all.Count == 0) return "no comments";
+        var l = all[^1]; var t = l.Text.Length > 60 ? l.Text[..60] + "…" : l.Text;
+        return $"{all.Count} comment{(all.Count == 1 ? "" : "s")}, last: {l.User} {l.Utc:yyyy-MM-dd HH:mm:ss} \"{PanMasker.Mask(t)}\"";
+    }
 
     /// <summary>"state 3 (Investigating), closed no" for the steps and the audit.</summary>
     public static string StateText(DisputeDto? d) =>

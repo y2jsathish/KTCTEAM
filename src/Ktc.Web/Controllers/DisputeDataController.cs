@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Ktc.Web.Controllers;
 
-/// <summary>JSON for the Disputes menu (KTC api/v1/DisputeManagement). Reads are audited; writes need DisputeWrite:Enabled and an operator.</summary>
+/// <summary>JSON for the Disputes menu (KTC api/v1/DisputeManagement). Reads are audited; writes need DisputeWrite:Enabled and an operator (change state / close also DisputeWrite:AllowStateChange).</summary>
 [Route("data/disputes")]
 [ApiController]
 public class DisputeDataController : ControllerBase
@@ -31,9 +31,9 @@ public class DisputeDataController : ControllerBase
 
     [HttpGet("{id}/details")]
     [Audit("DisputeView", "Dispute details")]
-    public async Task<IActionResult> Details(string id, CancellationToken ct)
+    public async Task<IActionResult> Details(string id, string? atmId, CancellationToken ct)
     {
-        var d = await _d.GetDetailsAsync(id, ct);
+        var d = await _d.GetDetailsAsync(id, atmId, ct);
         return d == null ? NotFound(new { error = $"KTC has no dispute {id}." }) : Ok(d);
     }
 
@@ -43,7 +43,13 @@ public class DisputeDataController : ControllerBase
 
     // ---------- change state / close (DisputeWrite:Enabled) ----------
     [HttpGet("{id}/write")]
-    public async Task<IActionResult> WriteState(string id, [FromServices] IDisputeWriteService w, CancellationToken ct) => Ok(await w.StateAsync(id, ct));
+    public async Task<IActionResult> WriteState(string id, string? atmId, [FromServices] IDisputeWriteService w, CancellationToken ct) => Ok(await w.StateAsync(id, atmId, ct));
+
+    [HttpPost("{id}/comment")]
+    [Authorize(Policy = Policies.Operator)]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting("atm-actions")]
+    public async Task<IActionResult> Comment(string id, [FromBody] DisputeWriteRequest? q, [FromServices] IDisputeWriteService w, CancellationToken ct) =>
+        q == null ? BadRequest(new { error = "Invalid request body." }) : Ok(await w.AddCommentAsync(id, q, ct));
 
     [HttpPost("{id}/state")]
     [Authorize(Policy = Policies.Operator)]

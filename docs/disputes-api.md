@@ -1,111 +1,84 @@
 # KTC Dispute Management API: what the portal uses
 
-Source: `src/Ktc.Web/Seed/KTC_REST_API.postman_collection.json` (805 requests). Every dispute route lives under
-`api/v1/DisputeManagement/`; nothing else in the collection mentions disputes, chargebacks or claims. There are 41 routes.
+Sources:
+* the Postman collection `src/Ktc.Web/Seed/KTC_REST_API.postman_collection.json` (805 requests; 41 under
+  `api/v1/DisputeManagement/`, nothing else mentions disputes). It has no response samples, and only `Search` and `ChangeState`
+  have request bodies;
+* a **trace of KTC's Windows client** (Kalignite log `disputetraces.kxlog`, 4–18 Nov 2026, two KTC servers) covering the
+  Disputes tab, the Dispute Details window, its Transaction button, Add Comment and the Dispute Management Rules dialog.
 
-**Important:** the collection has no response samples and no descriptions, and most write bodies are empty (`{}` or `true`).
-Only two bodies are filled in: `Search` and `Dispute/{Id}/ChangeState`. So field names of a dispute record, the state numbers
-and the customer-detail keys are **not known** until we see JSON from your KTC server. The portal reads fields tolerantly and
-shows every raw field it receives (card numbers masked), and does not guess numbers.
+The trace logs each call's URL and request body, the response **size** and the .NET type it was read into, but **not the
+response bodies**. So request shapes below are confirmed; record field names, state names and state numbers are still not.
 
-## 1. Disputes (the records)
+## What the Windows client does (from the trace)
 
-| Method | Route | Read / write | Body in the collection | Used by the portal |
-|---|---|---|---|---|
-| POST | `Search` | read (POST used as a query) | `DisputeSearch`, see below | **Yes**: the Disputes list |
-| POST | `Search/Multiple` | read | an array of `DisputeSearch` | No (one search per business is enough) |
-| GET | `{clientid}/ClientDisputes?statusfilter=&Numdays=` | read | none | No: the meaning of `statusfilter` is unknown |
-| GET | `{groupid}/GroupDisputes?statusfilter=&Numdays=` | read | none | No: same |
-| GET | `Dispute` | read (all disputes, no filter) | none | No: could be very large; Search is used instead |
-| GET | `Dispute/{Id}` | read | none | **Yes**: details popup and read-back after a write |
-| POST | `Dispute` | write: create | `{}` (shape unknown) | No |
-| POST | `Dispute/Update` | write: update whole record | `true` (shape unknown) | No |
-| PUT | `Dispute/{id}/CustomerDetails?forceupdate=` | write | `{}` (shape unknown) | No |
-| PUT | `Dispute/{id}/ExtraData?forceupdate=` | write | `{}` (shape unknown) | No |
-| POST | `Dispute/{Id}/ChangeState` | write | `{"Item1": 64, "Item2": "sample string 2"}` | **Yes**, behind `DisputeWrite:Enabled` (off) |
-| POST | `Dispute/Close?disputeId=` | write | `{}` | **Yes**, behind `DisputeWrite:Enabled` (off) |
-| DELETE | `Dispute?disputeId=` | write: delete | none | **Never** |
+| Client action | Calls, in order |
+|---|---|
+| Start-up | `GET DisputeManagement/DisputeRule` (10,120 chars, `Dictionary<short, DisputeRules>`, 42 rules); `GET DisputeManagement/DisputeState` (478 chars, `Dictionary<byte, DisputeState>`, **9 states**; the second server has 2) |
+| Disputes tab of a group | `GET DisputeManagement/2/GroupDisputes?statusfilter=0&Numdays=14` (`List<Disputes>`; group 2 = All Clients) |
+| Disputes tab of one ATM | `GET DisputeManagement/5/ClientDisputes?statusfilter=0&Numdays=14` (1,022 chars with one dispute) |
+| Changing the state box | index 0 sends `statusfilter=0`, index 1 sends `statusfilter=1`. For ATM 5, whose one dispute was open, `statusfilter=1` came back empty (`[]`) |
+| After the list | `POST TransactionData/TransactionIDs` `[42262]` (the disputes' transaction ids), `POST TransactionData/ExtraTransactionFields` `{"Value1":[transaction UUIDs]}`, `POST STXFieldLookup//Batch` |
+| Open Dispute Details | `GET DisputeState`, `GET DisputeRule`, **`POST DisputeManagement/SMSQueue/Disputes` `[10325]`** (answers `Dictionary<long, SMSQueue>`, so it is a read), `GET DisputeMessageTemplate`. No `GET Dispute/{id}`: the window shows the record from the list |
+| Transaction button | `GET TransactionData/42262`, whose record ends with `…;5;10325`, i.e. ClientID 5 and **DisputeID 10325**; then `SessionData/{id}`, `FieldsFromSession`, `FieldsFromTransaction`, `ClientTransactionCounters` |
+| **Add comment** | `POST api/v1/Comment/User` `{"table":13,"rowID":10325,"kcComment":null,"strComment":"tesst","SendStatusParameter":5,"Confidential":false,"BusinessID":-1}` → `true`. KTC then raises `DisputeChange` for client 5 and the client re-reads `ClientDisputes`, which grew from 1,022 to 1,143 chars: **comments are part of the dispute record** |
+| OK | no call |
 
-### Search body (`DisputeSearch`)
+Not seen in the trace: **change state, close, create, update, delete**, customer details and extra-data updates, the
+`Search` routes, and `GET Dispute/{id}`. The client's roles name the permissions: `KTCRole_ViewDisputes`,
+`KTCRole_UpdateDisputes`, `KTCRole_CloseDisputes`, `KTCRole_ConfigureDisputes`.
 
-```json
-{
-  "StatusIDList": [1, 2],
-  "SessionFieldFilters":      { "<STX field id>": { FieldFilter } },
-  "TransactionFieldFilters":  { "<STX field id>": { FieldFilter } },
-  "CustomerInfoFieldFilters": { "<customer field name>": { FieldFilter } },
-  "ExtraDataFieldFilters":    { "<extra data name>": { FieldFilter } },
-  "BusinessID": 1, "GroupID": 1,
-  "Start": "2026-11-12T10:49:34Z", "End": "2026-11-12T10:49:34Z",
-  "ClientName": "sample string 2"
-}
-```
+KTC's `DisputeManagement` configuration (`DefaultDisputeExtraData`) defines each dispute's extra data:
+`Amount` (NUMBER), `EffectiveAmount` (NUMBER) and `TSN` (STRING). The portal reads the amount from there when the record
+has no amount field. The user setting `DisputesExtraSTXFieldIDs` adds transaction-field columns to the client's Disputes tab.
 
-`FieldFilter` = `{UnderlyingType, FromDateTime, ToDateTime, BoolValue, StringValue, FromDecimal, ToDecimal, FromInt, ToInt, LookupID}`.
+## All routes, and what the portal does with them
 
-What this tells us:
-* A dispute is attached to an ATM **session** and **transaction** (session / transaction fields are keyed by STX field id,
-  see `GET api/v1/STXField`), and carries **customer info** and **extra data** maps keyed by name.
-* States are numbers (`StatusIDList`), listed by `GET DisputeState`.
-* The portal sends: `StatusIDList` = every id from `GET DisputeState` (or the one state picked in the filter), `Start` / `End`
-  from the date filter, `BusinessID` once per business (as the ticket search must), `GroupID` = the "All Clients" group, and
-  empty filter maps. ATM and amount filters are applied by the portal on the results, because the STX field id for the amount
-  is not known (a server-side amount filter would need `TransactionFieldFilters` with that id).
-
-### ChangeState body
-
-`{"Item1": <int>, "Item2": "<string>"}` is a .NET `Tuple<int,string>`. `Item1` is almost certainly the new state id (from
-`GET DisputeState`). `Item2` is a string; the portal sends the user's reason in it. **Not confirmed**: please capture what KTC's
-Windows client sends when you change a dispute's state (Fiddler or the KTC API log), as was done for ticket comments.
-
-## 2. Reference data (read by the portal)
-
-| Method | Route | Use |
-|---|---|---|
-| GET | `DisputeState` | state id to name, for the status column and filter. Cached 30 min. |
-| GET | `DisputeState/{id}` | not used (the list is enough) |
-| GET | `DisputeRule`, `DisputeRule/{id}` | shown read-only at the bottom of the Disputes page ("KTC dispute states and rules"), raw fields |
-
-`POST DisputeState`, `DisputeState/Update`, `DELETE DisputeState`, and the same for `DisputeRule`, are configuration
-writes and are **not** used.
-
-## 3. Customer notifications (SMS / messages)
-
-| Method | Route | Read / write | Used |
+| Method | Route | Read / write | Portal |
 |---|---|---|---|
-| GET | `SMSQueue`, `SMSQueue/{Id}` | read | **Yes**: "Notifications" tab of the popup, entries whose dispute id matches |
-| POST | `SMSQueue/Disputes` (`[1,2]` = dispute ids) | unclear: may queue SMS for those disputes | **No** (could text customers) |
-| POST | `SMSQueue`, `SMSQueue/Update`, `SMSQueue/Complete?sms_queue_id=`, DELETE `SMSQueue` | write | No |
-| GET | `DisputeMessageTemplate`, `DisputeMessageTemplate/{id}` | read | No (configuration) |
-| GET / POST / DELETE | `DisputeMessageMaping` (`transaction_type_id`, `state_id`, `template_id`) | config | No |
-| GET | `DisputeNotificationLogEntries?start=&end=&columnname=` | read | No: `columnname` is unknown |
+| GET | `{groupid}/GroupDisputes?statusfilter=&Numdays=` | read | **List** (All Clients group; statusfilter 0 and 1 merged; Numdays from the date filter) |
+| GET | `{clientid}/ClientDisputes?statusfilter=&Numdays=` | read | **Details and read-back** (the dispute's ATM) |
+| GET | `Dispute/{Id}` | read | fallback only, when the ATM is not known |
+| POST | `Search`, `Search/Multiple` | read | not used (the client does not use them) |
+| GET | `Dispute` | read | not used |
+| GET | `DisputeState`, `DisputeState/{id}` | read | **state names** (list cached 30 min) |
+| GET | `DisputeRule`, `DisputeRule/{id}` | read | **set-up section** |
+| GET | `DisputeMessageTemplate`, `…/{id}` | read | **set-up section** |
+| POST | `SMSQueue/Disputes` `[ids]` | read | **Customer Notifications tab** |
+| GET | `SMSQueue`, `SMSQueue/{Id}` | read | not used |
+| GET | `DisputeNotificationLogEntries?start=&end=&columnname=` | read | not used (`columnname` unknown) |
+| POST | `api/v1/Comment/User` (table 13) | write | **Add comment**, behind `DisputeWrite:Enabled` |
+| POST | `Dispute/{Id}/ChangeState` `{"Item1": stateId, "Item2": text}` | write | behind `Enabled` **and** `AllowStateChange` (not in trace) |
+| POST | `Dispute/Close?disputeId=` | write | behind `Enabled` **and** `AllowStateChange` (not in trace) |
+| POST | `Dispute`, `Dispute/Update`; PUT `…/CustomerDetails`, `…/ExtraData` | write | not used (bodies unknown) |
+| DELETE | `Dispute?disputeId=` | write | never |
+| POST/DELETE | `SMSQueue`, `SMSQueue/Update`, `SMSQueue/Complete`, `DisputeState`, `DisputeRule`, `DisputeMessageTemplate`, `DisputeMessageMaping` | config / messaging writes | never |
 
-The template mapping (transaction type + state -> message template) shows that KTC sends the customer a message when a dispute
-reaches a state. That is another reason the portal never calls SMS writes.
+## Card data
 
-## 4. Not in the API
+Card-number fields show at most the first 6 and last 4 digits; track, CVV, PIN-block and ICC/EMV fields are hidden at any
+depth (customer details, extra data, nested JSON or XML); card numbers inside free text (reasons, comments) are masked, also
+in what the portal sends and in the audit. The card filter compares only the last 4 digits.
 
-* **No dispute comment route.** Ticket comments go through `POST api/v1/Comment/User` with a table number (6 = Ticket). A
-  table number for disputes is not known, so the portal does not add dispute comments. If the Windows client adds comments to
-  disputes, a trace of that call is needed.
-* No documents / attachments, no history route, no reason-code list, no report route. If a dispute record carries a history or
-  comments field, the popup shows it.
+## Still needed from your KTC server
 
-## What we need from your KTC server
+The trace has no response bodies. To replace the tolerant field reading with exact names:
+1. The JSON of `GET api/v1/DisputeManagement/DisputeState` (9 states on the bank's server: ids and names).
+2. The JSON of `GET api/v1/DisputeManagement/5/ClientDisputes?statusfilter=0&Numdays=14` (one dispute with its comment).
+3. What `statusfilter` 0 and 1 mean (the client's state box labels would show it), and whether other values exist.
+4. A trace of the client **changing a dispute's state** and **closing** one, if the client can (the roles suggest it can).
+5. A screenshot of the client's Disputes tab and Dispute Details window.
 
-1. JSON of `GET api/v1/DisputeManagement/DisputeState` (state ids and names).
-2. JSON of `GET api/v1/DisputeManagement/Dispute/{id}` for one open and one closed dispute (card numbers can be masked).
-3. The answer of `POST api/v1/DisputeManagement/Search` with the portal's body (Live Monitoring > API Health shows errors).
-4. A trace of the Windows client changing a dispute's state (to confirm `Item2`) and, if it exists, adding a comment.
-5. A screenshot of the Windows client's dispute list and dispute details window, so the portal can match its layout.
+A Fiddler capture, or the KTC REST API's own log with bodies, gives 1–4.
 
 ## Portal settings
 
 ```json
-"Disputes":     { "LookbackDays": 30, "MaxRows": 2000 },
-"DisputeWrite": { "Enabled": false, "MinReasonLength": 10, "MaxReasonLength": 500 }
+"Disputes":     { "LookbackDays": 14, "MaxRows": 2000, "StateNames": {}, "StatusFilters": [0, 1], "DetailLookupDays": 365 },
+"DisputeWrite": { "Enabled": false, "CommentTable": 13, "AllowStateChange": false, "MinReasonLength": 10, "MaxReasonLength": 500 }
 ```
 
-`DisputeWrite:Enabled` is off by default. With it off, the popup still shows the change-state / close form and runs every
-check, but sends nothing. With it on, each attempt is audited (user, dispute, state, masked reason, KTC's answers), needs the
-dispute number typed to confirm, and only counts as done when `GET Dispute/{Id}` reads back the new state (or closed).
+`DisputeWrite:Enabled` is off by default. With it off, the popup still shows the form and runs every check, but sends nothing.
+With it on, comments are sent exactly as the Windows client sends them, and a comment counts as added only when the dispute,
+read back from KTC, carries it. Change state and Close also need `AllowStateChange` (and the dispute number typed), because
+the trace did not show those calls. Every attempt is audited with the user, the dispute and the masked text.

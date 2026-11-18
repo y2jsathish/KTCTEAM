@@ -177,9 +177,12 @@ public interface IExportService
 public interface IKtcDisputeService
 {
     Task<DisputeSearchResult> SearchAsync(DisputeQuery query, CancellationToken ct = default);
-    Task<DisputeDto?> GetAsync(string id, CancellationToken ct = default);
-    Task<DisputeDetails?> GetDetailsAsync(string id, CancellationToken ct = default);
+    /// <param name="atmId">The dispute's ATM (KTC client id) when known: the dispute is then read from that ATM's ClientDisputes list.</param>
+    Task<DisputeDto?> GetAsync(string id, string? atmId = null, CancellationToken ct = default);
+    Task<DisputeDetails?> GetDetailsAsync(string id, string? atmId = null, CancellationToken ct = default);
     Task<IReadOnlyList<DisputeStateDto>> GetStatesAsync(CancellationToken ct = default);
+    /// <summary>The dispute and its comments straight from KTC (not cached), for read-back after a write.</summary>
+    Task<(DisputeDto? Dispute, IReadOnlyList<TicketComment> Comments)> ReadCommentsAsync(string id, string? atmId, CancellationToken ct = default);
     Task<DisputeSetup> GetSetupAsync(CancellationToken ct = default);
     /// <summary>Drops cached dispute lists so a change shows at once.</summary>
     void Invalidate();
@@ -188,7 +191,8 @@ public interface IKtcDisputeService
 /// <summary>Change state / close on KTC disputes (behind DisputeWrite:Enabled), audited, verified by reading the dispute back.</summary>
 public interface IDisputeWriteService
 {
-    Task<DisputeWriteState> StateAsync(string disputeId, CancellationToken ct = default);
+    Task<DisputeWriteState> StateAsync(string disputeId, string? atmId = null, CancellationToken ct = default);
+    Task<DisputeWriteResult> AddCommentAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default);
     Task<DisputeWriteResult> ChangeStateAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default);
     Task<DisputeWriteResult> CloseAsync(string disputeId, DisputeWriteRequest q, CancellationToken ct = default);
 }

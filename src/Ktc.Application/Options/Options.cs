@@ -284,7 +284,7 @@ public class DisputeOptions
 {
     public const string Section = "Disputes";
     /// <summary>Default date range of the list when no dates are given.</summary>
-    public int LookbackDays { get; set; } = 30;
+    public int LookbackDays { get; set; } = 14;
     /// <summary>At most this many disputes are listed (newest first).</summary>
     public int MaxRows { get; set; } = 2000;
     /// <summary>
@@ -292,6 +292,14 @@ public class DisputeOptions
     /// default; the portal then shows "State 7" (the raw number) rather than guessing.
     /// </summary>
     public Dictionary<string, string> StateNames { get; set; } = new();
+    /// <summary>
+    /// KTC "statusfilter" values the list asks for (GET {groupid}/GroupDisputes?statusfilter=&amp;Numdays=, the call KTC's Windows client
+    /// makes). The client sends 0 by default and 1 for the second entry of its state box; what each means is not confirmed, so the
+    /// portal asks for both and merges the answers.
+    /// </summary>
+    public int[] StatusFilters { get; set; } = { 0, 1 };
+    /// <summary>How far back a dispute is looked up when it is opened from a link or read back after a change.</summary>
+    public int DetailLookupDays { get; set; } = 365;
 }
 
 /// <summary>
@@ -304,6 +312,13 @@ public class DisputeWriteOptions
     public const string Section = "DisputeWrite";
     /// <summary>Master switch (env DisputeWrite__Enabled=true).</summary>
     public bool Enabled { get; set; }
+    /// <summary>POST api/v1/Comment/User "table" for disputes: 13, from KTC's Windows client trace (6 = Ticket, 4 = Action).</summary>
+    public int CommentTable { get; set; } = 13;
+    /// <summary>
+    /// Change state and Close use KTC routes that are in the API collection but were NOT seen in the Windows client trace (only
+    /// comments were). Off by default even when Enabled is on, until a trace confirms them.
+    /// </summary>
+    public bool AllowStateChange { get; set; }
     public int MinReasonLength { get; set; } = 10;
     public int MaxReasonLength { get; set; } = 500;
 }

@@ -137,9 +137,11 @@ public sealed partial class MockKtcHttpHandler : HttpMessageHandler
             // Like KTC: each table number is a kind of record, and an unknown record answers "<Table> not found" (table 4 = Action).
             var tableNo = rt.TryGetProperty("table", out var tb) ? tb.GetInt32() : -1;
             var tid = rt.GetProperty("rowID").GetInt64(); var kc = rt.TryGetProperty("kcComment", out var kce) ? kce : default;
-            var tableName = tableNo switch { 0 => "Client", 1 => "Business", 2 => "Error", 3 => "HistoricalError", 4 => "Action", 5 => "ActionRequest", 6 => "Ticket", 7 => "Incident", _ => null };
+            var tableName = tableNo switch { 0 => "Client", 1 => "Business", 2 => "Error", 3 => "HistoricalError", 4 => "Action", 5 => "ActionRequest", 6 => "Ticket", 7 => "Incident", 13 => "Dispute", _ => null };
             if (tableName == null) return Resp(HttpStatusCode.InternalServerError, "{\"Message\":\"Exception: Unknown table\"}");
-            if (tableNo != 6 || !AllTickets(now).Any(x => x.ID == tid)) return Resp(HttpStatusCode.InternalServerError, $"{{\"Message\":\"Exception: {tableName} not found\"}}");
+            // Table 13 = Dispute (bank trace of dispute 10325); SendStatusParameter is the dispute's ClientID.
+            var known = tableNo == 6 ? AllTickets(now).Any(x => x.ID == tid) : tableNo == 13 && AllDisputes(now).Any(x => x.ID == tid);
+            if (!known) return Resp(HttpStatusCode.InternalServerError, $"{{\"Message\":\"Exception: {tableName} not found\"}}");
             var list = AddedComments.GetOrAdd(tid, _ => new());
             // Comment/User takes the user from the token, like KTC (kcComment is null there).
             var who = kc.ValueKind == JsonValueKind.Object ? kc.GetProperty("User").GetString() ?? "" : "demo";
