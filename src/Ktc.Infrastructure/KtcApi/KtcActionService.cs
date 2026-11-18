@@ -58,29 +58,7 @@ public class KtcActionService : IKtcActionService
         var checks = new List<ActionCheck>();
         void Check(string name, bool ok, string detail) => checks.Add(new ActionCheck(name, ok, PanMasker.Mask(detail)));
 
-        // 1. ATM
-        var atm = string.IsNullOrWhiteSpace(q.AtmId) ? null : await _data.GetAtmAsync(q.AtmId.Trim(), ct);
-        Check("ATM found", atm != null, atm != null ? $"{atm.Name} (KTC client {atm.Id})" : $"No ATM matches \"{q.AtmId}\".");
-        var typed = (q.ConfirmAtmId ?? "").Trim();
-        var typedOk = atm != null && (typed.Equals(atm.Id, StringComparison.OrdinalIgnoreCase) || typed.Equals(atm.Name, StringComparison.OrdinalIgnoreCase));
-        Check("ATM id typed", typedOk, typedOk ? "OK" : typed.Length == 0 ? "Type the ATM id to confirm." : "The typed ATM id does not match this ATM.");
-
-        // 2. Ticket and reason
-        var ticketNo = (q.TicketNumber ?? "").Trim();
-        if (ticketNo.Length == 0) Check("Ticket number", false, "A ticket number is required.");
-        else if (ticketNo.Length > 40 || ticketNo.Any(c => char.IsControl(c))) Check("Ticket number", false, "The ticket number is not valid.");
-        else if (!_opt.VerifyTicketInKtc) Check("Ticket number", true, $"{ticketNo} (not checked in KTC: VerifyTicketInKtc is off)");
-        else
-        {
-            var t = await _data.GetTicketAsync(ticketNo, ct);
-            if (t == null) Check("Ticket number", false, $"Ticket {ticketNo} was not found in KTC.");
-            else if (atm != null && t.AtmId.Length > 0 && !t.AtmId.Equals(atm.Id, StringComparison.OrdinalIgnoreCase))
-                Check("Ticket number", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).");
-            else Check("Ticket number", true, $"Ticket {ticketNo} found in KTC{(t.AtmId.Length > 0 ? " for this ATM" : "")}.");
-        }
-        var reason = PanMasker.Mask((q.Reason ?? "").Trim());
-        Check("Reason", reason.Length >= _opt.MinReasonLength && reason.Length <= 500,
-            reason.Length < _opt.MinReasonLength ? $"Give a reason of at least {_opt.MinReasonLength} characters." : reason.Length > 500 ? "The reason is too long (500 characters at most)." : "OK");
+        var (atm, ticketNo, reason) = await CommonChecksAsync(q.AtmId, q.ConfirmAtmId, q.TicketNumber, q.Reason, checks, ct);
 
         // 3. Command and parameters
         var cat = await GetCatalogAsync(false, ct);
@@ -140,6 +118,112 @@ public class KtcActionService : IKtcActionService
                 string.Join(", ", checks.Select(c => $"{c.Name}:{(c.Passed ? "ok" : "FAIL")}")), 3900), result.Sent || (checkOnly && allOk));
         _log.LogInformation("ATM action {Ref} by {User}: {Command} on {Atm} -> {Outcome} (KTC {Status})", corr, User, cmd?.Name, atm?.Id, result.Sent ? "sent" : "not sent", result.KtcStatus);
         return result;
+    }
+
+
+    /// <summary>Checks shared by the command form and the guided reboot: ATM, typed ATM id, ticket in KTC for this ATM, reason.</summary>
+    internal async Task<(AtmDto? Atm, string Ticket, string Reason)> CommonChecksAsync(string? atmId, string? confirmAtmId, string? ticket, string? reasonIn, List<ActionCheck> checks, CancellationToken ct)
+    {
+        void Check(string name, bool ok, string detail) => checks.Add(new ActionCheck(name, ok, PanMasker.Mask(detail)));
+        var q = new { AtmId = atmId, ConfirmAtmId = confirmAtmId, TicketNumber = ticket, Reason = reasonIn };
+        // ATM
+        var atm = string.IsNullOrWhiteSpace(q.AtmId) ? null : await _data.GetAtmAsync(q.AtmId.Trim(), ct);
+        Check("ATM found", atm != null, atm != null ? $"{atm.Name} (KTC client {atm.Id})" : $"No ATM matches \"{q.AtmId}\".");
+        var typed = (q.ConfirmAtmId ?? "").Trim();
+        var typedOk = atm != null && (typed.Equals(atm.Id, StringComparison.OrdinalIgnoreCase) || typed.Equals(atm.Name, StringComparison.OrdinalIgnoreCase));
+        Check("ATM id typed", typedOk, typedOk ? "OK" : typed.Length == 0 ? "Type the ATM id to confirm." : "The typed ATM id does not match this ATM.");
+
+        // 2. Ticket and reason
+        var ticketNo = (q.TicketNumber ?? "").Trim();
+        if (ticketNo.Length == 0) Check("Ticket number", false, "A ticket number is required.");
+        else if (ticketNo.Length > 40 || ticketNo.Any(c => char.IsControl(c))) Check("Ticket number", false, "The ticket number is not valid.");
+        else if (!_opt.VerifyTicketInKtc) Check("Ticket number", true, $"{ticketNo} (not checked in KTC: VerifyTicketInKtc is off)");
+        else
+        {
+            var t = await _data.GetTicketAsync(ticketNo, ct);
+            if (t == null) Check("Ticket number", false, $"Ticket {ticketNo} was not found in KTC.");
+            else if (atm != null && t.AtmId.Length > 0 && !t.AtmId.Equals(atm.Id, StringComparison.OrdinalIgnoreCase))
+                Check("Ticket number", false, $"Ticket {ticketNo} is for another ATM ({t.AtmName}).");
+            else Check("Ticket number", true, $"Ticket {ticketNo} found in KTC{(t.AtmId.Length > 0 ? " for this ATM" : "")}.");
+        }
+        var reason = PanMasker.Mask((q.Reason ?? "").Trim());
+        Check("Reason", reason.Length >= _opt.MinReasonLength && reason.Length <= 500,
+            reason.Length < _opt.MinReasonLength ? $"Give a reason of at least {_opt.MinReasonLength} characters." : reason.Length > 500 ? "The reason is too long (500 characters at most)." : "OK");
+
+        return (atm, ticketNo, reason);
+    }
+
+
+    public async Task<(bool Ok, string? ActionId, string? Error)> SendMappedAsync(string atmId, string commandKey, string comment, CancellationToken ct = default)
+    {
+        if (!_opt.SendEnabled) return (false, null, "sending is off (KtcActions:SendEnabled = false)");
+        var cat = await GetCatalogAsync(false, ct);
+        var planned = cat.Planned.FirstOrDefault(p => p.Key.Equals(commandKey, StringComparison.OrdinalIgnoreCase));
+        if (planned?.CommandTypeId is not int id) return (false, null, $"{commandKey} is not mapped to a KTC command (KtcActions:Commands:{commandKey})");
+        var cmd = cat.Commands.First(c => c.Id == id);
+        if (cmd.RequiresDualAuth) return (false, null, $"{cmd.Name} needs a second login, which is not supported yet");
+        var note = PanMasker.Mask(System.Text.RegularExpressions.Regex.Replace(comment, @"\s*\(via KTC Monitoring Portal.*$", ""));
+        var (vals, errs) = CommandParameterRules.Validate(cmd.Parameters, CommandParameterRules.GuidedValues(cmd.Parameters, note));
+        if (errs.Count > 0) return (false, null, $"{cmd.Name} needs parameters without defaults: {string.Join(" ", errs)}");
+        var xml = CommandParameterRules.BuildXml(cmd.Parameters, vals, _opt.ParametersRoot, _opt.ParameterElement, _opt.ParameterNameAttribute);
+        var body = new { Value1 = cmd.Id, Value2 = xml, Value3 = new[] { new { Timestamp = DateTime.UtcNow, User = "KTC Monitoring Portal", Comment = PanMasker.Mask(comment), Confidential = false } } };
+        var r = await _api.SendAsync(HttpMethod.Post, $"api/v1/Client/{atmId}/Actions", body, new KtcCallOptions { Idempotent = false }, ct);
+        _log.LogInformation("Guided action {Key} ({Command}) on {Atm} -> HTTP {Status}", commandKey, cmd.Name, atmId, r.StatusCode);
+        return r.Success ? (true, ActionIdFrom(r.Json), null) : (false, null, PanMasker.Mask(r.Error));
+    }
+
+    private async Task<Dictionary<int, KtcCommandTypeDto>> CommandsByIdAsync(CancellationToken ct) =>
+        (await GetCatalogAsync(false, ct)).Commands.GroupBy(c => c.Id).ToDictionary(g => g.Key, g => g.First());
+
+    public async Task<AtmActionHistory> GetHistoryAsync(string atmId, int days, CancellationToken ct = default)
+    {
+        var w = new List<string>();
+        var atm = await _data.GetAtmAsync(atmId.Trim(), ct);
+        var id = atm?.Id ?? atmId.Trim();
+        var cmds = await CommandsByIdAsync(ct);
+        var r = await _api.SendAsync(HttpMethod.Get, $"api/v1/Client/{id}/Actions?numdays={days}", null, new KtcCallOptions(), ct);
+        if (!r.Success) w.Add($"GET Client/{id}/Actions: {r.Error}");
+        var list = r.Success ? ActionActivityRules.ParseActions(r.Json, cmds, _opt) : new List<ActionRecord>();
+        return new AtmActionHistory(id, days, list, Array.Empty<RebootRun>(), w, _ktc.UseMock);
+    }
+
+    public async Task<ActionRecord?> GetActionAsync(string actionId, CancellationToken ct = default)
+    {
+        if (!long.TryParse(actionId, out _)) return null;
+        var r = await _api.SendAsync(HttpMethod.Get, $"api/v1/Action/{actionId}", null, new KtcCallOptions(), ct);
+        if (!r.Success || r.Json is not { } j) return null;
+        var e = KtcJson.Items(j).FirstOrDefault(x => x.ValueKind == JsonValueKind.Object);
+        return e.ValueKind == JsonValueKind.Object ? ActionActivityRules.ParseAction(e, actionId, await CommandsByIdAsync(ct), _opt) : null;
+    }
+
+    public async Task<(IReadOnlyList<ActionFile> Files, string? Error)> GetFilesAsync(string actionId, CancellationToken ct = default)
+    {
+        if (!long.TryParse(actionId, out _)) return (Array.Empty<ActionFile>(), "Not a KTC action id.");
+        var r = await _api.SendAsync(HttpMethod.Get, $"api/v1/Action/{actionId}/UploadedDirectoryListing", null, new KtcCallOptions(), ct);
+        if (!r.Success) return (Array.Empty<ActionFile>(), r.Error);
+        return (ActionActivityRules.ParseListing(r.Json, r.Raw, _opt), null);
+    }
+
+    public async Task<(ActionFileContent? File, string? Error)> GetFileAsync(string actionId, string name, bool preview, CancellationToken ct = default)
+    {
+        if (!long.TryParse(actionId, out _)) return (null, "Not a KTC action id.");
+        name = (name ?? "").Trim();
+        if (name.Length == 0 || name.Length > 260 || name.Any(char.IsControl)) return (null, "Choose a file from the list.");
+        // Only names KTC listed for this action can be fetched (no free paths).
+        var (files, err) = await GetFilesAsync(actionId, ct);
+        if (err != null) return (null, err);
+        var f = files.FirstOrDefault(x => x.Name == name);
+        if (f == null) return (null, "That file is not in this action's list.");
+        if (!f.Viewable) return (new ActionFileContent(f.Name, f.Size ?? 0, null, 0, false, f.BlockedReason, ""), null);
+        var route = (_opt.UploadedFileEndpoint ?? "api/v1/Action/{actionId}/UploadedFile").Replace("{actionId}", actionId).Replace("{file}", Uri.EscapeDataString(name)).TrimStart('/');
+        var r = await _api.SendAsync(HttpMethod.Get, route, null, new KtcCallOptions(), ct);
+        if (!r.Success) return (null, r.Error);
+        var (bytes, _) = ActionActivityRules.DecodeFile(r.Json, r.Raw);
+        var res = ActionActivityRules.Check(f.Name, bytes, _opt, preview);
+        if (!preview || res.BlockedReason != null)
+            await _audit.LogAsync("AtmActions", res.BlockedReason != null ? "Uploaded file refused" : "Uploaded file downloaded", actionId,
+                $"file={PanMasker.Mask(f.Name)}; size={res.Size}; sha256={res.Sha256}; masked={res.MaskedCount}; {res.BlockedReason ?? "masked copy only"}", res.BlockedReason == null);
+        return (res, null);
     }
 
     private static string Trunc(string s, int n) => s.Length > n ? s[..n] : s;

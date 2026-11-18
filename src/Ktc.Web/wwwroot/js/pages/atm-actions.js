@@ -10,6 +10,18 @@
  const label=c=>c.description&&c.description!==c.name?c.description:c.name;
  const typeName={choice:'choice',string:'text',bool:'yes / no',integer:'whole number',number:'number',secret:'secret',datetime:'date and time'};
 
+ // Guided reboot: needs Reboot, Out of service and In service mapped, and sending on.
+ function rebootBtn(r){const need=['Reboot','OutOfService','InService'].filter(k=>!(r.planned.find(p=>p.key===k)||{}).commandTypeId);
+  const why=need.length?'Map '+need.join(', ')+' first (KtcActions:Commands)':!r.sendEnabled?'Sending is off (KtcActions:SendEnabled)':'';
+  return `<button class="btn btn-sm btn-danger mt-2" data-reboot${why?' disabled':''} title="${K.esc(why||'Out of service, wait for idle, reboot, wait for the ATM to come back, back in service')}"><i class="bi ${why?'bi-lock':'bi-arrow-repeat'}"></i> Guided reboot…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;}
+ // Device reset, out of service, in service: open "Run a command" with the mapped command chosen (its own parameters, ticket,
+ // reason, and the high-risk confirmation). XFS reset has no KTC command, so it stays unmapped.
+ const icons={DeviceReset:'bi-tools',OutOfService:'bi-slash-circle',InService:'bi-check-circle',XfsReset:'bi-cpu'};
+ function formBtn(r,a){
+  if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">KTC has no "reset all XFS devices" command. Use Device reset for each device, or map a command when one exists.</div>':''}`;
+  const c=r.commands.find(x=>x.id===a.commandTypeId)||{},why=a.requiresDualAuth?'Needs a second login, not supported yet':c.sendBlockedReason||'';
+  return `<button class="btn btn-sm btn-outline-danger mt-2" data-useform="${a.commandTypeId}"${why?' disabled':''} title="${K.esc(why||'Fill in the parameters, ticket and reason, then confirm')}"><i class="bi ${why?'bi-lock':icons[a.key]||'bi-send'}"></i> ${K.esc(a.label)}…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;
+ }
  function planned(r){
   return r.planned.map(a=>`<div class="col-xl-4 col-md-6 col-12"><div class="border rounded p-2 h-100">
    <div class="d-flex align-items-center gap-2"><b>${K.esc(a.label)}</b><span class="sbadge ${cls(a)} ms-auto">${a.commandTypeId!=null?'Mapped':'Not mapped'}</span></div>
@@ -17,21 +29,11 @@
    <div class="small">${K.esc(a.status)}</div>
    ${a.commandTypeId!=null?`<div class="small">KTC command: <code>${K.esc(a.matchedName)}</code> #${K.esc(a.commandTypeId)}${a.requiresDualAuth?' <span class="sbadge warn">Needs second login</span>':''}</div>`:''}
    ${a.suggestions.length&&a.commandTypeId==null?`<div class="small">Looks like: ${a.suggestions.map(s=>`<code>${K.esc(s)}</code>`).join(', ')}</div>`:''}
-   <button class="btn btn-sm btn-outline-danger mt-2" disabled title="Guided flow (out of service, wait for idle, reboot, back in service) comes next"><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>
+   ${a.key==='Reboot'?rebootBtn(r):formBtn(r,a)}
   </div></div>`).join('')
-  +`<div class="col-12 small text-muted mt-1">Mapping is set in configuration, e.g. <code>KtcActions:Commands:Reboot = "&lt;CommandName&gt;"</code>. These commands are not offered in "Run a command".</div>`;
+  +`<div class="col-12 small text-muted mt-1">Mapping is set in configuration, e.g. <code>KtcActions:Commands:Reboot = "&lt;CommandName&gt;"</code>. Reboot runs only as the guided reboot; the others open "Run a command" with the extra confirmation.</div>`;
  }
- const fieldsSummary=c=>c.parameters.length?c.parameters.map(p=>`<span class="text-nowrap"><code>${K.esc(p.name)}</code> <span class="text-muted">${K.esc(typeName[p.type]||p.type)}${p.type==='choice'?': '+p.choices.map(K.esc).join(' / '):''}${p.required?'':' (optional)'}</span></span>`).join('<br>'):'<span class="text-muted">none</span>';
- function commands(r){
-  if(!r.commands.length)return '<div class="text-muted small">No command types to show.</div>';
-  return `<div class="table-responsive"><table class="table table-sm small mb-0 counter-table"><thead><tr><th class="text-end">ID</th><th>Command</th><th>Category</th><th>Dual auth</th><th>Risk</th><th>Form</th><th class="text-end">Max retries</th><th class="text-end">Max at once</th><th>Parameters (from the template)</th></tr></thead>
-   <tbody>${r.commands.map(c=>`<tr><td class="text-end num">${K.esc(c.id)}</td><td><code>${K.esc(c.name)}</code><div class="text-muted">${K.esc(c.description)}</div></td><td>${K.esc(c.category)}</td>
-    <td>${c.dualAuthMode==null?'<span class="text-muted">–</span>':c.requiresDualAuth?`<span class="sbadge warn text-nowrap">Yes (${K.esc(c.dualAuthMode)})</span>`:'No'}</td>
-    <td>${c.highRisk?'<span class="sbadge crit">High</span>':''}</td><td>${c.sendBlockedReason?`<span class="text-muted" title="${K.esc(c.sendBlockedReason)}">Not offered</span>`:'Offered'}</td>
-    <td class="text-end num">${num(c.maxRetries)}</td><td class="text-end num">${num(c.maxSimultaneous)}</td>
-    <td>${fieldsSummary(c)}${c.parametersNote?`<div class="text-warning">${K.esc(c.parametersNote)}</div>`:''}${c.parameterTemplate?`<details><summary class="text-muted">Template</summary><code class="text-break">${K.esc(c.parameterTemplate)}</code></details>`:''}</td></tr>`).join('')}</tbody></table></div>`
-   +(r.fields.length?`<details class="small text-muted mt-2"><summary>Fields KTC returned</summary>${r.fields.map(f=>`<code>${K.esc(f)}</code>`).join(' ')}</details>`:'');
- }
+
 
  // ---- command picker, grouped by KTC category like KTC's own "Add Action" menu ----
  function picker(r){
@@ -107,7 +109,7 @@
  async function send(){
   sendBtn(false,'Sending…');
   try{const r=await K.api('/data/actions/send',{json:body()});$id('actChecks').innerHTML=checksHtml(r);
-   if(r.sent){K.toast(r.message);sendBtn(false,'Sent');$id('actReason').value='';}else sendBtn(false,'Not sent');}
+   if(r.sent){K.toast(r.message);document.dispatchEvent(new CustomEvent('ktc:action-sent',{detail:r}));sendBtn(false,'Sent');$id('actReason').value='';}else sendBtn(false,'Not sent');}
   catch(e){$id('actChecks').innerHTML=`<div class="alert alert-danger py-2 small">${K.esc(e.message)}</div>`;sendBtn(false,'Not sent');}
  }
 
@@ -117,18 +119,21 @@
   $id('actMode').innerHTML=r.sendEnabled
    ?'<div class="alert alert-danger py-2 small"><i class="bi bi-broadcast"></i> <b>Sending is ON.</b> Commands confirmed here are sent to the ATM through KTC. Every attempt is audited with the ticket and reason.</div>'
    :'<div class="alert alert-info py-2 small"><i class="bi bi-info-circle"></i> <b>Sending is off.</b> You can fill in a command and run every check, but nothing is sent to the ATM. An administrator turns it on with <code>KtcActions:SendEnabled = true</code> once the real command list has been reviewed.</div>';
-  $id('actCount').textContent=r.commands.length?`(${r.commands.length}${r.commands.some(c=>c.requiresDualAuth)?`, ${r.commands.filter(c=>c.requiresDualAuth).length} need a second login`:''})`:'';
   $id('actMsg').innerHTML=(r.warnings||[]).length?`<div class="alert alert-warning py-2 small">${r.warnings.map(K.esc).join('<br>')}</div>`:'';
-  $id('actPlanned').innerHTML=planned(r);$id('actCommands').innerHTML=commands(r);picker(r);
+  $id('actPlanned').innerHTML=planned(r);picker(r);
+  document.dispatchEvent(new CustomEvent('ktc:actions-catalog',{detail:r}));
  }
  async function load(refresh){
-  loaded=true;$id('actCommands').innerHTML='<div class="text-muted small">Loading…</div>';
+  loaded=true;$id('actPlanned').innerHTML='<div class="col-12 text-muted small">Loading…</div>';
   try{render(await K.api('/data/actions/command-types'+(refresh?'?refresh=true':'')));}
-  catch(e){$id('actMsg').innerHTML=`<div class="alert alert-danger small">Command list unavailable: ${K.esc(e.message)}</div>`;$id('actCommands').innerHTML='';}
+  catch(e){$id('actMsg').innerHTML=`<div class="alert alert-danger small">Command list unavailable: ${K.esc(e.message)}</div>`;$id('actPlanned').innerHTML='';}
  }
  // The same sanitised list the tab shows, for sharing with the team (no tokens, PANs masked).
  $id('actJson').onclick=()=>{if(!last)return;const b=new Blob([JSON.stringify({route:last.route,readUtc:last.readUtc,demo:last.demo,fields:last.fields,commands:last.commands},null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='ktc-command-types.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+ $id('actPlanned').addEventListener('click',e=>{const b=e.target.closest('[data-useform]');if(!b||!last)return;
+  $id('actCmd').value=b.dataset.useform;select(last.commands.find(c=>String(c.id)===b.dataset.useform)||null);
+  $id('actRunCard').scrollIntoView({behavior:'smooth',block:'start'});setTimeout(()=>{const f=$id('actFields').querySelector('input,select');(f||$id('actTicket')).focus();},300);});
  $id('actCmd').onchange=e=>select(last&&last.commands.find(c=>String(c.id)===e.target.value)||null);
  $id('actForm').onsubmit=review;
  $id('actCheckBtn').onclick=runChecks;$id('actSendBtn').onclick=send;
