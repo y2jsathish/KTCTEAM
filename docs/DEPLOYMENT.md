@@ -27,6 +27,31 @@ Settings bind from `appsettings.json` → environment variables (`__` = section 
 | `Notifications__Smtp__*`, `Notifications__TeamsWebhookUrl`, `Notifications__DefaultRecipients__0`, `Notifications__PortalBaseUrl` | alert/report delivery |
 | `DataProtection__KeysPath` | a persisted, access-restricted folder (required across restarts / multiple nodes) |
 
+### Operator and Admin users
+
+Writing to KTC from the portal (adding a comment or changing a dispute or ticket, running ATM commands) needs the **Operator** or
+**Admin** role. Everyone else is a **Viewer**, and the portal refuses their writes with a message naming this setting.
+
+* **Where:** `src/Ktc.Web/appsettings.json` (or the `appsettings.Production.json` next to the app), section `Portal`, keys `OperatorUsers` and `AdminUsers`. Each is an array of sign-in names.
+* **Value:** the name exactly as typed on the portal's login page (the KTC user name, such as the one KTC shows on comments). Case does not matter. Use the same form every time you sign in (`name@domain` or `DOMAIN\\name`), because the match is on that text.
+* **Environment variables** (no file edit): `Portal__OperatorUsers__0`, `Portal__OperatorUsers__1`, … and `Portal__AdminUsers__0`, …
+* **Restart:** yes, the app reads the setting at start-up. Then sign out and sign in again, because the role is stored in the sign-in cookie.
+
+```json
+"Portal": {
+  "AdminUsers": [],
+  "OperatorUsers": [ "Sathishkumar.Coumar@brinks.com" ]
+}
+```
+
+```
+Portal__OperatorUsers__0=Sathishkumar.Coumar@brinks.com
+```
+
+Without editing settings: an existing user's role can be raised once in the portal database (table `Users`, column `RoleId`, to the
+`Roles` row named Operator); the portal keeps such a promotion. The user must have signed in once so the row exists. In demo mode
+(`Ktc:UseMock` true) with `AdminUsers` empty, every user is an Admin. The portal has no screen for changing roles.
+
 ## 3. Database
 The app applies EF migrations at start-up. To have a DBA apply it instead: run `docs/database/schema.sql` (idempotent), then start the app (migration is then a no-op). Grant the app login `db_datareader`, `db_datawriter`, and `db_ddladmin` only if it should self-migrate.
 Regenerate after model changes:
