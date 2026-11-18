@@ -136,6 +136,35 @@ public class DisputeRulesTests
         Assert.Equal("1775843605200", DisputeRules.Map(tx.RootElement, new List<DisputeStateDto>(), null, _ => null)!.TransactionId);
         Assert.Equal("Rule 9", DisputeRules.Map(JsonDocument.Parse("""{"ID":1,"DisputeRuleID":9}""").RootElement, new List<DisputeStateDto>(), null, _ => null)!.Rule);
     }
+
+    [Theory]
+    [InlineData("""{"DisputeID":10325,"Transaction":{"ID":42262},"ATMID":5,"DateAdded":"2026-11-11T12:45:18","DisputeStatus":0,"RuleID":3,"CommentsString":"tesst","CustomerInfoXML":{"customerName":"A"},"DisputeExtraData":{"Amount":-1,"EffectiveAmount":-1,"TSN":""}}""")]
+    [InlineData("""{"Id":10325,"transactionID":"42262","Client":{"ID":5,"Name":"ADB05414"},"TimeAdded":"/Date(1794401118000)/","State":{"ID":0,"Name":"All"},"Rule":{"ID":3,"Name":"CIM-ITEMS-RETRACTED_CashDepositToAccount"}}""")]
+    [InlineData("""{"DisputeId":10325,"TransactionDataID":42262,"ClientId":5,"CreationDate":"2026-11-11 12:45:18","StatusID":0,"DisputeRule":3}""")]
+    public void Real_ktc_shapes_fill_the_list_columns(string json)
+    {
+        using var d = JsonDocument.Parse(json);
+        var states = new List<DisputeStateDto> { new(0, "All", null), new(1, "Pending", null) };
+        var rules = new Dictionary<int, string> { [3] = "CIM-ITEMS-RETRACTED_CashDepositToAccount" };
+        var r = DisputeRules.Map(d.RootElement, states, null, id => id == "5" ? ("ADB05414", "Bank") : null, rules)!;
+        Assert.Equal("10325", r.Id);
+        Assert.Equal("42262", r.TransactionId);
+        Assert.Equal("5", r.AtmId);
+        Assert.Equal("ADB05414", r.AtmName);
+        Assert.Equal(new DateTime(2026, 11, 11, 12, 45, 18), r.CreatedUtc);
+        Assert.Equal("All", r.State);
+        Assert.Equal("CIM-ITEMS-RETRACTED_CashDepositToAccount", r.Rule);
+        Assert.Empty(DisputeRules.Missing(r));
+    }
+
+    [Fact]
+    public void States_and_rules_are_named_whatever_ktc_calls_the_name()
+    {
+        using var s = JsonDocument.Parse("""{"0":{"DisputeStateID":0,"StateDescription":"All"},"1":{"Key":1,"Label":"Pending"}}""");
+        Assert.Equal(new[] { "All", "Pending" }, DisputeRules.ParseStates(s.RootElement).Select(x => x.Name));
+        using var r = JsonDocument.Parse("""{"3":{"DisputeRulesID":3,"RuleDescription":"CIM-ITEMS-RETRACTED_CashDepositToAccount","Enabled":true}}""");
+        Assert.Equal("CIM-ITEMS-RETRACTED_CashDepositToAccount", DisputeRules.ParseRules(r.RootElement)[3]);
+    }
 }
 
 public class DisputeServiceTests

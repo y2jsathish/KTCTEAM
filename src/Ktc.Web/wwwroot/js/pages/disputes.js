@@ -36,6 +36,21 @@
     +`<h6 class="small fw-semibold">States (GET DisputeState)</h6>${tbl(s.stateRecords,'KTC returned no dispute states.')}<h6 class="small fw-semibold">Rules (GET DisputeRule)</h6>${tbl(s.rules,'KTC returned no dispute rules.')}<h6 class="small fw-semibold">Customer message templates (GET DisputeMessageTemplate)</h6>${tbl(s.messageTemplates,'KTC returned no message templates.')}`;
   }catch(x){$id('dsSetupBody').innerHTML=`<div class="alert alert-danger py-1">${K.esc(x.message)}</div>`;}});
 
+ // ---------- KTC's raw records (masked): shows KTC's real field names when a column comes out empty ----------
+ $id('dsRawBtn').onclick=async()=>{const box=$id('dsRaw');
+  if(!box.classList.contains('d-none')){box.classList.add('d-none');return;}
+  box.classList.remove('d-none');box.innerHTML='<div class="small text-muted">Reading from KTC…</div>';
+  const p=Object.fromEntries(new FormData(f).entries());
+  try{const r=await K.api('/data/disputes/raw?'+K.qs({days:p.days,state:p.state,atmId:p.atmId}));
+   const text=`KTC dispute records (card data masked)\nSource: ${r.source}\nRecords returned: ${r.count}\n\nFields:\n${r.fields.map(x=>`${x.name} = ${x.value}`).join('\n')}\n\n${r.records.join('\n\n')}`;
+   box.innerHTML=(r.warnings.length?`<div class="alert alert-warning py-1 small">${r.warnings.map(K.esc).join('<br>')}</div>`:'')
+    +`<div class="d-flex align-items-center gap-2 mb-1 small"><b>KTC's raw dispute records</b><span class="text-muted">${K.esc(r.source)} · ${r.count} record${r.count===1?'':'s'} · first ${r.records.length} shown · card data masked</span>
+      <button type="button" class="btn btn-sm btn-primary ms-auto" id="dsRawCopy"><i class="bi bi-clipboard"></i> Copy</button></div>
+     <div class="row g-2"><div class="col-lg-5"><table class="table table-sm small mb-0"><thead><tr><th>KTC field</th><th>Type: sample</th></tr></thead><tbody>${r.fields.map(x=>`<tr><td class="font-monospace">${K.esc(x.name)}</td><td class="text-break">${K.esc(x.value)}</td></tr>`).join('')}</tbody></table></div>
+     <div class="col-lg-7"><pre class="small bg-body-tertiary border rounded p-2 mb-0" style="max-height:28rem;overflow:auto">${K.esc(r.records.join('\n\n')||'KTC returned no records for this filter.')}</pre></div></div>`;
+   $id('dsRawCopy').onclick=()=>navigator.clipboard.writeText(text).then(()=>K.toast('Copied. Paste it in the chat so the field names can be mapped.','ok'),()=>K.toast('Copy failed: select the text and copy it.','error'));
+  }catch(e){box.innerHTML=`<div class="alert alert-danger py-1 small">${K.esc(e.message)}</div>`;}};
+
  const pick=e=>{const t=e.target.closest('[data-t]');if(!t)return;tile=t.dataset.t===''||tile===t.dataset.t?null:t.dataset.t;show();};
  $id('dsTiles').addEventListener('click',pick);$id('dsTiles').addEventListener('keydown',e=>{if(e.key==='Enter')pick(e);});
  const reload=()=>{tile=null;load().catch(x=>K.toast(x.message,'error'));};

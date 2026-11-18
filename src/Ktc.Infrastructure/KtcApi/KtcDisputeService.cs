@@ -134,6 +134,14 @@ public class KtcDisputeService : IKtcDisputeService
         if (rows.Count > 0 && mapped.Count == 0)
             _log.LogWarning("KTC returned {Rows} dispute records but none had an id; fields of the first: {Fields}", rows.Count, string.Join(", ", rows[0].EnumerateObject().Take(40).Select(p => p.Name)));
 
+        // Columns no record filled: KTC's field names are not the ones the portal knows. Say so, and name the record's fields in the log.
+        var missing = mapped.Count == 0 ? new List<string>() : mapped.Select(DisputeRules.Missing).Aggregate((a, b) => a.Intersect(b).ToList());
+        if (missing.Count > 0)
+        {
+            w.Add($"KTC's dispute records have no field the portal recognises for: {string.Join(", ", missing)}. Click \"Show KTC's raw records\" below and send what it shows, so the field names can be mapped.");
+            _log.LogWarning("Dispute fields not recognised ({Missing}); KTC record fields: {Fields}", string.Join(", ", missing), string.Join(", ", DisputeRules.Leaves(rows[0]).Select(l => l.Path)));
+        }
+
         Func<DisputeDto, bool>? atmMatch = null;
         if (!oneAtm && atmText.Length > 0) atmMatch = d => d.AtmId == atmNorm || d.AtmName.Contains(atmText, StringComparison.OrdinalIgnoreCase);
         var amountKnown = mapped.Count == 0 || mapped.Any(d => d.Amount != null);
@@ -143,6 +151,32 @@ public class KtcDisputeService : IKtcDisputeService
         var list = DisputeRules.Filter(mapped, q with { StateId = null, MinAmount = amountKnown ? q.MinAmount : null, MaxAmount = amountKnown ? q.MaxAmount : null }, atmMatch)
             .OrderByDescending(d => d.CreatedUtc ?? d.TransactionUtc ?? DateTime.MinValue).Take(Math.Max(1, _opt.MaxRows)).ToList();
         return new DisputeSearchResult(list, states, w.Distinct().ToList(), sources.Append($"GET {Root}/DisputeState").Append($"GET {Root}/DisputeRule").ToList(), amountKnown);
+    }
+
+    /// <summary>
+    /// KTC's dispute records exactly as the list call returns them (first few), with card data masked, plus every field path: the
+    /// one-click way to see KTC's real field names when the portal's columns come out empty.
+    /// </summary>
+    public async Task<DisputeRawSample> GetRawSampleAsync(DisputeQuery q, int max = 3, CancellationToken ct = default)
+    {
+        var days = Math.Clamp(q.Days ?? _opt.LookbackDays, 1, 3650);
+        var sf = q.StateId is > 0 and var s0 ? s0 : 0;
+        var w = new List<string>();
+        var atms = await AtmsAsync(w, ct);
+        var atmNorm = KtcJson.NormId(q.AtmId ?? "");
+        var scope = atmNorm.Length > 0 && long.TryParse(atmNorm, out _) && atms.ContainsKey(atmNorm) ? $"{atmNorm}/ClientDisputes" : $"{await AllClientsGroupAsync(w, ct)}/GroupDisputes";
+        var (rows, warn, src) = await ListAsync(scope, sf, days, ct);
+        w.AddRange(warn);
+        var take = rows.Take(Math.Clamp(max, 1, 20)).ToList();
+        var fields = take.SelectMany(r => DisputeRules.Leaves(r).Select(l => (l.Path, Kind: l.Value.ValueKind.ToString(), Sample: DisputeRules.SafeValue(l.Name, l.Value.ValueKind == JsonValueKind.String ? l.Value.GetString() : l.Value.GetRawText()))))
+            .GroupBy(x => x.Path).Select(g => new KtcField(g.Key, $"{g.First().Kind}: {Cut(g.First().Sample)}")).ToList();
+        foreach (var r in take)
+            foreach (var p in r.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Array || (p.Value.ValueKind == JsonValueKind.Object && fields.All(f => !f.Name.StartsWith(p.Name + ".")))))
+                if (fields.All(f => f.Name != p.Name)) fields.Add(new KtcField(p.Name, $"{p.Value.ValueKind}: {Cut(DisputeRules.Scrub(System.Text.Json.Nodes.JsonNode.Parse(p.Value.GetRawText()), p.Name)!.ToJsonString())}"));
+        var json = take.Select(r => DisputeRules.Scrub(System.Text.Json.Nodes.JsonNode.Parse(r.GetRawText()))!.ToJsonString(new JsonSerializerOptions { WriteIndented = true })).ToList();
+        _log.LogInformation("Raw dispute sample from {Source}: {Count} records, fields {Fields}", src.FirstOrDefault(), rows.Count, string.Join(", ", fields.Select(f => f.Name)));
+        return new DisputeRawSample(src.FirstOrDefault() ?? "", rows.Count, fields, json, w);
+        static string Cut(string? v) => v == null ? "" : v.Length > 120 ? v[..120] + "…" : v;
     }
 
     // ---------------- one dispute ----------------
@@ -199,7 +233,7 @@ public class KtcDisputeService : IKtcDisputeService
         }
         var maps = DisputeRules.CustomerF.Concat(DisputeRules.ExtraDataF).Concat(DisputeRules.SessionF).Concat(DisputeRules.TransactionF).Concat(DisputeRules.HistoryF)
             .Concat(new[] { "Comments", "CommentList", "CommentsString", "CommentString" }).ToArray();
-        return new DisputeDetails(d, DisputeRules.Fields(e, maps), DisputeRules.MapFields(e, DisputeRules.CustomerF), DisputeRules.MapFields(e, DisputeRules.ExtraDataF),
+        return new DisputeDetails(d, DisputeRules.Fields(e, maps), DisputeRules.CustomerFields(e), DisputeRules.ExtraFields(e),
             DisputeRules.MapFields(e, DisputeRules.SessionF), DisputeRules.MapFields(e, DisputeRules.TransactionF), TicketRules.Comments(e), DisputeRules.History(e),
             notes, sources, w.Distinct().ToList());
     }

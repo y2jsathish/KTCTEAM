@@ -30,6 +30,12 @@ public class DisputeDataController : ControllerBase
             r.Warnings, r.Sources, r.AmountKnown });
     }
 
+    /// <summary>KTC's raw dispute records (card data masked) and their field names: the one-click way to see what KTC really returns.</summary>
+    [HttpGet("raw")]
+    [Audit("DisputeView", "Dispute raw records")]
+    public async Task<IActionResult> Raw(int? days, int? state, string? atmId, CancellationToken ct) =>
+        days is < 1 or > 3650 ? BadRequest(new { error = "Number of days to show must be 1 to 3650." }) : Ok(await _d.GetRawSampleAsync(new DisputeQuery(days, state, atmId), 3, ct));
+
     [HttpGet("{id}/details")]
     [Audit("DisputeView", "Dispute details")]
     public async Task<IActionResult> Details(string id, string? atmId, CancellationToken ct)

@@ -80,11 +80,21 @@ Card-number fields show at most the first 6 and last 4 digits; track, CVV, PIN-b
 depth (customer details, extra data, nested JSON or XML); card numbers inside free text (reasons, comments) are masked, also
 in what the portal sends and in the audit. The card filter compares only the last 4 digits.
 
+## When columns come out empty (field names)
+
+KTC's real `GroupDisputes` records did not use the names the portal first expected: on the bank's server Transaction Id, Created At,
+Client, Status and Dispute Rules were blank. The portal now finds those fields by the shape of their name at any depth (for example
+`TransactionDataID`, `Transaction.ID`, `ATMID`, `Client.Name`, `DateAdded`, `/Date(...)/` dates, `DisputeStatus`, `RuleID`,
+`Rule.Name`), maps Status through `GET DisputeState`, Dispute Rules through `GET DisputeRule` and the client through the ATM list.
+If a column is still empty for every record, the page says which, and the server log names the record's fields.
+
+The **Show KTC's raw records** button on the Disputes page shows KTC's first records exactly as returned (card data masked) with
+every field path and a sample value, and a Copy button. Paste that in the chat and the exact names can be mapped.
+
 ## Still needed from your KTC server
 
 1. The JSON of `GET api/v1/DisputeManagement/DisputeState` (to confirm the state ids behind the names, and that "All" is 0).
-2. The JSON of `GET api/v1/DisputeManagement/5/ClientDisputes?statusfilter=0&Numdays=14` (the record's field names; the portal
-   reads them tolerantly until then).
+2. The output of **Show KTC's raw records** on the Disputes page (the record's real field names).
 3. A trace of the client's **Change** (Change Dispute State dialog), to confirm the ChangeState call and body.
 
 A Fiddler capture, or the KTC REST API's own log with bodies, gives all three.

@@ -185,6 +185,7 @@ public interface IKtcDisputeService
     Task<(DisputeDto? Dispute, IReadOnlyList<TicketComment> Comments)> ReadCommentsAsync(string id, string? atmId, CancellationToken ct = default);
     Task<DisputeSetup> GetSetupAsync(CancellationToken ct = default);
     /// <summary>Drops cached dispute lists so a change shows at once.</summary>
+    Task<DisputeRawSample> GetRawSampleAsync(DisputeQuery q, int max = 3, CancellationToken ct = default);
     void Invalidate();
 }
 

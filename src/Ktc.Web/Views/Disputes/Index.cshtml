@@ -14,7 +14,9 @@
 <div class="kpis" id="dsTiles"></div>
 <div class="cardx"><div class="table-responsive"><table id="tbl" class="table table-sm table-hover w-100 small text-nowrap"><thead><tr>
   <th>Dispute Id</th><th>Transaction Id</th><th>Created At</th><th>Client</th><th>Status</th><th>Dispute Rules</th><th>Last Comment</th><th>Closed</th></tr></thead></table></div>
-  <div class="small text-muted mt-1" id="dsSrc"></div></div>
+  <div class="d-flex flex-wrap align-items-center gap-2 mt-1"><div class="small text-muted" id="dsSrc"></div>
+    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto" id="dsRawBtn" title="KTC's dispute records exactly as KTC returns them, card data masked"><i class="bi bi-braces"></i> Show KTC's raw records</button></div>
+  <div id="dsRaw" class="d-none mt-2"></div></div>
 
 <details class="cardx mt-3" id="dsSetup"><summary class="small fw-semibold">KTC dispute states, rules and message templates (read-only)</summary><div id="dsSetupBody" class="pt-2 small text-muted">Open to load.</div></details>
 @section Scripts { <script src="~/js/dispute-details.js" asp-append-version="true"></script><script src="~/js/pages/disputes.js" asp-append-version="true"></script> }
