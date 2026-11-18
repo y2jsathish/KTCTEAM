@@ -128,13 +128,16 @@ public static partial class DisputeRules
             StateId = stateId, State = state, IsClosed = closed,
             CreatedUtc = KtcJson.Date(e, CreatedF), UpdatedUtc = KtcJson.Date(e, UpdatedF), ClosedUtc = closedUtc, TransactionUtc = D(TxTimeF),
             Amount = Amount(e) ?? (tx is { } t2 ? Amount(t2) : null) ?? ExtraAmount(e), Currency = CommandTypeRules.Sanitize(S("Currency", "CurrencyCode", "CurrencyName")),
-            Card = MaskCard(S(CardF)), TransactionId = CommandTypeRules.Sanitize(S(TxIdF)), TransactionType = CommandTypeRules.Sanitize(S("TransactionType", "TransactionTypeName", "TxnType", "TransactionTypeID")),
+            Card = MaskCard(S(CardF)), TransactionId = TxId(S(TxIdF)), TransactionType = CommandTypeRules.Sanitize(S("TransactionType", "TransactionTypeName", "TxnType", "TransactionTypeID")),
             Customer = CommandTypeRules.Sanitize(KtcJson.Str(e, "CustomerName") is { Length: > 0 } cn ? cn : FromCustomer("Name", "CustomerName", "FullName")),
             Reason = CommandTypeRules.Sanitize(KtcJson.Str(e, "Reason", "DisputeReason", "Description", "Details", "Comment")),
             CreatedBy = CommandTypeRules.Sanitize(KtcJson.Str(e, "CreatedBy", "CreatedByUser", "UserName", "User", "Operator", "RaisedBy")),
             LastChangeBy = CommandTypeRules.Sanitize(KtcJson.Str(e, "LastChangeBy", "LastChangedBy", "UpdatedBy", "LastUpdatedBy", "ModifiedBy"))
         };
     }
+
+    /// <summary>KTC's numeric transaction id kept as is (a long id can look like a card number to the text masker); anything else is sanitized.</summary>
+    private static string TxId(string v) => long.TryParse(v.Trim(), out _) ? v.Trim() : CommandTypeRules.Sanitize(v);
 
     private static decimal? Amount(JsonElement e)
     {

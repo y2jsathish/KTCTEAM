@@ -47,7 +47,9 @@ has no amount field. The user setting `DisputesExtraSTXFieldIDs` adds transactio
   Comment, Delete, OK.
 * **Change Dispute State**: Old Record State, New Record State (the states without "All"), Enter a comment, Cancel / OK.
 
-The portal follows these layouts on the Disputes page and on a new **Disputes tab of the ATM page**. It has no Delete button (the
+In the portal, the client's Transaction "Open" button is replaced by a **Transaction tab** in Dispute Details. It shows the
+dispute's transaction (details, EJ, session, fields and dispense, as in the portal's transaction popup), read from KTC when the tab
+is first opened. The portal follows these layouts on the Disputes page and on a new **Disputes tab of the ATM page**. It has no Delete button (the
 portal never deletes disputes), and Close is not shown, because the client has no Close button.
 
 ## All routes, and what the portal does with them
