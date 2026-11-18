@@ -18,7 +18,8 @@ public record CashReplenishmentSuggestion(DateTime VisitByUtc, string Reason, IR
 /// <summary>Cash position and run-out estimate of one ATM.</summary>
 public record AtmCashForecast(string AtmId, string AtmName, string Client, DateTime GeneratedUtc, DateTime? LastReplenishmentUtc,
     decimal CashAmount, long Notes, IReadOnlyList<CashUnitForecast> Units, DateTime? EarliestRunOutUtc, double? DaysLeft,
-    string Status, string Confidence, bool WeekdayPattern, CashReplenishmentSuggestion? Suggestion, IReadOnlyList<string> Warnings);
+    string Status, string Confidence, bool WeekdayPattern, CashReplenishmentSuggestion? Suggestion, IReadOnlyList<string> Warnings,
+    double[]? WeekdayFactors = null);
 
 /// <summary>Cash moved by successful customer transactions on one portal-local day (actual, not an estimate). Partial = the day is not over.</summary>
 public record CashDailyPoint(DateTime Day, int Withdrawals, decimal Withdrawn, int Deposits, decimal Deposited, bool Partial);
@@ -27,8 +28,9 @@ public record CashDailyPoint(DateTime Day, int Withdrawals, decimal Withdrawn, i
 public record CashSnapshotPoint(DateTime Day, string Unit, decimal? Denomination, long Notes);
 
 /// <summary>The whole estate (stored after each run). Daily is the estate's actual cash withdrawn per day from the stored history.</summary>
+/// <param name="LowPct">Low-cash threshold the results use, as a percent of cassette capacity; LowNotes is the same in notes.</param>
 public record EstateCashForecast(DateTime GeneratedUtc, string Trigger, int HistoryDays, IReadOnlyList<AtmCashForecast> Atms,
-    IReadOnlyList<CashDailyPoint> Daily, IReadOnlyList<string> Warnings);
+    IReadOnlyList<CashDailyPoint> Daily, IReadOnlyList<string> Warnings, double? LowPct = null, long? LowNotes = null);
 
 /// <summary>
 /// One note value compared across the sources: XFS = notes in the cash units now (KTC CurrentCashUnitStatus), EJ = the latest counter
@@ -42,7 +44,7 @@ public record CashReconciliation(DateTime? AppResetUtc, DateTime? EjReportUtc, D
 
 /// <summary>ATM forecast page: the forecast, the reconciliation, the ATM's daily cash history and snapshots, and what was read.</summary>
 public record AtmCashForecastDetail(AtmCashForecast Forecast, CashReconciliation Reconciliation, IReadOnlyList<CashDailyPoint> Daily,
-    IReadOnlyList<CashSnapshotPoint> Snapshots, IReadOnlyList<string> Diagnostics);
+    IReadOnlyList<CashSnapshotPoint> Snapshots, IReadOnlyList<string> Diagnostics, double? LowPct = null, long? LowNotes = null);
 
 /// <summary>Everything the forecast of one ATM is built from.</summary>
 /// <param name="History">Daily snapshots of this ATM's cash units, any order.</param>

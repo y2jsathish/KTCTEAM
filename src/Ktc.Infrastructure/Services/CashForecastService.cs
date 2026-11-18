@@ -35,17 +35,31 @@ public class CashForecastService : ICashForecastService
     private bool Shared => _ktc.UseMock || _ktc.ServiceAccount.Configured;
     private string Key => Shared ? "cash:forecast" : "cash:forecast:u:" + (_http.HttpContext?.User.Identity?.Name ?? "anon");
 
-    public async Task<EstateCashForecast> GetEstateAsync(CancellationToken ct = default)
+    public async Task<EstateCashForecast> GetEstateAsync(double? lowPct = null, CancellationToken ct = default)
     {
-        var key = Key;
+        var key = Key; EstateCashForecast? f = null;
         var row = await _uow.Repo<DashboardCache>().Query().AsNoTracking().FirstOrDefaultAsync(x => x.Key == key, ct);
         if (row != null)
         {
-            try { if (JsonSerializer.Deserialize<EstateCashForecast>(row.PayloadJson, Json) is { } f) return f; }
+            try { f = JsonSerializer.Deserialize<EstateCashForecast>(row.PayloadJson, Json); }
             catch (Exception ex) { _log.LogWarning(ex, "Stored cash forecast could not be read; recalculating"); }
         }
-        return await RunAsync("first view", ct);
+        return WithThreshold(f ?? await RunAsync("first view", ct), lowPct);
     }
+
+    /// <summary>The estate forecast for a low-cash threshold of <paramref name="lowPct"/> percent of cassette capacity (null = CashForecast:LowNotes).</summary>
+    private EstateCashForecast WithThreshold(EstateCashForecast f, double? lowPct)
+    {
+        var (o, pct) = Options(lowPct);
+        if (lowPct == null || o.LowNotes == (f.LowNotes ?? _o.LowNotes)) return f with { LowPct = pct, LowNotes = o.LowNotes };
+        var local = _clock.ToLocal(f.GeneratedUtc);
+        var atms = f.Atms.Select(a => CashForecastRules.Rethreshold(a, o, local)).OrderBy(a => a.DaysLeft ?? double.MaxValue).ThenBy(a => a.AtmName).ToList();
+        return f with { Atms = atms, LowPct = pct, LowNotes = o.LowNotes };
+    }
+
+    /// <summary>Options with the low-cash threshold for <paramref name="lowPct"/> (null = configured LowNotes) and that threshold as a percent.</summary>
+    private (CashForecastOptions Options, double Pct) Options(double? lowPct) =>
+        lowPct is { } p && double.IsFinite(p) ? (_o.WithLowNotes(_o.LowNotesFor(p)), Math.Round(Math.Clamp(p, 0, 100), 2)) : (_o, _o.DefaultLowPct);
 
     public async Task<EstateCashForecast> RunAsync(string trigger, CancellationToken ct = default)
     {
@@ -98,7 +112,7 @@ public class CashForecastService : ICashForecastService
             var historyDays = snaps.Select(s => s.Day).Distinct().Count();
             if (historyDays < _o.MinHistoryDays + 1)
                 warnings.Add($"Daily snapshots: {historyDays} day(s) stored so far. Until there are {_o.MinHistoryDays + 1}, usage comes from the withdrawal amounts (a rough guess); estimates improve as history builds up.");
-            var result = new EstateCashForecast(nowUtc, trigger, historyDays, items, EstateDaily(usage, today.AddDays(-30)), warnings);
+            var result = new EstateCashForecast(nowUtc, trigger, historyDays, items, EstateDaily(usage, today.AddDays(-30)), warnings, _o.DefaultLowPct, _o.LowNotes);
             await StoreAsync(result, ct);
             await CleanupAsync(today, ct);
             _log.LogInformation("Cash forecast ({Trigger}): {Atms} ATMs, {Critical} critical, {Warning} warning, {Days} snapshot day(s)", trigger, items.Count,
@@ -108,8 +122,9 @@ public class CashForecastService : ICashForecastService
         finally { Gate.Release(); }
     }
 
-    public async Task<AtmCashForecastDetail?> GetAtmAsync(string atmId, CancellationToken ct = default)
+    public async Task<AtmCashForecastDetail?> GetAtmAsync(string atmId, double? lowPct = null, CancellationToken ct = default)
     {
+        var (opt, pct) = Options(lowPct);
         using var scope = Shared ? KtcTokenScope.ForceService() : null;
         var tRep = _data.GetReplenishmentAsync(atmId, ct);
         var tCnt = _data.GetCountersAsync(atmId, ct);
@@ -144,7 +159,7 @@ public class CashForecastService : ICashForecastService
         else diag.Add($"Daily cash: {daily.Count} stored day(s) since {daily[0].Day:yyyy-MM-dd}.");
 
         var f = CashForecastRules.Build(new CashForecastInput(id, name, client, nowUtc, nowLocal, units, rep?.LastReplenishmentUtc, history,
-            cnt?.NotesByDenomination, cnt?.LastResetUtc, WithdrawnPerDay(daily), daily), _o);
+            cnt?.NotesByDenomination, cnt?.LastResetUtc, WithdrawnPerDay(daily), daily), opt);
         f = f with { Warnings = warnings.Concat(rep?.Warnings ?? Array.Empty<string>()).Concat(f.Warnings).Distinct().ToList() };
 
         // ---- reconciliation ----
@@ -159,7 +174,7 @@ public class CashForecastService : ICashForecastService
         diag.Add(cnt?.NotesByDenomination is { Count: > 0 } nb ? $"Notes by denomination since the reset ({cnt.ResetSource ?? "reset time unknown"}): {nb.Count} value(s)." : "Notes by denomination: none read (application counters).");
         diag.Add(ej == null ? "EJ counter reports: not read." : $"EJ counter reports: {ej.Reports.Count} in the last {_o.EjDays} day(s){(report != null ? $", latest {report.ReportTimeText ?? report.EjTimeUtc.ToString("u")}" : "")}.");
         diag.Add($"Daily snapshots: {history.Select(h => h.Day).Distinct().Count()} day(s) stored for this ATM.");
-        return new AtmCashForecastDetail(f, recon, daily, history, diag);
+        return new AtmCashForecastDetail(f, recon, daily, history, diag, pct, opt.LowNotes);
     }
 
     public async Task<IReadOnlyList<CashDailyPoint>> GetDailyAsync(int days, CancellationToken ct = default)

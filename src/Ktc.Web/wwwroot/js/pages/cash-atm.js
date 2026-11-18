@@ -15,7 +15,7 @@
   <tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td>${K.esc(u.type)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num">${num(u.amount)}</td>
    <td class="text-end num">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td>${K.esc(u.rateSource)}${u.rateDays?` <span class="text-muted">(${u.rateDays} d)</span>`:''}</td><td>${K.esc(u.confidence)}</td>
    <td class="text-end num">${days(u.daysLeft)}</td><td>${u.status==='Out'?'now':u.runOutUtc&&u.daysLeft<90?day(u.runOutUtc):''}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table></div>`
-  +`<div class="small text-muted">A cassette counts as out at the low-notes level. ${f.weekdayPattern?'Run-out dates use the weekday pattern of the stored history.':'No weekday pattern yet (needs 2 weeks of daily history), so usage is spread evenly over the days.'}</div>`;
+  +`<div class="small text-muted">A cassette counts as out at or below ${last.lowPct}% of its capacity (${num(last.lowNotes)} notes). ${f.weekdayPattern?'Run-out dates use the weekday pattern of the stored history.':'No weekday pattern yet (needs 2 weeks of daily history), so usage is spread evenly over the days.'}</div>`;
  }
  function suggest(f){
   const s=f.suggestion;
@@ -45,7 +45,7 @@
  function render(d){
   last=d;const f=d.forecast;
   document.title=`Cash forecast · ${f.atmName}`;$id('title').textContent=`Cash forecast · ${f.atmName||f.atmId}`;$id('sub').textContent=[f.client,'calculated '+K.local(f.generatedUtc)].filter(Boolean).join(' · ');
-  $id('atm360').href='/Atm/Detail/'+encodeURIComponent(f.atmId);
+  $id('atm360').href='/Atm/Detail/'+encodeURIComponent(f.atmId);$id('lowPct').value=d.lowPct;
   $id('warnings').innerHTML=(f.warnings||[]).length?`<div class="alert alert-warning py-2 small">${f.warnings.map(K.esc).join('<br>')}</div>`:'';
   $id('kpis').innerHTML=kpi('Cash now',num(f.cashAmount),'info',`${num(f.notes)} notes · actual`)
    +kpi('Status',K.esc(f.status),CLS[f.status]||'warn',f.daysLeft!=null?`about ${days(f.daysLeft)} day(s) left (estimate)`:'no usage estimate')
@@ -57,6 +57,15 @@
   charts(d);
  }
  if(!id){$id('warnings').innerHTML='<div class="alert alert-warning py-2 small">No ATM selected. Pick one on the <a href="/Cash">Cash Forecasting</a> page.</div>';return;}
- K.api('/data/cash/atm/'+encodeURIComponent(id)).then(render).catch(e=>{$id('warnings').innerHTML=`<div class="alert alert-danger py-2 small">${K.esc(e.message)}</div>`;});
+ const load=()=>K.api('/data/cash/atm/'+encodeURIComponent(id)+(K.cashPct.qs()?'?'+K.cashPct.qs():'')).then(render).catch(e=>{$id('warnings').innerHTML=`<div class="alert alert-danger py-2 small">${K.esc(e.message)}</div>`;});
+ function applyPct(v){
+  if(v!==''&&(!isFinite(+v)||+v<0||+v>100)){K.toast('Enter a percent from 0 to 100.','warn');return;}
+  K.cashPct.set(v);if(new URLSearchParams(location.search).has('lowPct'))history.replaceState(null,'',location.pathname);
+  $id('warnings').innerHTML='<div class="text-muted small">Recalculating…</div>';load();
+ }
+ $id('lowApply').onclick=()=>applyPct($id('lowPct').value.trim());
+ $id('lowPct').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();applyPct($id('lowPct').value.trim());}};
+ $id('lowReset').onclick=()=>applyPct('');
+ load();
  document.addEventListener('ktc-theme',()=>last&&charts(last));
 })();

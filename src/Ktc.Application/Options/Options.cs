@@ -155,4 +155,11 @@ public class CashForecastOptions
     public int MaxParallel { get; set; } = 3;
     /// <summary>Daily snapshots older than this are deleted.</summary>
     public int RetentionDays { get; set; } = 400;
+
+    /// <summary>LowNotes as a percent of CassetteCapacity: the default of the low-cash threshold control (50 of 2500 = 2%).</summary>
+    public double DefaultLowPct => CassetteCapacity <= 0 ? 0 : Math.Round(LowNotes * 100.0 / CassetteCapacity, 2);
+    /// <summary>Notes for a low-cash threshold of <paramref name="pct"/> percent of CassetteCapacity (0-100), rounded up.</summary>
+    public long LowNotesFor(double pct) => (long)Math.Ceiling(Math.Clamp(pct, 0, 100) * CassetteCapacity / 100.0);
+    /// <summary>A copy with another low-cash threshold (in notes).</summary>
+    public CashForecastOptions WithLowNotes(long lowNotes) { var c = (CashForecastOptions)MemberwiseClone(); c.LowNotes = Math.Max(0, lowNotes); return c; }
 }

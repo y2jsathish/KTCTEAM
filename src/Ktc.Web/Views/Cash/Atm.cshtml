@@ -1,6 +1,9 @@
 @{ ViewData["Title"] = "Cash Forecast"; }
 <div class="page-h"><h4 id="title">Cash forecast</h4><span class="sbadge warn" title="Run-out dates, usage and loads are estimates">Estimates</span><span class="sub" id="sub"></span>
-  <a class="btn btn-sm btn-outline-secondary ms-auto" id="atm360" href="#"><i class="bi bi-hdd-network"></i> ATM 360</a><a class="btn btn-sm btn-outline-secondary" href="/Cash"><i class="bi bi-arrow-left"></i> Cash Forecasting</a></div>
+  <span class="ms-auto"></span><div class="input-group input-group-sm w-auto" title="A cassette counts as out of cash at or below this share of its capacity. Status, run-out dates, visit dates and loads are recalculated for it. Your choice is remembered in this browser.">
+    <span class="input-group-text">Low cash at</span><input id="lowPct" type="number" min="0" max="100" step="0.5" class="form-control" style="width:5rem" aria-label="Low cash threshold, percent of cassette capacity"><span class="input-group-text">% of capacity</span>
+    <button class="btn btn-outline-primary" id="lowApply" type="button">Apply</button><button class="btn btn-outline-secondary" id="lowReset" type="button" title="Back to the configured default"><i class="bi bi-arrow-counterclockwise"></i></button></div>
+  <a class="btn btn-sm btn-outline-secondary" id="atm360" href="#"><i class="bi bi-hdd-network"></i> ATM 360</a><a class="btn btn-sm btn-outline-secondary" href="/Cash"><i class="bi bi-arrow-left"></i> Cash Forecasting</a></div>
 <div class="alert alert-info py-2 small mb-2"><i class="bi bi-info-circle"></i> Notes in the cassettes, counters and daily cash are <b>actual</b> KTC data; usage per day, run-out dates and loads are <b>estimates</b> (source and confidence shown per cassette).</div>
 <div id="warnings"><div class="text-muted small">Loading… (reads cash units, counters and the EJ of this ATM)</div></div>
 <div class="kpis" id="kpis"></div>
