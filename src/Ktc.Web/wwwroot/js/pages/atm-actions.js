@@ -18,7 +18,7 @@
  // reason, and the high-risk confirmation). XFS reset has no KTC command, so it stays unmapped.
  const icons={DeviceReset:'bi-tools',OutOfService:'bi-slash-circle',InService:'bi-check-circle',XfsReset:'bi-cpu'};
  function formBtn(r,a){
-  if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">KTC has no "reset all XFS devices" command. Use Device reset for each device, or map a command when one exists.</div>':''}`;
+  if(a.commandTypeId==null)return `<button class="btn btn-sm btn-outline-secondary mt-2" disabled><i class="bi bi-lock"></i> ${K.esc(a.label)}</button>${a.key==='XfsReset'?'<div class="small text-muted mt-1">KTC has no separate XFS reset command. Device reset sends KTC_RESET_DEVICE and the ATM application decides which devices it resets.</div>':''}`;
   const c=r.commands.find(x=>x.id===a.commandTypeId)||{},why=a.requiresDualAuth?'Needs a second login, not supported yet':c.sendBlockedReason||'';
   return `<button class="btn btn-sm btn-outline-danger mt-2" data-useform="${a.commandTypeId}"${why?' disabled':''} title="${K.esc(why||'Fill in the parameters, ticket and reason, then confirm')}"><i class="bi ${why?'bi-lock':icons[a.key]||'bi-send'}"></i> ${K.esc(a.label)}…</button>${why?`<div class="small text-muted mt-1">${K.esc(why)}</div>`:''}`;
  }
