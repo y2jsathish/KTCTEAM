@@ -8,6 +8,7 @@ window.KTC = (function () {
     if (opts.json !== undefined) { opts.body = JSON.stringify(opts.json); opts.headers['Content-Type'] = 'application/json'; opts.method = opts.method || 'POST'; }
     const r = await fetch(url, opts);
     if (r.status === 401) { location.href = '/Account/Login?returnUrl=' + encodeURIComponent(location.pathname); throw new Error('unauthenticated'); }
+    if (r.redirected && /\/Account\/Denied/i.test(r.url)) throw new Error('Your portal role does not allow this. Adding comments and changing KTC records needs the Operator or Admin role.');
     const ct = r.headers.get('content-type') || ''; const body = ct.includes('json') ? await r.json() : await r.text();
     if (!r.ok) throw new Error((body && body.error) || (typeof body === 'string' && body) || ('HTTP ' + r.status));
     return body;

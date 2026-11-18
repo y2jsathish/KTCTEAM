@@ -84,9 +84,10 @@
   const btns=['tkAddBtn','tkCloseBtn'].map($id).filter(Boolean);btns.forEach(b=>b.disabled=true);
   const body={comment:$id('tkComment').value,confirmTicketId:$id('tkConfirm')?$id('tkConfirm').value:null};
   try{const r=await K.api(`/data/tickets/${encodeURIComponent(id)}/${what}`,{json:body});
-   const box=`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message)} <span class="text-muted">· ref ${K.esc(r.correlationId)}</span></div>
-    <ul class="list-unstyled small mb-0">${r.checks.map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>
-    ${(r.ktcSteps||[]).length?`<details class="small mt-1"${r.done?'':' open'}><summary>What KTC answered</summary><ol class="mb-0 font-monospace" style="font-size:.75rem">${r.ktcSteps.map(x=>`<li>${K.esc(x)}</li>`).join('')}</ol></details>`:''}`;
+   if(!r||typeof r!=='object'||!('done' in r))throw new Error('The portal sent no result for this change. Nothing is known to have been saved in KTC: reload the ticket and check its comments.');
+   const box=`<div class="alert ${r.done?'alert-success':'alert-warning'} py-1 small mb-1">${K.esc(r.message||(r.done?'Done.':'KTC did not confirm the change.'))}${r.correlationId?` <span class="text-muted">· ref ${K.esc(r.correlationId)}</span>`:''}</div>
+    <ul class="list-unstyled small mb-0">${(r.checks||[]).map(c=>`<li><i class="bi ${c.passed?'bi-check-circle text-success':'bi-x-circle text-danger'}"></i> <b>${K.esc(c.name)}</b>: ${K.esc(c.detail)}</li>`).join('')}</ul>
+    ${(r.ktcSteps||[]).length?`<details class="small mt-1"${r.done?'':' open'}><summary>What KTC answered</summary><ol class="mb-0 font-monospace" style="font-size:.75rem">${(r.ktcSteps||[]).map(x=>`<li>${K.esc(x)}</li>`).join('')}</ol></details>`:''}`;
    if(r.done)K.toast(r.message,'ok');
    if((r.ktcSteps||[]).length){await details(id,atmId);load().catch(()=>{});}
    if($id('tkWriteRes'))$id('tkWriteRes').innerHTML=box;
