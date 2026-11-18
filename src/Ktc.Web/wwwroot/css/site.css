@@ -67,3 +67,4 @@ table.dataTable{font-size:.82rem}table.dataTable tbody tr{cursor:pointer}
 
 .tx-clickable tbody tr{cursor:pointer}.tx-clickable tbody tr:hover td{background:var(--panel2)}
 #txModal .modal-content{background:var(--panel);color:var(--ink)}
+.spin{display:inline-block;animation:ktcspin 1.2s linear infinite}@keyframes ktcspin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.spin{animation:none}}

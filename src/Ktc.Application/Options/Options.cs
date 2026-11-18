@@ -178,8 +178,13 @@ public class KtcActionsOptions
     /// <summary>
     /// Planned action -> KTC CommandName (case-insensitive), e.g. KtcActions:Commands:Reboot = "REBOOT". Empty = not configured yet;
     /// the tab then only suggests commands whose names look right. Keys: Reboot, XfsReset, DeviceReset, OutOfService, InService.
+    /// Defaults are the names on the KTC server (KTC_REBOOT #7, KTC_RESET_DEVICE #9, KTC_SUPERVISOR_ON #12 / OFF #11); XFS reset has
+    /// no KTC command there and stays unmapped. Any key can be overridden, or cleared with an empty value.
     /// </summary>
-    public Dictionary<string, string?> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string?> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Reboot"] = "KTC_REBOOT", ["DeviceReset"] = "KTC_RESET_DEVICE", ["OutOfService"] = "KTC_SUPERVISOR_ON", ["InService"] = "KTC_SUPERVISOR_OFF",
+    };
 
     /// <summary>
     /// Master switch for sending commands from the generic form (POST Client/{id}/Actions). OFF by default: the form can be filled
@@ -204,4 +209,36 @@ public class KtcActionsOptions
     public string ParametersRoot { get; set; } = "Parameters";
     public string ParameterElement { get; set; } = "Parameter";
     public string ParameterNameAttribute { get; set; } = "Name";
+
+    /// <summary>KTC action StatusByte -> name. Placeholder values until confirmed on the real server.</summary>
+    public Dictionary<string, string> StatusMap { get; set; } = new() { ["0"] = "Pending", ["1"] = "In progress", ["2"] = "Completed", ["3"] = "Failed", ["4"] = "Cancelled" };
+    /// <summary>Status names that are final, and those of them that mean failure (case-insensitive, matched as words).</summary>
+    public string FinalStatusPattern { get; set; } = @"complete|success|succeeded|done|fail|error|cancel|abort|expired|timeout|rejected";
+    public string FailedStatusPattern { get; set; } = @"fail|error|cancel|abort|expired|timeout|rejected";
+    /// <summary>Commands that bring files back from the ATM (regex on name, description or category).</summary>
+    public string FileCommandPattern { get; set; } = @"upload|listing|get.?file|journal|ej|log";
+    /// <summary>Largest file the portal will check and show (bytes). Bigger files are refused.</summary>
+    public long FileMaxBytes { get; set; } = 5 * 1024 * 1024;
+    /// <summary>Lines shown in the preview (the download has the whole masked file).</summary>
+    public int FilePreviewLines { get; set; } = 400;
+    /// <summary>KTC route of one uploaded file; {actionId} and {file} are filled in.</summary>
+    public string UploadedFileEndpoint { get; set; } = "api/v1/Action/{actionId}/UploadedFile?filename={file}";
+    public RebootWorkflowOptions Reboot { get; set; } = new();
+}
+
+/// <summary>Guided reboot: out of service, wait for idle, reboot, wait for the ATM to come back, back in service.</summary>
+public class RebootWorkflowOptions
+{
+    /// <summary>Seconds without a customer transaction before the ATM counts as idle.</summary>
+    public int IdleSeconds { get; set; } = 90;
+    public int IdleTimeoutMinutes { get; set; } = 15;
+    public int OutOfServiceTimeoutMinutes { get; set; } = 5;
+    public int RebootTimeoutMinutes { get; set; } = 10;
+    /// <summary>The ATM must stop reporting for this long after the reboot was sent to count as offline (or go straight to online when it reports again later).</summary>
+    public int OfflineAfterSeconds { get; set; } = 60;
+    public int ComeBackTimeoutMinutes { get; set; } = 20;
+    public int InServiceTimeoutMinutes { get; set; } = 5;
+    /// <summary>Put the ATM back in service after a good reboot (false = leave it out of service for an engineer).</summary>
+    public bool AutoInService { get; set; } = true;
+    public int TickSeconds { get; set; } = 5;
 }

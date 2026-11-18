@@ -51,14 +51,34 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
 
         Match r;
         if (Is(path, "api/v1/CommandType", m == "GET")) return Ok(CommandTypes);
-        if (Is(path, "api/v1/Action/ClientIDsPIP", m == "GET")) return Ok(Array.Empty<int>());
-        if (Rx(path, @"api/v1/Client/(\d+)/Actions").Success && m == "POST") return Ok(Interlocked.Increment(ref _nextAction));
+        if (Is(path, "api/v1/Action/ClientIDsPIP", m == "GET"))
+            return Ok(MockActions.Values.Where(a => a.CommandId.ToString() == q["commandtypeID"] && a.StatusAt(now) is 0 or 1).Select(a => a.ClientId).Distinct());
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/Actions")).Success && m == "POST") return Ok(AddAction(int.Parse(r.Groups[1].Value), body, now));
+        if ((r = Rx(path, @"api/v1/Client/(\d+)/Actions")).Success && m == "GET")
+        {
+            var cid = int.Parse(r.Groups[1].Value); SeedActions(cid, now);
+            var days = int.TryParse(q["numdays"], out var nd) ? nd : 7;
+            return Ok(MockActions.Values.Where(a => a.ClientId == cid && a.Added >= now.AddDays(-days)).OrderByDescending(a => a.Added).Select(a => a.Json(now)));
+        }
+        if ((r = Rx(path, @"api/v1/Action/(\d+)/UploadedDirectoryListing")).Success)
+            return MockActions.TryGetValue(long.Parse(r.Groups[1].Value), out var la) && la.Files && la.StatusAt(now) == 2
+                ? Ok(new object[] { new { Name = $"EJ_{la.Added:yyyyMMdd}.txt", Size = 18432, Modified = la.Added }, new { Name = "KALDiag.log", Size = 5120, Modified = la.Added }, new { Name = $"Logs_{la.Added:yyyyMMdd}.zip", Size = 734003, Modified = la.Added } })
+                : Ok(Array.Empty<object>());
+        if ((r = Rx(path, @"api/v1/Action/(\d+)/UploadedFile")).Success)
+        {
+            if (!MockActions.TryGetValue(long.Parse(r.Groups[1].Value), out var fa) || !fa.Files) return Resp(HttpStatusCode.NotFound, "{\"Message\":\"No uploaded file\"}");
+            var fn = q["filename"] ?? "";
+            var bytes = fn.EndsWith(".zip") ? new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x14, 0, 0, 0, 8, 0, 0x21, 0x00, 0x7F, 0x80, 0x00, 0x00, 1, 2, 3 } : Encoding.UTF8.GetBytes(SampleFile(fn, fa));
+            return Ok(new { FileName = fn, Data = Convert.ToBase64String(bytes) });
+        }
+        if ((r = Rx(path, @"api/v1/Action/(\d+)")).Success && m == "GET")
+            return MockActions.TryGetValue(long.Parse(r.Groups[1].Value), out var ga) ? Ok(ga.Json(now)) : Resp(HttpStatusCode.NotFound, "{\"Message\":\"No such action\"}");
         if (Is(path, "api/v1/Client", m == "GET")) return Ok(Enumerable.Range(0, AtmCount).Select(i => ClientJson(i)));
         if (Is(path, "api/v1/Business")) return Ok(Banks.Select((b, i) => new { ID = i + 1, Name = b }));
         if (Is(path, "api/v1/Region")) return Ok(Places.Select(p => p.Region).Distinct().Select((x, i) => new { ID = i + 1, Name = x }));
         if (Is(path, "api/v1/Group")) return Ok(new[] { new { ID = 1, Name = "Unknown Clients" }, new { ID = 2, Name = "All Clients" } });
         if (Is(path, "api/v1/Branch")) return Ok(Places.Select((p, i) => new { ID = i + 1, Name = p.City + " Branch", City = p.City, Address = $"{10 + i} Main Street", PostCode = i % 2 == 0 ? $"P.O. Box {1000 + i * 7}" : "", RegionID = Array.IndexOf(Places.Select(z => z.Region).Distinct().ToArray(), p.Region) + 1 }));
-        if (Is(path, "api/v1/LastClientContact")) return Ok(Enumerable.Range(0, AtmCount).Select(i => new { ClientID = Id(i), LastContact = LastContact(i, now) }));
+        if (Is(path, "api/v1/LastClientContact")) return Ok(Enumerable.Range(0, AtmCount).Select(i => new { ClientID = Id(i), LastContact = Rebooted.TryGetValue(Id(i), out var rb) && now >= rb && now < rb.AddSeconds(RebootDownSeconds) ? rb.AddSeconds(-2) : Rebooted.ContainsKey(Id(i)) ? now.AddSeconds(-3) : LastContact(i, now) }));
         if (Is(path, "api/v1/ActiveErrorExtra") || Is(path, "api/v1/ActiveError")) return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => OpenIncidents(i, now)));
         if (Is(path, "api/v1/HistoricalError")) return Ok(Enumerable.Range(0, AtmCount).SelectMany(i => History(i, now)));
         if ((r = Rx(path, @"api/v1/Client/(\d+)/HistoricalError")).Success) return Ok(History(Idx(r), now));
@@ -500,10 +520,10 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         Cmd(12, "KTC_RESCUE_IMAGE", "Trigger Rescue Image", "ATM Management", "<Params />", 1),
         Cmd(13, "KTC_GET_SETTING", "Get Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" Default=\"MultiLevelStore\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 0),
         Cmd(14, "KTC_SET_SETTING", "Set Settings", "ATM Settings", "<Params><Param Name=\"Type\" Type=\"Choice\" Values=\"MultiLevelStore,PersistentData,Registry\" /><Param Name=\"Location\" Type=\"String\" Required=\"true\" /><Param Name=\"Value\" Type=\"String\" Required=\"true\" /><Param Name=\"Use64bit\" Type=\"Bool\" Default=\"false\" TrueText=\"64 Bit\" FalseText=\"32 Bit\" /></Params>", 1),
-        Cmd(15, "KTC_XFS_RESET", "Reset All XFS Devices", "Device Management", "<Params />", 0),
-        Cmd(16, "KTC_DEVICE_RESET", "Device Reset", "Device Management", "<Params><Param Name=\"Device\" Type=\"Choice\" Values=\"Dispenser,CardReader,ReceiptPrinter,JournalPrinter,PinPad,Depository,Sensors\" /></Params>", 0),
-        Cmd(17, "KTC_OUT_OF_SERVICE", "Out of Service", "Device Management", "<Params><Param Name=\"Reason\" Type=\"String\" /></Params>", 0),
-        Cmd(18, "KTC_IN_SERVICE", "In Service", "Device Management", "<Params />", 0),
+        Cmd(15, "KTC_SELF_TEST", "Run Device Self Test", "Device Management", "<Params />", 0),
+        Cmd(16, "KTC_RESET_DEVICE", "Reset one XFS device", "Device Management", "<Params><Param Name=\"Device\" Type=\"Choice\" Values=\"Dispenser,CardReader,ReceiptPrinter,JournalPrinter,PinPad,Depository,Sensors\" /></Params>", 0),
+        Cmd(17, "KTC_SUPERVISOR_ON", "Supervisor mode on (ATM out of service)", "Device Management", "<Params><Param Name=\"Reason\" Type=\"String\" /></Params>", 0),
+        Cmd(18, "KTC_SUPERVISOR_OFF", "Supervisor mode off (ATM in service)", "Device Management", "<Params />", 0),
         Cmd(19, "KTC_UPLOAD_EJ", "Upload Journal Data", "Journal Data", "<Params><Param Name=\"Days\" Type=\"Int32\" Default=\"1\" Min=\"1\" Max=\"31\" /></Params>", 0),
         Cmd(20, "KTC_UPLOAD_FILE", "Upload File", "Uploads", "<Params><Param Name=\"Path\" Type=\"String\" Required=\"true\" /></Params>", 0),
         Cmd(21, "KTC_CERT_RENEW", "Renew Certificate", "Certificates", "<Params><Param Name=\"Store\" Type=\"Choice\" Values=\"Machine,User\" /></Params>", 1),
@@ -516,7 +536,90 @@ public sealed class MockKtcHttpHandler : HttpMessageHandler
         ID = id, CommandName = name, Description = desc, ParameterListTemplateString = tpl, SubCommandListString = "", AllowClientInitiation = false,
         MaxRetries = 3, RetryWaitTime = 60, MaxSimultaneous = 50, TargetTypeByte = 0, IsUserDefined = false, Category = cat, DualAuthModeByte = dual
     };
+    // ---- Actions: an in-memory store, so sent commands go Pending -> In progress -> Completed / Failed over a few seconds. ----
     private static long _nextAction = 880000;
+    private const int RebootDownSeconds = 45;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, MockAction> MockActions = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, DateTime> Rebooted = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, bool> Seeded = new();
+    private static readonly int[] FileCommands = { 1, 19, 20 };
+
+    private sealed record MockAction(long Id, int ClientId, int CommandId, string Params, string Comments, DateTime Added, int PendingS, int RunS, bool Fails, string Result, bool Files)
+    {
+        public int StatusAt(DateTime now) { var s = (now - Added).TotalSeconds; return s < PendingS ? 0 : s < PendingS + RunS ? 1 : Fails ? 3 : 2; }
+        public object Json(DateTime now)
+        {
+            var st = StatusAt(now); var s = (now - Added).TotalSeconds;
+            return new
+            {
+                ID = Id, CommandID = CommandId, ClientID = ClientId, DependantID = 0, IsEndOfChain = true, ScheduleID = 0, CommandParametersString = Params,
+                StartTime = st == 0 ? DateTime.MinValue : Added.AddSeconds(PendingS), EndTime = st >= 2 ? Added.AddSeconds(PendingS + RunS) : DateTime.MinValue,
+                StatusByte = st, CommentsString = Comments, AddedTime = Added, RetryCount = Fails && st == 3 ? 3 : 0,
+                ProgressPercent = st == 0 ? 0 : st == 1 ? (int)Math.Min(95, (s - PendingS) * 100 / Math.Max(1, RunS)) : 100, ResultString = st >= 2 ? Result : ""
+            };
+        }
+    }
+
+    private static string CommentXml(string user, string text, DateTime t) =>
+        new System.Xml.Linq.XElement("Comments", new System.Xml.Linq.XElement("Comment", new System.Xml.Linq.XAttribute("User", user), new System.Xml.Linq.XAttribute("Timestamp", t.ToString("o")), new System.Xml.Linq.XAttribute("Confidential", "false"), text)).ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+
+    private static long AddAction(int clientId, string body, DateTime now)
+    {
+        using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+        var root = d.RootElement;
+        var cmd = root.TryGetProperty("Value1", out var v1) && v1.TryGetInt32(out var c) ? c : 0;
+        var prm = root.TryGetProperty("Value2", out var v2) ? v2.GetString() ?? "" : "";
+        string user = "?", text = "";
+        if (root.TryGetProperty("Value3", out var v3) && v3.ValueKind == JsonValueKind.Array && v3.GetArrayLength() > 0)
+        { var c0 = v3[0]; user = c0.TryGetProperty("User", out var u) ? u.GetString() ?? "?" : "?"; text = c0.TryGetProperty("Comment", out var t) ? t.GetString() ?? "" : ""; }
+        var id = Interlocked.Increment(ref _nextAction);
+        var (pending, run, result) = cmd switch
+        {
+            5 or 3 => (2, 6, "Reboot command accepted by the agent; restarting."),
+            17 => (1, 4, "ATM is out of service."),
+            18 => (1, 4, "ATM is in service."),
+            13 => (2, 5, "HKLM\\SOFTWARE\\KAL\\Kalignite (64-bit)\nLogLevel = 3\nTerminalID = ADC00042\nHostPort = 7002"),
+            4 => (1, 2, "Reply from the ATM agent in 38 ms."),
+            _ => (2, 8, FileCommands.Contains(cmd) ? "3 files uploaded (EJ, diagnostics log, log archive)." : "Done.")
+        };
+        var a = new MockAction(id, clientId, cmd, prm, CommentXml(user, text, now), now, pending, run, false, result, FileCommands.Contains(cmd));
+        MockActions[id] = a;
+        if (cmd is 5 or 3) Rebooted[clientId] = now.AddSeconds(pending + run);
+        return id;
+    }
+
+    private static void SeedActions(int clientId, DateTime now)
+    {
+        if (!Seeded.TryAdd(clientId, true)) return;
+        var seed = new (int Cmd, double HoursAgo, bool Fails, string Result, string Params, string Who, string Text)[]
+        {
+            (19, 5.2, false, "3 files uploaded (EJ, diagnostics log, log archive).", "<Parameters><Parameter Name=\"Days\">1</Parameter></Parameters>", "s.kumar", "Ticket 600123: Customer disputes a dispense of 4111 1111 1111 1111 last night (via KTC Monitoring Portal, ref 3fa9c2d1e0b7)"),
+            (6, 26, true, "Agent did not respond after 3 retries.", "<Parameters />", "ops.bot", "Scheduled status refresh"),
+            (4, 30, false, "Reply from the ATM agent in 41 ms.", "<Parameters />", "a.rahman", "Ticket 600087: Check connectivity after network change (via KTC Monitoring Portal, ref 9b1e77aa0c12)"),
+        };
+        foreach (var x in seed)
+        {
+            var id = Interlocked.Increment(ref _nextAction);
+            var t = now.AddHours(-x.HoursAgo);
+            MockActions[id] = new MockAction(id, clientId, x.Cmd, x.Params, CommentXml(x.Who, x.Text, t), t, 30, 90, x.Fails, x.Result, FileCommands.Contains(x.Cmd));
+        }
+    }
+
+    private static string SampleFile(string name, MockAction a) => name.EndsWith(".log")
+        ? $"{a.Added:yyyy-MM-dd HH:mm:ss} INFO  KALDiag started\n{a.Added:yyyy-MM-dd HH:mm:ss} INFO  XFS manager version 3.30\n{a.Added:yyyy-MM-dd HH:mm:ss} WARN  CDM cassette 2 low (412 notes)\n{a.Added:yyyy-MM-dd HH:mm:ss} INFO  Card read track2 ;4111111111111111=29121011000012345678?\n{a.Added:yyyy-MM-dd HH:mm:ss} INFO  KALDiag finished\n"
+        : string.Join("\n", Enumerable.Range(0, 60).Select(k => (k % 12) switch
+        {
+            0 => $"[{a.Added.AddMinutes(-k * 7):dd/MM/yy HH:mm:ss}] TRANSACTION START",
+            1 => "CARD INSERTED",
+            2 => $"PAN: {(k % 24 == 1 ? "4111111111111111" : "5500 0000 0000 0004")}",
+            3 => "PIN ENTERED",
+            4 => "CASH WITHDRAWAL AED 500",
+            5 => "NOTES PRESENTED 100x5",
+            6 => "NOTES TAKEN",
+            7 => "CARD TAKEN",
+            8 => "TRANSACTION END",
+            _ => ""
+        }));
 
     private static bool Is(string path, string route, bool cond = true) => cond && path.Equals(route, StringComparison.OrdinalIgnoreCase);
     private static Match Rx(string path, string pattern) => Regex.Match(path, "^" + pattern + "$", RegexOptions.IgnoreCase);

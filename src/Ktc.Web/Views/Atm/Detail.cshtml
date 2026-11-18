@@ -74,7 +74,15 @@
     <button class="btn btn-sm btn-outline-secondary" data-actrefresh><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
   <div id="actMode"></div>
   <div id="actMsg"></div>
-  <div class="cardx mb-3"><h6><i class="bi bi-send"></i> Run a command</h6>
+  <div class="cardx mb-3"><div class="d-flex align-items-center gap-2"><h6 class="m-0"><i class="bi bi-activity"></i> Activity</h6><span class="small text-muted" id="actHistMeta"></span>
+      <select class="form-select form-select-sm w-auto ms-auto" id="actDays" aria-label="Range"><option value="1">Last 24 hours</option><option value="3">Last 3 days</option><option value="7" selected>Last 7 days</option><option value="31">Last 31 days</option></select>
+      <button class="btn btn-sm btn-outline-secondary" data-acthistrefresh><i class="bi bi-arrow-clockwise"></i></button></div>
+    <div id="actHistMsg" class="mt-2"></div>
+    <div id="actReboots"></div>
+    <div id="actHistory" class="mt-2"><div class="text-muted small">Open this tab to read the ATM's actions.</div></div>
+  </div>
+  <div class="cardx mb-3"><h6><i class="bi bi-ui-checks-grid"></i> Guided actions</h6><div id="actPlanned" class="row g-2"><div class="col-12 text-muted small">Open this tab to read KTC's command list.</div></div></div>
+  <div class="cardx mb-3" id="actRunCard"><h6><i class="bi bi-send"></i> Run a command</h6>
     <div class="row g-2 align-items-end">
       <div class="col-lg-6 col-12"><label class="form-label small mb-1" for="actCmd">Command</label>
         <select class="form-select form-select-sm" id="actCmd" disabled><option>Open this tab to read KTC's command list…</option></select></div>
@@ -91,8 +99,6 @@
       <button type="submit" class="btn btn-sm btn-primary mt-2" id="actReview"><i class="bi bi-shield-check"></i> Review and confirm</button>
     </form>
   </div>
-  <div class="cardx mb-3"><h6><i class="bi bi-ui-checks-grid"></i> Guided actions (own flow, coming next)</h6><div id="actPlanned" class="row g-2"><div class="col-12 text-muted small">Open this tab to read KTC's command list.</div></div></div>
-  <div class="cardx"><h6><i class="bi bi-list-task"></i> KTC command types <span class="small text-muted" id="actCount"></span></h6><div id="actCommands"></div></div>
 </div>
 </div>
 <div class="modal fade" id="actConfirm" tabindex="-1" aria-labelledby="actConfirmTitle" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
@@ -111,4 +117,23 @@
     <button type="button" class="btn btn-sm btn-outline-primary" id="actCheckBtn"><i class="bi bi-list-check"></i> Run checks</button>
     <button type="button" class="btn btn-sm btn-danger" id="actSendBtn" disabled><i class="bi bi-send"></i> Send to ATM</button></div>
 </div></div></div>
-@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script> }
+<div class="modal fade" id="actFiles" tabindex="-1" aria-labelledby="actFilesTitle" aria-hidden="true"><div class="modal-dialog modal-xl modal-dialog-scrollable"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="actFilesTitle"><i class="bi bi-folder2-open"></i> Files from the ATM</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body"><div class="alert alert-secondary py-2 small"><i class="bi bi-shield-lock"></i> Only text files are opened. Card numbers are masked (first 6 / last 4) and track data is removed before anything is shown or downloaded; binary and compressed files are not opened. Every download is audited.</div>
+    <div id="actFileList"></div><div id="actFileView" class="mt-2"></div></div>
+</div></div></div>
+<div class="modal fade" id="actReboot" tabindex="-1" aria-labelledby="actRebootTitle" aria-hidden="true"><div class="modal-dialog modal-lg modal-dialog-scrollable"><div class="modal-content">
+  <div class="modal-header"><h5 class="modal-title" id="actRebootTitle"><i class="bi bi-arrow-repeat text-danger"></i> Guided reboot</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div>
+  <div class="modal-body">
+    <ol class="small mb-2"><li>Wait until no customer transaction is in progress.</li><li>Take the ATM out of service, then check again that it is idle.</li><li>Reboot, and watch the ATM go offline and come back.</li><li>Check the devices, then put the ATM back in service.</li></ol>
+    <div class="small text-muted mb-2">If out of service fails, nothing else is sent. If the reboot fails, the ATM is put back in service. If it does not come back, or devices report faults, it stays out of service and an alert is raised.</div>
+    <div class="row g-2">
+      <div class="col-md-4 col-12"><label class="form-label small mb-1" for="rbTicket">Ticket number <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="rbTicket" maxlength="40"></div>
+      <div class="col-md-8 col-12"><label class="form-label small mb-1" for="rbReason">Reason <span class="text-danger">*</span></label><input class="form-control form-control-sm" id="rbReason" maxlength="500"></div>
+      <div class="col-md-6 col-12"><label class="form-label small mb-1" for="rbAtm">Type the ATM id to confirm</label><input class="form-control form-control-sm" id="rbAtm" autocomplete="off"></div>
+    </div>
+    <div id="rbResult" class="mt-2"></div>
+  </div>
+  <div class="modal-footer"><button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-sm btn-danger" id="rbStart"><i class="bi bi-arrow-repeat"></i> Start guided reboot</button></div>
+</div></div></div>
+@section Scripts { <script>window.ATM_ID=@Html.Raw(System.Text.Json.JsonSerializer.Serialize((string?)ViewBag.AtmId));</script><script src="~/js/pages/atm360.js" asp-append-version="true"></script><script src="~/js/pages/atm-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-general.js" asp-append-version="true"></script><script src="~/js/pages/atm-replenishment.js" asp-append-version="true"></script><script src="~/js/pages/atm-ej-counters.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions.js" asp-append-version="true"></script><script src="~/js/pages/atm-actions-activity.js" asp-append-version="true"></script> }

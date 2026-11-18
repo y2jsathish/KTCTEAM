@@ -168,4 +168,19 @@ public static class CommandParameterRules
     /// <summary>The values as shown in confirmations, logs and the audit: secrets hidden, card numbers masked.</summary>
     public static string Describe(IReadOnlyList<CommandParameter> fields, IReadOnlyDictionary<string, string> values) =>
         string.Join("; ", fields.Where(f => values.ContainsKey(f.Name)).Select(f => $"{f.Name}={(f.Type == Secret ? "***" : PanMasker.Mask(values[f.Name]))}"));
+
+    private static readonly System.Text.RegularExpressions.Regex NoteName = new(@"reason|comment|description|message|note|text", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Values for a command sent by a guided flow (no form): text parameters named like Reason / Comment / Message get the ticket and
+    /// reason (cut to their maximum length); everything else uses its default. Validate then reports anything still missing.
+    /// </summary>
+    public static Dictionary<string, string?> GuidedValues(IReadOnlyList<CommandParameter> ps, string note)
+    {
+        var d = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in ps.Where(p => !string.IsNullOrEmpty(p.Default))) d[p.Name] = p.Default;
+        foreach (var p in ps.Where(p => p.Type == "string" && string.IsNullOrEmpty(p.Default) && NoteName.IsMatch(p.Name)))
+            d[p.Name] = p.MaxLength is int m && note.Length > m ? note[..m] : note;
+        return d;
+    }
 }

@@ -111,10 +111,37 @@ public class CommandParameterTests
         var planned = CommandTypeRules.Map(list, new Dictionary<string, string?> { ["Reboot"] = "KTC_REBOOT" }, true);
         var c = CommandTypeRules.Classify(list, planned, new Ktc.Application.Options.KtcActionsOptions().HighRiskPattern, "PING").ToDictionary(x => x.Id);
         Assert.True(c[3].HighRisk); Assert.Null(c[3].SendBlockedReason);           // emergency reboot: offered, extra confirmation
-        Assert.Contains("own guided flow", c[5].SendBlockedReason);                // reboot: special flow
+        Assert.Contains("guided reboot", c[5].SendBlockedReason);                  // reboot: guided flow only
         Assert.True(c[6].HighRisk);
         Assert.Null(c[7].SendBlockedReason); Assert.False(c[7].HighRisk);
         Assert.Contains("second login", c[8].SendBlockedReason);
         Assert.Contains("BlockedPattern", c[9].SendBlockedReason);
+    }
+
+    [Fact]
+    public void Mapped_device_reset_and_service_commands_use_the_form_with_extra_confirmation()
+    {
+        var list = CommandTypeRules.Parse(JsonDocument.Parse("""
+          [{ "ID": 7, "CommandName": "KTC_REBOOT" }, { "ID": 9, "CommandName": "KTC_RESET_DEVICE", "Description": "Reset one XFS device" },
+           { "ID": 11, "CommandName": "KTC_SUPERVISOR_OFF" }, { "ID": 12, "CommandName": "KTC_SUPERVISOR_ON" }, { "ID": 30, "CommandName": "KTC_RESTART_PC" }]
+        """).RootElement);
+        var opt = new Ktc.Application.Options.KtcActionsOptions();      // defaults: the KTC server's names
+        var planned = CommandTypeRules.Map(list, opt.Commands, true);
+        var p = planned.ToDictionary(a => a.Key);
+        Assert.Equal(7, p["Reboot"].CommandTypeId); Assert.Equal(9, p["DeviceReset"].CommandTypeId);
+        Assert.Equal(12, p["OutOfService"].CommandTypeId); Assert.Equal(11, p["InService"].CommandTypeId);
+        Assert.Null(p["XfsReset"].CommandTypeId);
+        var c = CommandTypeRules.Classify(list, planned, opt.HighRiskPattern, "").ToDictionary(x => x.Id);
+        Assert.Contains("guided reboot", c[7].SendBlockedReason);
+        foreach (var i in new[] { 9, 11, 12 }) { Assert.Null(c[i].SendBlockedReason); Assert.True(c[i].HighRisk); }
+        Assert.Contains("map it", c[30].SendBlockedReason);                       // unmapped look-alike stays out
+    }
+
+    [Fact]
+    public void Guided_flows_fill_reason_like_text_fields_with_the_ticket()
+    {
+        var (ps, _) = CommandParameterRules.Parse("<Params><Param Name=\"Reason\" Type=\"String\" Required=\"true\" MaxLength=\"10\" /><Param Name=\"Mode\" Type=\"Choice\" Values=\"A,B\" Default=\"A\" /></Params>");
+        var (vals, errs) = CommandParameterRules.Validate(ps, CommandParameterRules.GuidedValues(ps, "Ticket 1: frozen screen"));
+        Assert.Empty(errs); Assert.Equal("Ticket 1:", vals["Reason"]); Assert.Equal("A", vals["Mode"]);
     }
 }

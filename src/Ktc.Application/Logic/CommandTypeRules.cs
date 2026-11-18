@@ -19,6 +19,9 @@ public static partial class CommandTypeRules
         ("InService", "In service", "Put the ATM back in service (step after a reboot).", new(@"in.?service|go.?online|open.?atm", RegexOptions.IgnoreCase)),
     };
 
+    /// <summary>Planned actions (by label) that are never sent from the generic form.</summary>
+    private static readonly HashSet<string> GuidedOnly = new(StringComparer.OrdinalIgnoreCase) { "Reboot" };
+
     private static readonly string[] IdF = { "ID", "Id", "CommandID", "CommandTypeID" };
     private static readonly string[] NameF = { "CommandName", "Name" };
     private static readonly string[] Known =
@@ -69,7 +72,7 @@ public static partial class CommandTypeRules
             .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(n => Array.FindIndex(Known, x => x.Equals(n, StringComparison.OrdinalIgnoreCase)) is var i && i < 0 ? int.MaxValue : i)
             .ThenBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
-    /// <summary>The planned actions mapped to the commands. Nothing is enabled in step 1, whatever matches.</summary>
+    /// <summary>The planned actions mapped to the commands (configured name or id).</summary>
     public static List<PlannedAtmAction> Map(IReadOnlyList<KtcCommandTypeDto> commands, IReadOnlyDictionary<string, string?> configured, bool loaded)
     {
         var res = new List<PlannedAtmAction>();
@@ -84,7 +87,7 @@ public static partial class CommandTypeRules
             var status = !loaded ? "Command list not read from KTC"
                 : cfg == null ? (sugg.Count > 0 ? "Not configured - see suggestions" : "Not configured - no matching command found")
                 : hit == null ? $"Configured as \"{cfg}\" but KTC has no such command"
-                : "Mapped - sending is not enabled yet";
+                : "Mapped";
             res.Add(new PlannedAtmAction(key, label, desc, cfg, hit?.Id, hit?.Name, hit?.RequiresDualAuth, sugg, false, status));
         }
         return res;
@@ -103,9 +106,14 @@ public static partial class CommandTypeRules
         return commands.Select(c =>
         {
             var risky = hr != null && (hr.IsMatch(c.Name) || hr.IsMatch(c.Description));
-            var special = mapped.TryGetValue(c.Id, out var lbl) ? lbl
-                : risky ? null : Planned.FirstOrDefault(p => p.Looks.IsMatch(c.Name)).Label;
-            var why = special != null ? $"{special} has its own guided flow (coming next), not this form."
+            // Mapped reboot: only through the guided reboot. Mapped device reset / out of service / in service: through this form
+            // (their buttons open it) with the high-risk confirmation. Unmapped look-alikes stay out until they are mapped.
+            var isMapped = mapped.TryGetValue(c.Id, out var lbl);
+            var guidedOnly = isMapped && GuidedOnly.Contains(lbl!);
+            var lookAlike = !isMapped && !risky ? Planned.FirstOrDefault(p => p.Looks.IsMatch(c.Name)).Label : null;
+            if (isMapped && !guidedOnly) risky = true;
+            var why = guidedOnly ? $"{lbl} runs only as the guided reboot (out of service, wait for idle, reboot, back in service)."
+                : lookAlike != null ? $"Looks like {lookAlike}; map it in KtcActions:Commands to use it."
                 : c.RequiresDualAuth ? "Needs a second login (dual authorization), which is not supported yet."
                 : bl != null && (bl.IsMatch(c.Name) || bl.IsMatch(c.Description)) ? "Blocked by configuration (KtcActions:BlockedPattern)."
                 : c.ParametersNote != null ? c.ParametersNote

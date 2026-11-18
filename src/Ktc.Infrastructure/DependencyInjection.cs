@@ -46,6 +46,8 @@ public static class DependencyInjection
         s.AddSingleton<IExportService, ExportService>();
         s.AddScoped<IKtcDataService, KtcDataService>();
         s.AddScoped<IKtcActionService, Ktc.Infrastructure.KtcApi.KtcActionService>();
+        s.AddScoped<IRebootService, Ktc.Infrastructure.KtcApi.RebootService>();
+        s.AddScoped<Ktc.Application.Logic.IRebootProbe, Ktc.Infrastructure.KtcApi.KtcRebootProbe>();
         s.AddScoped<IDashboardService, DashboardService>();
         s.AddScoped<ICashForecastService, CashForecastService>();
         s.AddScoped<IAlertEngine, AlertEngine>();
@@ -61,6 +63,7 @@ public static class DependencyInjection
         s.AddHostedService<ReportSchedulerJob>();
         s.AddHostedService<ApiMappingSchedulerJob>();
         s.AddHostedService<CashSnapshotJob>();
+        s.AddHostedService<Ktc.Infrastructure.KtcApi.RebootWorkflowJob>();
         return s;
     }
 }

@@ -91,6 +91,25 @@ public interface IKtcActionService
     Task<AtmActionCatalog> GetCatalogAsync(bool refresh, CancellationToken ct = default);
     /// <summary>Runs every check; sends to KTC only when all pass and sending is enabled. Always audited.</summary>
     Task<AtmActionResult> SendAsync(AtmActionRequest request, bool checkOnly, CancellationToken ct = default);
+    /// <summary>Sends one mapped command (KtcActions:Commands key) with its default parameters. Used by the guided reboot only.</summary>
+    Task<(bool Ok, string? ActionId, string? Error)> SendMappedAsync(string atmId, string commandKey, string comment, CancellationToken ct = default);
+    /// <summary>The ATM's actions of the last <paramref name="days"/> days (GET Client/{id}/Actions?numdays=) and its guided reboots.</summary>
+    Task<AtmActionHistory> GetHistoryAsync(string atmId, int days, CancellationToken ct = default);
+    Task<ActionRecord?> GetActionAsync(string actionId, CancellationToken ct = default);
+    /// <summary>Files an upload-type action brought back (GET Action/{id}/UploadedDirectoryListing).</summary>
+    Task<(IReadOnlyList<ActionFile> Files, string? Error)> GetFilesAsync(string actionId, CancellationToken ct = default);
+    /// <summary>One uploaded file after the PCI rules (text only, PAN-masked, track data removed). Audited.</summary>
+    Task<(ActionFileContent? File, string? Error)> GetFileAsync(string actionId, string name, bool preview, CancellationToken ct = default);
+}
+
+/// <summary>Guided reboot runs: start (with the same checks as the form), list, cancel. A background job moves them on.</summary>
+public interface IRebootService
+{
+    Task<(RebootRun? Run, AtmActionResult Result)> StartAsync(RebootRequest request, CancellationToken ct = default);
+    Task<IReadOnlyList<RebootRun>> ListAsync(string? atmId, bool runningOnly, CancellationToken ct = default);
+    Task<RebootRun?> GetAsync(string id, CancellationToken ct = default);
+    Task<RebootRun?> CancelAsync(string id, CancellationToken ct = default);
+    Task SaveAsync(RebootRun run, CancellationToken ct = default);
 }
 
 // ---- Services ----
