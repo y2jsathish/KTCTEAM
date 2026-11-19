@@ -138,6 +138,20 @@ public class CommandParameterTests
     }
 
     [Fact]
+    public void Device_reset_template_placeholder_is_dropped_and_full_component_names_are_sent()
+    {
+        // Real KTC_RESET_DEVICE template (seen in a KTC client trace): the choices are placeholder words, and the client sends KXDevice.KXCardReader.
+        var (ps, _) = CommandParameterRules.Parse("<Parameters><Parameter Name=\"Device\" Type=\"Choice\" Choices=\"CardReader,PinPad,etc\">CardReader</Parameter></Parameters>");
+        Assert.Equal(new[] { "CardReader", "PinPad" }, ps[0].Choices);
+        var opt = new Ktc.Application.Options.KtcActionsOptions();
+        var fixedPs = CommandParameterRules.WithChoices(ps, "Device", opt.DeviceResetDevices);
+        var (vals, errs) = CommandParameterRules.Validate(fixedPs, new Dictionary<string, string?> { ["Device"] = "KXDevice.KXCardReader" });
+        Assert.Empty(errs);
+        Assert.Equal("<Parameters><Parameter Name=\"Device\">KXDevice.KXCardReader</Parameter></Parameters>", CommandParameterRules.BuildXml(fixedPs, vals));
+        Assert.NotEmpty(CommandParameterRules.Validate(fixedPs, new Dictionary<string, string?>()).Errors);   // Device is required
+    }
+
+    [Fact]
     public void Guided_flows_fill_reason_like_text_fields_with_the_ticket()
     {
         var (ps, _) = CommandParameterRules.Parse("<Params><Param Name=\"Reason\" Type=\"String\" Required=\"true\" MaxLength=\"10\" /><Param Name=\"Mode\" Type=\"Choice\" Values=\"A,B\" Default=\"A\" /></Params>");

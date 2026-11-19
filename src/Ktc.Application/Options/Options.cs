@@ -193,6 +193,19 @@ public class KtcActionsOptions
     };
 
     /// <summary>
+    /// Values offered for the "Device" parameter of the DeviceReset command (KTC_RESET_DEVICE). The KTC client sends the full component
+    /// name, e.g. Device = KXDevice.KXCardReader, taken from KTC's ComponentList; the command's own template only holds placeholder words.
+    /// Empty = use the template's choices as they are.
+    /// </summary>
+    public List<string> DeviceResetDevices { get; set; } = new()
+    {
+        "KXDevice.KXCardReader", "KXDevice.KXCashAcceptor", "KXDevice.KXCashDispenser", "KXDevice.KXDepository", "KXDevice.KXPinPad",
+        "KXDevice.KXReceiptPrinter", "KXDevice.KXJournalPrinter", "KXDevice.KXStatementPrinter", "KXDevice.KXPassbook", "KXDevice.KXScanner",
+        "KXDevice.KXBundleScanner", "KXDevice.KXBarcodeScanner", "KXDevice.KXDoors", "KXDevice.KXGuidelights", "KXDevice.KXIndicators",
+        "KXDevice.KXSensors", "KXDevice.KXOperatorPanel", "KXDevice.KXUPS", "KXDevice.KXCamera", "KXDevice.KXAudio",
+    };
+
+    /// <summary>
     /// Master switch for sending commands from the generic form (POST Client/{id}/Actions). OFF by default: the form can be filled
     /// and every check runs, but nothing reaches KTC. Turn on with KtcActions:SendEnabled = true (env: KtcActions__SendEnabled=true)
     /// only after the real command list has been reviewed.

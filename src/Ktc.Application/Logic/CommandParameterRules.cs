@@ -55,6 +55,21 @@ public static class CommandParameterRules
         return null;
     }
 
+    /// <summary>KTC's own templates sometimes list "etc" / "..." as a choice (KTC_RESET_DEVICE: Choices="CardReader,PinPad,etc"); that is not a value.</summary>
+    private static bool IsPlaceholder(string s) => s.Trim().TrimEnd('.').Equals("etc", StringComparison.OrdinalIgnoreCase) || s.Trim() is "..." or "\u2026";
+
+    /// <summary>
+    /// Replaces the choices of the parameter called <paramref name="name"/> with <paramref name="values"/>. Used for KTC_RESET_DEVICE:
+    /// the KTC client sends the full component name (Device = KXDevice.KXCardReader), not the short words in the command's template.
+    /// Does nothing when the command has no such parameter or no values are given.
+    /// </summary>
+    public static IReadOnlyList<CommandParameter> WithChoices(IReadOnlyList<CommandParameter> fields, string name, IReadOnlyList<string> values)
+    {
+        if (values.Count == 0) return fields;
+        return fields.Select(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+            ? f with { Type = Choice, Choices = values.ToList(), Default = null, Required = true, Note = null } : f).ToList();
+    }
+
     /// <summary>The form fields of a command. Unreadable XML gives no fields plus a note (the form then offers no inputs).</summary>
     public static (List<CommandParameter> Fields, string? Note) Parse(string? template)
     {
@@ -72,7 +87,7 @@ public static class CommandParameterRules
 
             var rawType = Attr(e, TypeA) ?? Child(e, TypeA)?.Value;
             var choiceText = Attr(e, ChoiceA);
-            var choices = choiceText != null ? Split.Split(choiceText.Trim()).Where(x => x.Length > 0).ToList()
+            var choices = choiceText != null ? Split.Split(choiceText.Trim()).Where(x => x.Length > 0 && !IsPlaceholder(x)).ToList()
                 : e.Elements().Where(c => ChoiceE.Any(n => n.Equals(c.Name.LocalName, StringComparison.OrdinalIgnoreCase)))
                     .Select(c => Attr(c, "Value", "Name") ?? c.Value.Trim()).Where(x => x.Length > 0).ToList();
             var listParent = Child(e, ChoiceA);
