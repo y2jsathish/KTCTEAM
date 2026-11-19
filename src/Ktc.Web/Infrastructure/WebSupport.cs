@@ -18,7 +18,7 @@ public static class CookieEvents
     {
         var s = ctx.HttpContext.Session;
         await s.LoadAsync();
-        if (s.GetString(SessionKeys.Token) == null && s.GetString(SessionKeys.Cred) == null)
+        if (s.GetString(SessionKeys.Token) == null && s.GetString(SessionKeys.Cred) == null && ctx.Principal?.HasClaim("ktcsvc", "1") != true)
         { ctx.RejectPrincipal(); await ctx.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme); }
     }
 

@@ -18,6 +18,7 @@ public static class DependencyInjection
     public static IServiceCollection AddKtcInfrastructure(this IServiceCollection s, IConfiguration cfg)
     {
         s.Configure<PortalOptions>(cfg.GetSection(PortalOptions.Section));
+        s.Configure<EntraIdOptions>(cfg.GetSection(EntraIdOptions.Section));
         s.Configure<NotificationOptions>(cfg.GetSection(NotificationOptions.Section));
         s.Configure<CashForecastOptions>(cfg.GetSection(CashForecastOptions.Section));
         s.Configure<KtcActionsOptions>(cfg.GetSection(KtcActionsOptions.Section));

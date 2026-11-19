@@ -4,6 +4,7 @@ using Ktc.Infrastructure;
 using Ktc.Infrastructure.Data;
 using Ktc.Web.Hubs;
 using Ktc.Web.Infrastructure;
+using Ktc.Web.Controllers;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
@@ -42,6 +43,26 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     o.Events.OnRedirectToLogin = CookieEvents.ApiAware401;
     o.Events.OnRedirectToAccessDenied = CookieEvents.ApiAware403;
 });
+var entra = builder.Configuration.GetSection(Ktc.Application.Options.EntraIdOptions.Section).Get<Ktc.Application.Options.EntraIdOptions>() ?? new();
+if (entra.Enabled && !entra.IsConfigured) Console.Error.WriteLine("EntraId:Enabled is true but TenantId, ClientId or ClientSecret is missing: Microsoft sign-in stays off.");
+if (entra.IsConfigured)
+{
+    // Short-lived cookie that carries the Entra result from /signin-oidc to Account/EntraDone, where the portal cookie is issued.
+    builder.Services.AddAuthentication()
+        .AddCookie(AccountController.ExternalScheme, o => { o.Cookie.Name = ".ktc.ext"; o.Cookie.HttpOnly = true; o.Cookie.SameSite = SameSiteMode.None; o.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest; o.ExpireTimeSpan = TimeSpan.FromMinutes(10); })
+        .AddOpenIdConnect(AccountController.EntraScheme, o =>
+        {
+            o.Authority = entra.Instance.TrimEnd('/') + "/" + entra.TenantId + "/v2.0";
+            o.ClientId = entra.ClientId; o.ClientSecret = entra.ClientSecret;
+            o.CallbackPath = entra.CallbackPath;
+            o.ResponseType = "code"; o.UsePkce = true;
+            o.SignInScheme = AccountController.ExternalScheme;
+            o.SaveTokens = true; o.GetClaimsFromUserInfoEndpoint = false;
+            o.Scope.Clear(); o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+            o.MapInboundClaims = false;
+            o.Events.OnRemoteFailure = ctx => { ctx.Response.Redirect("/Account/Login?entraError=1"); ctx.HandleResponse(); return Task.CompletedTask; };
+        });
+}
 builder.Services.AddAuthorization(o =>
 {
     o.AddPolicy(Policies.Operator, p => p.RequireRole(Roles.Admin, Roles.Operator));
