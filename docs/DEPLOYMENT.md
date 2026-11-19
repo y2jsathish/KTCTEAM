@@ -27,6 +27,29 @@ Settings bind from `appsettings.json` → environment variables (`__` = section 
 | `Notifications__Smtp__*`, `Notifications__TeamsWebhookUrl`, `Notifications__DefaultRecipients__0`, `Notifications__PortalBaseUrl` | alert/report delivery |
 | `DataProtection__KeysPath` | a persisted, access-restricted folder (required across restarts / multiple nodes) |
 
+### Sign in with Microsoft (Entra ID / MSAL)
+
+Optional. When enabled, the login page shows **Sign in with Microsoft** next to the KTC credential form. Roles still come from
+`Portal:AdminUsers` / `Portal:OperatorUsers`, matched on the user's sign-in name (the `preferred_username` claim, normally the UPN/email,
+for example `name@brinks.com`), and the portal still issues its own cookie session.
+
+1. In Entra ID, register an app for the portal: *Web* platform, redirect URI `https://<portal host>/signin-oidc`, and create a client secret.
+2. Set (never commit the secret; use environment variables, user-secrets or the machine-wide `appsettings.Production.json`):
+
+| Setting | Note |
+|---|---|
+| `EntraId__Enabled` | `true` |
+| `EntraId__TenantId` | directory (tenant) GUID or domain. `common` / `organizations` are not supported |
+| `EntraId__ClientId` / `EntraId__ClientSecret` | from the app registration |
+| `EntraId__UsernameClaim` | default `preferred_username` (falls back to `upn`, then `email`) |
+| `EntraId__KtcLogin` | default `true`: also calls KTC `api/v1/Login` with `AuthMode` `MSAL`, the user name and the Entra ID token, as the KTC desktop client does, so KTC calls run as that user |
+| `EntraId__FallbackToServiceAccount` | default `false`. If KTC does not accept the portal's token, `true` lets the user in and runs KTC calls with `Ktc:ServiceAccount` (actions are then attributed to the service account) |
+
+KTC's own desktop client signs in with its app registration (visible in its trace as `MSALAuthParameters`, scopes `Profile`,
+`UsernameClaim` `preferred_username`) and sends the **ID token** to KTC. The portal has a different client id, so KTC must accept
+tokens issued to it (ask the KTC administrator), otherwise use the service-account fallback. The KTC session refresh uses the
+same token, so it ends when the Entra ID token expires (about an hour) and the user is asked to sign in again.
+
 ### Operator and Admin users
 
 Writing to KTC from the portal (adding a comment or changing a dispute or ticket, running ATM commands) needs the **Operator** or

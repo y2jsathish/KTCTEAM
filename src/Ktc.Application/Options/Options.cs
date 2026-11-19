@@ -110,6 +110,31 @@ public class PortalOptions
     public string PostmanSeedFile { get; set; } = "Seed/KTC_REST_API.postman_collection.json";
 }
 
+/// <summary>
+/// Optional "Sign in with Microsoft" (Entra ID / Azure AD, OpenID Connect), shown on the login page next to the KTC credential form.
+/// The portal needs its own app registration (a confidential web app with a client secret and redirect URI {portal}/signin-oidc).
+/// Never commit the secret: set EntraId__ClientSecret as an environment variable, user-secret or in the machine-wide appsettings.Production.json.
+/// </summary>
+public class EntraIdOptions
+{
+    public const string Section = "EntraId";
+    public bool Enabled { get; set; }
+    public string Instance { get; set; } = "https://login.microsoftonline.com/";
+    /// <summary>Directory (tenant) GUID or verified domain. "common"/"organizations" are not supported (issuer is validated against this tenant).</summary>
+    public string? TenantId { get; set; }
+    public string? ClientId { get; set; }
+    public string? ClientSecret { get; set; }
+    public string CallbackPath { get; set; } = "/signin-oidc";
+    /// <summary>Claim holding the sign-in name used for Portal:AdminUsers / OperatorUsers. Falls back to upn, then email.</summary>
+    public string UsernameClaim { get; set; } = "preferred_username";
+    /// <summary>Also sign in to KTC with AuthMode "MSAL" (user name + the Entra ID token), so KTC calls run as the user. Needs KTC to accept this app's token.</summary>
+    public bool KtcLogin { get; set; } = true;
+    /// <summary>If KTC does not accept the token (or KtcLogin is off), still let the user in and run KTC calls with the Ktc:ServiceAccount.</summary>
+    public bool FallbackToServiceAccount { get; set; }
+    public string ButtonText { get; set; } = "Sign in with Microsoft";
+    public bool IsConfigured => Enabled && !string.IsNullOrWhiteSpace(TenantId) && !string.IsNullOrWhiteSpace(ClientId) && !string.IsNullOrWhiteSpace(ClientSecret);
+}
+
 public class NotificationOptions
 {
     public const string Section = "Notifications";

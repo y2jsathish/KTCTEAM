@@ -226,7 +226,7 @@ public class KtcTokenProvider : IKtcTokenProvider
     }
 
     private HttpContext? Http => KtcTokenScope.IsServiceForced ? null : _ctx.HttpContext;
-    private bool Interactive => Http?.User?.Identity?.IsAuthenticated == true && Http.Session != null;
+    private bool Interactive => Http?.User?.Identity?.IsAuthenticated == true && Http.Session != null && !Http.User.HasClaim("ktcsvc", "1");
 
     public string Identity => Interactive ? "user " + Http!.User.Identity!.Name : "service account" + (_opt.ServiceAccount.Configured ? " " + _opt.ServiceAccount.Username : " (not configured)");
 

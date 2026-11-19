@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using Ktc.Application.Abstractions;
+using Ktc.Application.Models;
 using Ktc.Application.Options;
 using Ktc.Infrastructure.KtcApi;
 using Ktc.Web.ViewModels;
@@ -16,21 +17,31 @@ namespace Ktc.Web.Controllers;
 public class AccountController : Controller
 {
     private readonly IKtcAuthService _auth; private readonly IKtcTokenProvider _tokens; private readonly IUserService _users;
-    private readonly IAuditService _audit; private readonly IDataProtectionProvider _dp; private readonly KtcOptions _opt;
+    private readonly IAuditService _audit; private readonly IDataProtectionProvider _dp; private readonly KtcOptions _opt; private readonly EntraIdOptions _entra;
 
-    public AccountController(IKtcAuthService auth, IKtcTokenProvider tokens, IUserService users, IAuditService audit, IDataProtectionProvider dp, IOptions<KtcOptions> opt)
-    { _auth = auth; _tokens = tokens; _users = users; _audit = audit; _dp = dp; _opt = opt.Value; }
+    public const string EntraScheme = "EntraId";
+    public const string ExternalScheme = "EntraExternal";
+
+    public AccountController(IKtcAuthService auth, IKtcTokenProvider tokens, IUserService users, IAuditService audit, IDataProtectionProvider dp, IOptions<KtcOptions> opt, IOptions<EntraIdOptions> entra)
+    { _auth = auth; _tokens = tokens; _users = users; _audit = audit; _dp = dp; _opt = opt.Value; _entra = entra.Value; }
 
     private LoginViewModel Blank(string? returnUrl) => new()
-    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = _opt.AuthModes, ReturnUrl = returnUrl, MockMode = _opt.UseMock };
+    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = _opt.AuthModes, ReturnUrl = returnUrl, MockMode = _opt.UseMock,
+      EntraEnabled = _entra.IsConfigured, EntraButtonText = _entra.ButtonText };
 
     [AllowAnonymous, HttpGet]
-    public IActionResult Login(string? returnUrl = null) => User.Identity?.IsAuthenticated == true ? RedirectToAction("Index", "Home") : View(Blank(returnUrl));
+    public IActionResult Login(string? returnUrl = null, string? entraError = null)
+    {
+        if (User.Identity?.IsAuthenticated == true) return RedirectToAction("Index", "Home");
+        var m = Blank(returnUrl);
+        if (entraError != null) m.EntraError = "Microsoft sign-in did not complete. Try again, or sign in with your KTC credentials.";
+        return View(m);
+    }
 
     [AllowAnonymous, HttpPost, EnableRateLimiting("login")]
     public async Task<IActionResult> Login(LoginViewModel m)
     {
-        var shell = Blank(m.ReturnUrl); m.AuthModes = shell.AuthModes; m.MockMode = shell.MockMode;
+        var shell = Blank(m.ReturnUrl); m.AuthModes = shell.AuthModes; m.MockMode = shell.MockMode; m.EntraEnabled = shell.EntraEnabled; m.EntraButtonText = shell.EntraButtonText;
         if (!ModelState.IsValid) return View(m);
 
         var res = await _auth.LoginAsync(m.Username.Trim(), m.Password, m.AuthMode, m.AppName);
@@ -58,6 +69,67 @@ public class AccountController : Controller
             new AuthenticationProperties { IsPersistent = false });
         await _audit.LogAsync("Login", "Login success", user.Username, $"role={user.Role}", true, user.Username);
         return LocalRedirect(Url.IsLocalUrl(m.ReturnUrl) ? m.ReturnUrl! : "/");
+    }
+
+    /// <summary>Starts Microsoft (Entra ID) sign-in. Only available when EntraId is enabled and fully configured.</summary>
+    [AllowAnonymous, HttpGet, EnableRateLimiting("login")]
+    public IActionResult EntraLogin(string? returnUrl = null)
+    {
+        if (!_entra.IsConfigured) return NotFound();
+        var done = Url.Action(nameof(EntraDone), "Account", new { returnUrl = Url.IsLocalUrl(returnUrl) ? returnUrl : null })!;
+        return Challenge(new AuthenticationProperties { RedirectUri = done }, EntraScheme);
+    }
+
+    /// <summary>Back from Entra: map the Microsoft identity to a portal user (role from Portal:AdminUsers / OperatorUsers by sign-in name), sign in to KTC, issue the normal portal cookie.</summary>
+    [AllowAnonymous, HttpGet]
+    public async Task<IActionResult> EntraDone(string? returnUrl = null)
+    {
+        if (!_entra.IsConfigured) return NotFound();
+        var ext = await HttpContext.AuthenticateAsync(ExternalScheme);
+        await HttpContext.SignOutAsync(ExternalScheme);
+        if (!ext.Succeeded || ext.Principal == null) return RedirectToAction(nameof(Login), new { returnUrl, entraError = 1 });
+
+        string? Claim(string t) { var v = ext.Principal.FindFirst(t)?.Value; return string.IsNullOrWhiteSpace(v) ? null : v.Trim(); }
+        var name = Claim(_entra.UsernameClaim) ?? Claim("preferred_username") ?? Claim("upn") ?? Claim("email");
+        if (name == null)
+        {
+            await _audit.LogAsync("Login", "Login failed", null, "Entra token has no user name claim", false, null);
+            return View("Login", Blank(returnUrl).With(m => m.EntraError = "Your Microsoft account did not return a user name (preferred_username/upn/email)."));
+        }
+        var idToken = ext.Properties?.GetTokenValue("id_token");
+
+        var user = await _users.EnsureUserAsync(name);
+        if (user.Role == "Disabled")
+        {
+            await _audit.LogAsync("Login", "Login failed", name, "portal account disabled", false, name);
+            return View("Login", Blank(returnUrl).With(m => m.EntraError = "Your portal account is disabled. Contact an administrator."));
+        }
+
+        HttpContext.Session.Clear();
+        var claims = new List<Claim> { new(ClaimTypes.Name, user.Username), new(ClaimTypes.NameIdentifier, user.Id.ToString()), new(ClaimTypes.Role, user.Role), new("theme", user.Theme), new("authmode", "MSAL") };
+        string via = "KTC session";
+        KtcLoginResult? ktc = null;
+        if (_entra.KtcLogin && !string.IsNullOrEmpty(idToken))
+            ktc = await _auth.LoginAsync(name, idToken, "MSAL", _opt.AppName);
+        if (ktc is { Success: true })
+        {
+            KtcTokenProvider.Remember(HttpContext, user.Username, ktc.Token!, ktc.ExpiresUtc!.Value);
+            HttpContext.Session.SetString(SessionKeys.Cred, KtcTokenProvider.ProtectCredentials(_dp, name, idToken!, "MSAL", _opt.AppName));
+        }
+        else if (_entra.FallbackToServiceAccount && (_opt.UseMock || _opt.ServiceAccount.Configured))
+        {
+            claims.Add(new("ktcsvc", "1")); via = "service account (KTC did not accept the Microsoft token)";
+        }
+        else
+        {
+            await _audit.LogAsync("Login", "Login failed", name, "KTC rejected MSAL login: " + (ktc?.Error ?? "KtcLogin disabled"), false, name);
+            return View("Login", Blank(returnUrl).With(m => m.EntraError = "Microsoft sign-in worked, but KTC did not accept it. " + (ktc?.Error ?? "")));
+        }
+
+        await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)),
+            new AuthenticationProperties { IsPersistent = false });
+        await _audit.LogAsync("Login", "Login success (Microsoft)", user.Username, $"role={user.Role}; KTC via {via}", true, user.Username);
+        return LocalRedirect(Url.IsLocalUrl(returnUrl) ? returnUrl! : "/");
     }
 
     /// <summary>A typed or bookmarked /Account/Logout used to answer 405. Sign-out stays POST-only (CSRF); this sends people home, where the sign-out button is.</summary>
@@ -113,4 +185,9 @@ public class AccountController : Controller
     public async Task<IActionResult> Theme([FromForm] string theme) { await _users.SetThemeAsync(User.Identity!.Name!, theme); return NoContent(); }
 
     [AllowAnonymous] public IActionResult Denied() => View();
+}
+
+internal static class LoginViewModelExt
+{
+    public static LoginViewModel With(this LoginViewModel m, Action<LoginViewModel> f) { f(m); return m; }
 }

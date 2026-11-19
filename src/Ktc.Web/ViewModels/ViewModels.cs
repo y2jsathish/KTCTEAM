@@ -13,6 +13,9 @@ public class LoginViewModel
     public string[] AuthModes { get; set; } = Array.Empty<string>();
     public string? ReturnUrl { get; set; }
     public bool MockMode { get; set; }
+    public bool EntraEnabled { get; set; }
+    public string EntraButtonText { get; set; } = "Sign in with Microsoft";
+    public string? EntraError { get; set; }
 }
 
 public class ReportsViewModel
