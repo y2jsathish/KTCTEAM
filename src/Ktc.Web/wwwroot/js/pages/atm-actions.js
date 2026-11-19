@@ -29,7 +29,7 @@
    <div class="small">${K.esc(a.status)}</div>
    ${a.commandTypeId!=null?`<div class="small">KTC command: <code>${K.esc(a.matchedName)}</code> #${K.esc(a.commandTypeId)}${a.requiresDualAuth?' <span class="sbadge warn">Needs second login</span>':''}</div>`:''}
    ${a.suggestions.length&&a.commandTypeId==null?`<div class="small">Looks like: ${a.suggestions.map(s=>`<code>${K.esc(s)}</code>`).join(', ')}</div>`:''}
-   ${a.key==='Reboot'?rebootBtn(r):formBtn(r,a)}${a.key==='DeviceReset'&&a.commandTypeId!=null?'<div class="small text-muted mt-1"><i class="bi bi-info-circle"></i> Sent as one command. The ATM application waits for the transaction, goes out of service and resets by itself; the portal does not send out of service first. Follow it in Activity.</div>':''}
+   ${a.key==='Reboot'?rebootBtn(r):formBtn(r,a)}${a.key==='DeviceReset'&&a.commandTypeId!=null?'<div class="small text-muted mt-1"><i class="bi bi-info-circle"></i> Sent as one command (KTC_RESET_DEVICE) for the device you pick, the same as the KTC client; the portal does not send out of service first. Follow it in Activity.</div>':''}
   </div></div>`).join('')
   +`<div class="col-12 small text-muted mt-1">Mapping is set in configuration, e.g. <code>KtcActions:Commands:Reboot = "&lt;CommandName&gt;"</code>. Reboot runs only as the guided reboot; the others open "Run a command" with the extra confirmation.</div>`;
  }

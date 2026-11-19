@@ -13,7 +13,7 @@ public static partial class CommandTypeRules
         ("Reboot", "Reboot", "Restart the ATM's operating system, after the current transaction and with the ATM out of service.",
             new(@"reboot|restart.*(pc|os|machine|system|atm)|^restart$", RegexOptions.IgnoreCase)),
         ("XfsReset", "XFS reset", "Reset all XFS devices of the ATM.", new(@"xfs.*reset|reset.*xfs|reset.*all.*device", RegexOptions.IgnoreCase)),
-        ("DeviceReset", "Device reset", "Reset the ATM's devices. One command: the ATM application waits for the current transaction, takes the ATM out of service itself, resets the devices it chooses, and goes back in service.",
+        ("DeviceReset", "Device reset", "Reset one ATM device (for example the card reader). Pick the device; it is sent as one command with a Device parameter, as the KTC client does.",
             new(@"device.*reset|reset.*(device|component|module)|^reset$", RegexOptions.IgnoreCase)),
         ("OutOfService", "Out of service", "Take the ATM out of service (step before a reboot).", new(@"out.?of.?service|\boos\b|go.?offline|close.?atm|supervisor.?mode", RegexOptions.IgnoreCase)),
         ("InService", "In service", "Put the ATM back in service (step after a reboot).", new(@"in.?service|go.?online|open.?atm", RegexOptions.IgnoreCase)),

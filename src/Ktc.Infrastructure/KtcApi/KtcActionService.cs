@@ -39,6 +39,9 @@ public class KtcActionService : IKtcActionService
         else
         {
             commands = CommandTypeRules.Parse(r.Json);
+            if (_opt.Commands.TryGetValue("DeviceReset", out var resetName) && !string.IsNullOrWhiteSpace(resetName))
+                commands = commands.Select(c => c.Name.Equals(resetName, StringComparison.OrdinalIgnoreCase)
+                    ? c with { Parameters = CommandParameterRules.WithChoices(c.Parameters, "Device", _opt.DeviceResetDevices) } : c).ToList();
             fields = CommandTypeRules.Fields(r.Json);
             if (commands.Count == 0) warnings.Add(r.Json == null ? $"GET {route} answered, but not with JSON." : $"GET {route} answered with no command types.");
         }
@@ -250,6 +253,7 @@ public class KtcActionService : IKtcActionService
         if (j is not { } e) return null;
         if (e.ValueKind == JsonValueKind.Number) return e.GetRawText();
         if (e.ValueKind == JsonValueKind.String && long.TryParse(e.GetString(), out var n)) return n.ToString();
+        if (e.ValueKind == JsonValueKind.Array) return e.GetArrayLength() > 0 ? ActionIdFrom(e[0]) : null;   // real KTC answers [4684]
         if (e.ValueKind == JsonValueKind.Object) { var s = KtcJson.Str(e, "ActionID", "ID", "Id"); return s.Length > 0 ? s : null; }
         return null;
     }
