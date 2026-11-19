@@ -26,8 +26,23 @@ public class AccountController : Controller
     { _auth = auth; _tokens = tokens; _users = users; _audit = audit; _dp = dp; _opt = opt.Value; _entra = entra.Value; }
 
     private LoginViewModel Blank(string? returnUrl) => new()
-    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = _opt.AuthModes, ReturnUrl = returnUrl, MockMode = _opt.UseMock,
+    { AppName = _opt.AppName, AuthMode = _opt.DefaultAuthMode, AuthModes = WithMsal(_opt.AuthModes), ReturnUrl = returnUrl, MockMode = _opt.UseMock,
       EntraEnabled = _entra.IsConfigured, EntraButtonText = _entra.ButtonText };
+
+    /// <summary>MSAL (Single Sign-On) is always offered in the Auth mode list, so it is visible before Entra ID is set up.</summary>
+    private static string[] WithMsal(string[] modes) => modes.Any(a => a.Equals(MsalMode, StringComparison.OrdinalIgnoreCase)) ? modes : modes.Append(MsalMode).ToArray();
+    private const string MsalMode = "MSAL";
+
+    /// <summary>What is still missing for Microsoft sign-in, in words the login page can show.</summary>
+    private string EntraMissing()
+    {
+        var miss = new List<string>();
+        if (!_entra.Enabled) miss.Add("EntraId:Enabled = true");
+        if (string.IsNullOrWhiteSpace(_entra.TenantId)) miss.Add("EntraId:TenantId");
+        if (string.IsNullOrWhiteSpace(_entra.ClientId)) miss.Add("EntraId:ClientId");
+        if (string.IsNullOrWhiteSpace(_entra.ClientSecret)) miss.Add("EntraId:ClientSecret");
+        return "Microsoft (MSAL) sign-in is not set up on this portal. An administrator needs to set " + string.Join(", ", miss) + " (see docs/DEPLOYMENT.md, \"Sign in with Microsoft\"), then restart the portal.";
+    }
 
     [AllowAnonymous, HttpGet]
     public IActionResult Login(string? returnUrl = null, string? entraError = null)
@@ -42,6 +57,15 @@ public class AccountController : Controller
     public async Task<IActionResult> Login(LoginViewModel m)
     {
         var shell = Blank(m.ReturnUrl); m.AuthModes = shell.AuthModes; m.MockMode = shell.MockMode; m.EntraEnabled = shell.EntraEnabled; m.EntraButtonText = shell.EntraButtonText;
+        if (string.Equals(m.AuthMode, MsalMode, StringComparison.OrdinalIgnoreCase))
+        {
+            // MSAL has no password: hand over to the Microsoft sign-in, or say what is missing.
+            if (_entra.IsConfigured) return RedirectToAction(nameof(EntraLogin), new { returnUrl = m.ReturnUrl });
+            ModelState.Clear();
+            ModelState.AddModelError("", EntraMissing());
+            m.Password = "";
+            return View(m);
+        }
         if (!ModelState.IsValid) return View(m);
 
         var res = await _auth.LoginAsync(m.Username.Trim(), m.Password, m.AuthMode, m.AppName);
