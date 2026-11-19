@@ -48,7 +48,14 @@ public class AccountController : Controller
         if (!res.Success)
         {
             await _audit.LogAsync("Login", "Login failed", m.Username, res.Error, false, m.Username.Trim());
-            ModelState.AddModelError("", res.Error ?? "Login failed.");
+            var err = res.Error ?? "Login failed.";
+            // KTC answers 401 for a wrong password and also when the account is not allowed to use the chosen auth mode (KTC lists INTERNAL, DOMAIN, MSAL and
+            // INTEGRATED via api/v1/LoginMethods). Accounts that sign in to the KTC app with Single Sign-On (MSAL) have no password KTC can check.
+            if (err.StartsWith("Invalid username or password", StringComparison.OrdinalIgnoreCase))
+                err += _entra.IsConfigured
+                    ? " If your KTC account uses Single Sign-On (MSAL), use \"" + _entra.ButtonText + "\" below instead."
+                    : " If your KTC account uses Single Sign-On (MSAL), it has no password KTC can check here: try another Auth mode, or ask an administrator to enable Microsoft sign-in (EntraId settings).";
+            ModelState.AddModelError("", err);
             m.Password = "";
             return View(m);
         }
