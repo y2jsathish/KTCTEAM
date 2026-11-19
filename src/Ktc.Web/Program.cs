@@ -60,7 +60,9 @@ builder.Services.AddRateLimiter(o =>
 builder.Services.AddControllersWithViews(o => o.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()))
     .AddJsonOptions(o => { o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase; o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()); });
 builder.Services.AddSignalR();
-builder.Services.AddResponseCompression();
+// Compress static assets and JSON, but never the HTML pages: a page whose body is cut short or re-encoded on the way
+// (error mid-render, proxy or antivirus) shows as a blank page with net::ERR_CONTENT_DECODING_FAILED.
+builder.Services.AddResponseCompression(o => o.MimeTypes = Microsoft.AspNetCore.ResponseCompression.ResponseCompressionDefaults.MimeTypes.Where(m => !m.StartsWith("text/html", StringComparison.OrdinalIgnoreCase)).ToArray());
 builder.Services.AddHealthChecks().AddDbContextCheck<KtcDbContext>("database");
 
 var app = builder.Build();
