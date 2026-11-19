@@ -24,4 +24,17 @@
     <div class="text-center text-muted small my-2">or</div>
     <a class="btn btn-outline-secondary w-100" href="@Url.Action("EntraLogin", "Account", new { returnUrl = Model.ReturnUrl })"><i class="bi bi-microsoft"></i> @Model.EntraButtonText</a>
   }
-</form></div></body></html>
+</form></div>
+<script>
+// MSAL (Single Sign-On) needs no password: hide the credential fields and relabel the button when it is chosen.
+(function () {
+  var mode = document.getElementById('AuthMode'), pw = document.getElementById('Password'), un = document.getElementById('Username'), btn = document.querySelector('.login-card button.btn-primary');
+  if (!mode || !pw || !btn) return;
+  function sync() {
+    var msal = mode.value.toUpperCase() === 'MSAL';
+    pw.closest('.mb-2').style.display = msal ? 'none' : ''; un.closest('.mb-2').style.display = msal ? 'none' : '';
+    pw.required = false; btn.textContent = msal ? 'Continue with Microsoft' : 'Sign in';
+  }
+  mode.addEventListener('change', sync); sync();
+})();
+</script></body></html>
