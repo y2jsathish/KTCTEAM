@@ -373,4 +373,25 @@ public class CashForecastTests
         Assert.Equal(2250, f.Units.Single(u => u.Unit == "1").Loaded); Assert.Equal(750, f.Units.Single(u => u.Unit == "2").Loaded);
         Assert.Equal(3000, f.Denominations!.Single().Loaded);
     }
+
+    [Fact]
+    public void Empty_cassettes_everywhere_get_a_warning_and_loaded_gives_a_usage()
+    {
+        var units = new[] { U("1", 100, 0, "Dispense"), U("2", 500, 0, "Dispense") };
+        var loads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-5)), new KtcLoad(null, 500, 1800, Now.AddDays(-5)) };
+        var f = CashForecastRules.Build(In(units) with { KtcLoads = loads }, O);
+        Assert.Contains(f.Warnings, w => w.Contains("0 notes"));
+        Assert.All(f.Units, u => Assert.Equal(CashForecastRules.SourceLoaded, u.RateSource));   // no history, but loaded minus remaining gives a usage
+        Assert.Equal(600, f.Units[0].NotesPerDay);   // 3000 notes over 5 days
+        var s = f.Suggestion!;
+        Assert.All(s.Loads, l => Assert.True(l.UsageKnown));   // sized from the usage (capped at the capacity), not blindly filled
+    }
+
+    [Fact]
+    public void Same_name_different_ids_gives_one_warning_naming_the_ids()
+    {
+        var w = CashForecastRules.DuplicateNameWarning(new[] { ("7", "ADB04098"), ("19", "adb04098"), ("8", "ADB05101") });
+        Assert.Contains("ADB04098", w); Assert.Contains("19, 7", w); Assert.DoesNotContain("ADB05101", w);
+        Assert.Null(CashForecastRules.DuplicateNameWarning(new[] { ("1", "A"), ("2", "B") }));
+    }
 }

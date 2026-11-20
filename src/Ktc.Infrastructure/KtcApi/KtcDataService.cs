@@ -484,6 +484,26 @@ public class KtcDataService : IKtcDataService
         return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag, loads);
     }
 
+    /// <summary>Loaded notes of the newest KTC replenishment record (POST ReplenishmentsByTimeRange only, no transactions or cash units): cached 6 hours per ATM so the estate run stays light.</summary>
+    public async Task<IReadOnlyList<KtcLoad>?> GetReplenishmentLoadsAsync(string atmId, int days, CancellationToken ct = default)
+    {
+        var w = new Warn(); var lookup = await LookupAsync(w, ct);
+        var norm = KtcJson.NormId(atmId);
+        var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
+                 ?? (long.TryParse(norm, out _) ? norm : null);
+        if (id == null) return null;
+        days = Math.Clamp(days, 1, 365);
+        var key = $"repl-loads|{id}|{days}";
+        var res = await Cached<IReadOnlyList<KtcLoad>?>(key, TimeSpan.FromHours(6), async () =>
+        {
+            var now = DateTime.UtcNow;
+            var r = await ReplenishmentsByTimeRangeAsync(id, now.AddDays(-days), now, ct);
+            return r.Json == null ? null : ReplenishmentLoadRules.Parse(new JsonElement?[] { r.Json });
+        });
+        if (res == null) _cache.Remove($"{Scope}|{key}");   // an unanswered call is retried on the next run, not remembered
+        return res;
+    }
+
     /// <summary>Cash units of one ATM now (KTC CurrentCashUnitStatus); null when KTC did not answer, with the reason in the warnings.</summary>
     public async Task<(IReadOnlyList<CashUnitLevel>? Units, IReadOnlyList<string> Warnings)> GetCashUnitsAsync(string atmId, CancellationToken ct = default)
     {
