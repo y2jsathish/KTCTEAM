@@ -284,7 +284,10 @@ public record NotesByDenomination(string Denomination, decimal? Value, string? D
 /// </summary>
 public record AtmReplenishment(string AtmId, string AtmName, DateTime? LastReplenishmentUtc, int LookbackDays,
     IReadOnlyList<CashUnitLevel> CashUnits, IReadOnlyList<ReplenishmentEvent> History, IReadOnlyList<KtcRecordSet> KtcRecords,
-    IReadOnlyList<string> Warnings, IReadOnlyList<string> Diagnostics);
+    IReadOnlyList<string> Warnings, IReadOnlyList<string> Diagnostics, IReadOnlyList<KtcLoad>? Loads = null);
+
+/// <summary>Notes loaded into one cassette by the newest KTC replenishment record (Unit and / or note value as KTC gives them).</summary>
+public record KtcLoad(string? Unit, decimal? Denomination, long Notes, DateTime? TimeUtc);
 
 /// <summary>One cash unit (cassette) as KTC reports it now. Value is the note value; Amount = Value x Count.</summary>
 public record CashUnitLevel(string Device, string Unit, string Type, string Status, decimal? Value, long Count, DateTime? UpdatedUtc)

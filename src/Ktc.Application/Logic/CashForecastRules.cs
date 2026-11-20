@@ -12,7 +12,7 @@ namespace Ktc.Application.Logic;
 public static class CashForecastRules
 {
     public const string SourceHistory = "Daily snapshots", SourceCounters = "Notes since last reset", SourceAmounts = "Withdrawal amounts", SourceLoaded = "Loaded minus remaining", SourceNone = "No usage data";
-    public const string LoadedFromCounters = "Remaining + notes dispensed since reset", LoadedFromSnapshots = "Highest daily snapshot since replenishment";
+    public const string LoadedFromKtc = "KTC replenishment record", LoadedFromCounters = "Remaining + notes dispensed since reset", LoadedFromSnapshots = "Highest daily snapshot since replenishment";
     public const string StatusOut = "Out", StatusCritical = "Critical", StatusWarning = "Warning", StatusOk = "OK", StatusUnknown = "No usage data";
     public const string Match = "Match", Differs = "Differs", NotComparable = "Not comparable";
     /// <summary>Run-out estimates are capped here; beyond it the page says "more than N days".</summary>
@@ -132,6 +132,16 @@ public static class CashForecastRules
                     }
                 }
             }
+            // 2a. KTC's own replenishment record names what was loaded (matched by cassette number, else by note value): it wins over the counters.
+            //     A record that holds fewer notes than the cassette has now is ignored (stale or a different cassette mapping).
+            DateTime? loadedAt = null;
+            var ktc = i.KtcLoads?.FirstOrDefault(k => k.Unit != null && k.Unit == KtcJson.NormId(u.Unit) && (k.Denomination == null || k.Denomination == u.Value));
+            if (ktc == null && i.KtcLoads?.Where(k => k.Unit == null && k.Denomination == u.Value).ToList() is { Count: 1 } byValue) ktc = byValue[0];
+            if (ktc != null && ktc.Notes >= u.Count)
+            {
+                loaded = ktc.Notes; loadedSource = LoadedFromKtc + (ktc.TimeUtc is { } kt ? $" {kt:yyyy-MM-dd HH:mm} UTC" : "");
+                loadedAt = ktc.TimeUtc is { } k2 ? k2.Add(i.NowLocal - i.NowUtc) : null;
+            }
             // 2b. no counters: the highest daily snapshot since the last replenishment is the best known load
             DateTime? repLocal = i.LastReplenishmentUtc?.Add(i.NowLocal - i.NowUtc);
             if (loaded == null && repLocal is { } rl)
@@ -140,7 +150,8 @@ public static class CashForecastRules
                 if (since.Count > 0) { loaded = Math.Max(u.Count, since.Max(h => h.Notes)); loadedSource = LoadedFromSnapshots; }
             }
             // 3. loaded minus remaining, over the days since the replenishment
-            if (rate == null && loadedSource == LoadedFromSnapshots && loaded > u.Count && repLocal is { } r3)
+            if (loadedSource == LoadedFromSnapshots) loadedAt = repLocal;
+            if (rate == null && loadedSource != LoadedFromCounters && loaded > u.Count && loadedAt is { } r3)
             {
                 rateDays = Math.Max(0.25, (i.NowLocal - r3).TotalDays);
                 rate = (loaded.Value - u.Count) / rateDays; source = SourceLoaded; conf = "Low";
