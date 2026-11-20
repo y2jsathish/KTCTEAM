@@ -102,17 +102,17 @@ public class CashForecastTests
     [Fact]
     public void Suggestion_visits_before_the_earliest_run_out_and_caps_the_load()
     {
-        var units = new[] { U("1", 100, 350), U("2", 1000, 2000) };
+        var units = new[] { U("1", 100, 311), U("2", 1000, 2000) };
         var notes = new[] { new NotesByDenomination("100", 100, "1", 200, 0), new NotesByDenomination("1000", 1000, "4", 1000, 0) };
         var f = CashForecastRules.Build(In(units, notes: notes, reset: Now.AddDays(-2)), O);
-        // unit 1: 100/day, 300 usable -> 3 days -> Warning; visit 1 day earlier
+        // unit 1: loaded 511 (311 now + 200 dispensed), low level 2% of that = 11; 100/day, 300 usable -> 3 days -> Warning; visit 1 day earlier
         Assert.Equal("Warning", f.Units[0].Status);
         var s = f.Suggestion!;
         Assert.Equal(Now.AddDays(2), s.VisitByUtc);
         var l1 = s.Loads.Single(l => l.Unit == "1");
-        Assert.Equal(150, l1.ExpectedAtVisit);                      // 350 - 2 days x 100
+        Assert.Equal(111, l1.ExpectedAtVisit);                      // 311 - 2 days x 100
         Assert.Equal(900, l1.TargetNotes);                          // 100 x 7 x 1.2 = 840 -> 900
-        Assert.Equal(750, l1.AddNotes);
+        Assert.Equal(789, l1.AddNotes);
         var l2 = s.Loads.Single(l => l.Unit == "2");
         Assert.Equal(3000, l2.TargetNotes);                         // 500 x 7 x 1.2 = 4200, capped at what the cassette held when loaded (2000 + 1000 dispensed), above the configured 2500
         Assert.Equal(900 * 100 + 3000 * 1000m, s.TargetAmount);
@@ -203,22 +203,24 @@ public class CashForecastTests
     {
         var units = new[] { U("1", 100, 650), U("2", 200, 2000) };
         var notes = new[] { new NotesByDenomination("100", 100, "1", 200, 0), new NotesByDenomination("200", 200, "2", 100, 0) };
-        var f = CashForecastRules.Build(In(units, notes: notes, reset: Now.AddDays(-2)), O);   // unit 1: 100/day, 600 usable -> 6 days
+        var f = CashForecastRules.Build(In(units, notes: notes, reset: Now.AddDays(-2)), O);   // unit 1: loaded 850, low 2% = 17; 100/day, 633 usable -> 6.3 days
         var same = CashForecastRules.Rethreshold(f, O, Now.AddHours(4));
         Assert.Equal(f.Units.Select(u => (u.DaysLeft, u.Status)), same.Units.Select(u => (u.DaysLeft, u.Status)));
         Assert.Equal(f.Status, same.Status);
         Assert.Equal("OK", f.Status);
 
-        var high = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(16)), Now.AddHours(4));   // 400 notes
-        Assert.Equal(2.5, high.Units[0].DaysLeft);
+        // 60%: each cassette is low at 60% of ITS loaded count: unit 1 (loaded 850) at 510 notes -> 140 usable -> 1.4 days
+        var high = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(60)), Now.AddHours(4));
+        Assert.Equal(1.4, high.Units[0].DaysLeft);
+        Assert.Equal(510, high.Units[0].LowNotes);
         Assert.Equal("Warning", high.Units[0].Status);
         Assert.Equal("Warning", high.Status);
-        Assert.Equal(2.5, high.DaysLeft);
-        Assert.Equal(Now.AddDays(1.5), high.Suggestion!.VisitByUtc);
+        Assert.Equal(1.4, high.DaysLeft);
+        Assert.Equal(Now.AddDays(0.4), high.Suggestion!.VisitByUtc, TimeSpan.FromSeconds(1));
 
-        var out26 = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(26)), Now.AddHours(4));  // 650 notes
-        Assert.Equal("Out", out26.Units[0].Status);
-        Assert.Equal("Out", out26.Status);
+        var out80 = CashForecastRules.Rethreshold(f, O.WithLowNotes(O.LowNotesFor(80)), Now.AddHours(4));  // 680 notes > the 650 held
+        Assert.Equal("Out", out80.Units[0].Status);
+        Assert.Equal("Out", out80.Status);
     }
 
     [Theory]
@@ -458,5 +460,39 @@ public class CashForecastTests
         var s = CashForecastRules.Suggest(new[] { u }, Now, O)!;
         Assert.True(s.Loads[0].TargetNotes >= 400);
         Assert.True(s.Loads[0].TargetNotes <= 3000);
+    }
+
+    [Fact]
+    public void Low_cash_applies_to_each_cassette_as_a_share_of_its_own_loaded_count()
+    {
+        var o = O.WithLowNotes(O.LowNotesFor(20));   // 20% of the 2500 capacity
+        Assert.Equal(20, CashForecastRules.LowPct(o));
+        Assert.Equal(600, CashForecastRules.LowFor(o, 3000));
+        Assert.Equal(160, CashForecastRules.LowFor(o, 800));
+        Assert.Equal(500, CashForecastRules.LowFor(o, null));   // loaded unknown: 20% of the capacity
+        var loads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-3)), new KtcLoad(null, 500, 800, Now.AddDays(-3)) };
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 550, "Dispense"), U("2", 500, 250, "Dispense") }) with { KtcLoads = loads }, o);
+        var u1 = f.Units.Single(u => u.Unit == "1"); var u2 = f.Units.Single(u => u.Unit == "2");
+        Assert.Equal(600, u1.LowNotes); Assert.Equal("Out", u1.Status);              // 550 <= 20% of 3000
+        Assert.Equal(160, u2.LowNotes); Assert.NotEqual("Out", u2.Status);           // 250 > 20% of 800, though below a flat 500
+        Assert.Contains("20% of its loaded 3,000", u1.LowRule);
+        Assert.Contains("20% of the capacity", CashForecastRules.Build(In(new[] { U("1", 100, 550, "Dispense") }), o).Units[0].LowRule);
+        Assert.Contains("20% of its loaded 3,000", f.StatusReason);
+    }
+
+    [Fact]
+    public void Usage_is_dispensed_since_the_last_replenishment_over_the_elapsed_time_and_cross_checked()
+    {
+        // KTC record: 3000 loaded 4 days ago; counters since the reset 4 days ago: 800 dispensed; the cassette holds 2200 -> consistent
+        var ok = CashForecastRules.Build(In(new[] { U("1", 100, 2200, "Dispense") }, notes: new[] { N(100, 800) }, reset: Now.AddDays(-4)) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O);
+        var u = ok.Units[0];
+        Assert.Equal(CashForecastRules.SourceCounters, u.RateSource); Assert.Equal(200, u.NotesPerDay); Assert.Equal(800, u.Dispensed);
+        Assert.Equal(3000, u.Loaded); Assert.Null(u.Check);
+        // the cassette holds 1900 although loaded - dispensed = 2200: flagged
+        var off = CashForecastRules.Build(In(new[] { U("1", 100, 1900, "Dispense") }, notes: new[] { N(100, 800) }, reset: Now.AddDays(-4)) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O);
+        Assert.Contains("2,200", off.Units[0].Check); Assert.Contains(off.Warnings, w => w.Contains("does not match"));
+        // without counters (the estate run) the same usage comes from loaded - remaining over the same time
+        var est = CashForecastRules.Build(In(new[] { U("1", 100, 2200, "Dispense") }) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O).Units[0];
+        Assert.Equal(CashForecastRules.SourceLoaded, est.RateSource); Assert.Equal(200, est.NotesPerDay); Assert.Equal(u.DaysLeft, est.DaysLeft); Assert.Equal(u.Status, est.Status);
     }
 }
