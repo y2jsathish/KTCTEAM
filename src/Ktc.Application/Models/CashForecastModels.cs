@@ -63,6 +63,8 @@ public record AtmCashForecastDetail(AtmCashForecast Forecast, CashReconciliation
 /// <param name="NotesSinceReset">Notes dispensed / accepted per note value since <paramref name="ResetUtc"/> (null when not read).</param>
 /// <param name="WithdrawnPerDay">Average amount withdrawn per day from the transactions (fallback when nothing better is known).</param>
 /// <param name="Daily">Actual cash per day of this ATM, for the weekday pattern.</param>
+/// <param name="KtcLoads">Notes loaded per cassette by KTC's newest replenishment record (null / empty when KTC returned none).</param>
 public record CashForecastInput(string AtmId, string AtmName, string Client, DateTime NowUtc, DateTime NowLocal,
     IReadOnlyList<CashUnitLevel> Units, DateTime? LastReplenishmentUtc, IReadOnlyList<CashSnapshotPoint> History,
-    IReadOnlyList<NotesByDenomination>? NotesSinceReset, DateTime? ResetUtc, decimal? WithdrawnPerDay, IReadOnlyList<CashDailyPoint> Daily);
+    IReadOnlyList<NotesByDenomination>? NotesSinceReset, DateTime? ResetUtc, decimal? WithdrawnPerDay, IReadOnlyList<CashDailyPoint> Daily,
+    IReadOnlyList<KtcLoad>? KtcLoads = null);

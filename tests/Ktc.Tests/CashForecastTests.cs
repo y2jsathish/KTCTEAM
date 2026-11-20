@@ -308,4 +308,35 @@ public class CashForecastTests
         var f2 = CashForecastRules.Rethreshold(f, O.WithLowNotes(900), Now.AddHours(4));
         Assert.True(f2.Denominations![0].DaysLeft < f.Denominations![0].DaysLeft);
     }
+
+    [Fact]
+    public void Ktc_replenishment_record_wins_over_the_counters_for_the_loaded_count()
+    {
+        var units = new[] { U("1", 100, 1500, "Dispense"), U("2", 500, 900, "Dispense") };
+        var loads = new[] { new KtcLoad("1", 100, 2400, Now.AddDays(-2)), new KtcLoad("2", 500, 800, Now.AddDays(-2)) };   // 800 < 900 now: ignored
+        var f = CashForecastRules.Build(In(units, notes: new[] { N(100, 500), N(500, 100) }, reset: Now.AddDays(-2)) with { KtcLoads = loads }, O);
+        var u1 = f.Units.Single(u => u.Unit == "1"); var u2 = f.Units.Single(u => u.Unit == "2");
+        Assert.Equal(2400, u1.Loaded); Assert.StartsWith(CashForecastRules.LoadedFromKtc, u1.LoadedSource);
+        Assert.Equal(1000, u2.Loaded); Assert.Equal(CashForecastRules.LoadedFromCounters, u2.LoadedSource);
+    }
+
+    [Fact]
+    public void Ktc_record_without_counters_gives_loaded_and_a_rate_from_its_time()
+    {
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 1200, "Dispense") }) with { KtcLoads = new[] { new KtcLoad(null, 100, 2000, Now.AddDays(-4)) } }, O);
+        Assert.Equal(2000, f.Units[0].Loaded);
+        Assert.Equal(CashForecastRules.SourceLoaded, f.Units[0].RateSource); Assert.Equal(200, f.Units[0].NotesPerDay);
+    }
+
+    [Fact]
+    public void Replenishment_record_parser_reads_nested_cassette_lines_and_picks_the_newest_record()
+    {
+        using var d = System.Text.Json.JsonDocument.Parse("""
+            [ {"ID":1,"ReplenishmentTime":"2026-11-10T06:00:00Z","Cassettes":[{"CassetteNumber":1,"Denomination":100,"Count":1000}]},
+              {"ID":2,"ReplenishmentTime":"2026-11-14T06:00:00Z","Cassettes":[{"CassetteNumber":1,"Denomination":100,"Count":2000},{"CassetteNumber":2,"Denomination":200,"Count":1500}]} ]
+            """);
+        var loads = ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { d.RootElement.Clone() });
+        Assert.Equal(2, loads.Count); Assert.Equal(2000, loads.Single(l => l.Unit == "1").Notes); Assert.Equal(200, loads.Single(l => l.Unit == "2").Denomination);
+        Assert.Empty(ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { null }));
+    }
 }

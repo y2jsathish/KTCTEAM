@@ -479,7 +479,9 @@ public class KtcDataService : IKtcDataService
             if (unnamed.Count > 0) diag.Add($"{r.Title}: no KTC list names these id fields, so they show the id: {string.Join(", ", unnamed)}.");
             diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
-        return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag);
+        var loads = ReplenishmentLoadRules.Parse(tRoutes.Take(2).Select(t => t.Result.res.Json));
+        diag.Add(loads.Count > 0 ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): {loads.Count} cassette line(s)." : "No cassette lines with a loaded count found in the KTC replenishment records, so the loaded count comes from the counters.");
+        return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag, loads);
     }
 
     /// <summary>Cash units of one ATM now (KTC CurrentCashUnitStatus); null when KTC did not answer, with the reason in the warnings.</summary>

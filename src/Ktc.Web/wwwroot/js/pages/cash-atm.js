@@ -27,7 +27,7 @@
   <tbody>${d.map(x=>`<tr><td class="text-end num">${num(x.denomination)}</td><td class="text-end num">${x.cassettes}</td><td class="text-end num">${num(x.loaded)}</td><td class="text-end num">${num(x.notes)}</td><td>${x.remainingPct==null?'–':pct(x.remainingPct)+bar(x.remainingPct)}</td><td class="text-end num">${num(x.loadedAmount)}</td><td class="text-end num">${num(x.amount)}</td>
    <td class="text-end num">${x.notesPerDay==null?'–':num(x.notesPerDay)}</td><td class="text-end num">${days(x.daysLeft)}</td><td>${x.status==='Out'?'now':x.runOutUtc&&x.daysLeft<90?day(x.runOutUtc):''}</td><td>${badge(x.status)}</td><td class="text-muted">${K.esc(x.loadedSource||'unknown')}</td></tr>`).join('')}</tbody>
   <tfoot><tr><th colspan="5">Total</th><th class="text-end num">${num(tl)}</th><th class="text-end num">${num(tr)}</th><th colspan="5" class="text-muted small">${tl?`${pct(tr*100/tl)} of the loaded cash remains`:'Loaded cash unknown for some note values'}</th></tr></tfoot></table></div>
-  <div class="small text-muted">Remaining is actual. Loaded is an estimate: the cash in the cassette now plus the notes dispensed since the last reset, or, without counters, the highest daily snapshot since the last replenishment. Run-out is for the cassettes of a note value together.</div>`;
+  <div class="small text-muted">Remaining is actual. Loaded comes from KTC's newest replenishment record when it lists the cassette; otherwise it is an estimate: the cash in the cassette now plus the notes dispensed since the last reset, or the highest daily snapshot since the last replenishment (source shown per row). Run-out is for the cassettes of a note value together.</div>`;
  }
  function suggest(f){
   const s=f.suggestion;
