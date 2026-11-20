@@ -480,7 +480,7 @@ public class KtcDataService : IKtcDataService
             diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
         var loads = ReplenishmentLoadRules.Parse(tRoutes.Take(2).Select(t => t.Result.res.Json));
-        diag.Add(loads.Count > 0 ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): {loads.Count} cassette line(s)." : "No cassette lines with a loaded count found in the KTC replenishment records, so the loaded count comes from the counters.");
+        diag.Add(loads.Count > 0 ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): {loads.Count} cassette line(s)." : "No loaded count found in the KTC replenishment records (" + (tRoutes.Take(2).SelectMany(t => KtcJson.Items(t.Result.res.Json).Take(1)).FirstOrDefault() is { ValueKind: JsonValueKind.Object } first ? "first record fields: " + string.Join(", ", first.EnumerateObject().Select(x => x.Name)) : "no records") + "), so the loaded count comes from the counters.");
         return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag, loads);
     }
 
@@ -622,9 +622,9 @@ public class KtcDataService : IKtcDataService
     private async Task<RouteTry> ReplenishmentsByTimeRangeAsync(string id, DateTime from, DateTime to, CancellationToken ct)
     {
         var url = $"api/v1/Client/{id}/ReplenishmentsByTimeRange";
-        var fmt = KtcDateFormats.CurrentBody;
+        // The KTC client sends {"dt1":"2026-10-17T07:24:22.2226628Z","dt2":"..."} (ISO "o" UTC) for this route (seen in its trace): try that first.
         string Body(int i) => System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, string>
-            { [RangeBodyNames[i].A] = KtcDateFormats.Raw(from, fmt, _opt.QueryTimeZone), [RangeBodyNames[i].B] = KtcDateFormats.Raw(to, fmt, _opt.QueryTimeZone) });
+            { [RangeBodyNames[i].A] = KtcDateFormats.Raw(from, "o", _opt.QueryTimeZone), [RangeBodyNames[i].B] = KtcDateFormats.Raw(to, "o", _opt.QueryTimeZone) });
         var remembered = _rangeBody;   // the body KTC accepted before goes first; the others only if it is rejected
         var order = Enumerable.Range(0, RangeBodyNames.Length).OrderBy(i => i == remembered ? 0 : 1).ToArray();
         KtcResponse? last = null; string? sent = null;

@@ -339,4 +339,38 @@ public class CashForecastTests
         Assert.Equal(2, loads.Count); Assert.Equal(2000, loads.Single(l => l.Unit == "1").Notes); Assert.Equal(200, loads.Single(l => l.Unit == "2").Denomination);
         Assert.Empty(ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { null }));
     }
+
+    // The Replenishments tab of the KTC client (screenshot): replenishment 404790 / 404796 loaded 3000 / 1800 / 2000 (AED 100 / 500 / 1000); 407370 later set Loaded
+    // to 0 (cash removed). The JSON below is rebuilt from that screen: the field names are a GUESS (the traces only log decoded rows), the values are real.
+    private const string ReplenishmentsScreen = """
+        [ {"ID":404790,"ClientID":18,"ComponentID":7,"Time":"2026-10-22T03:08:31Z","TransactionID":18711012,"Details":[
+             {"Property":"Loaded","Denomination":"AED 100","Before":3000,"After":3000},{"Property":"Loaded","Denomination":"AED 500","Before":1800,"After":1800},{"Property":"Loaded","Denomination":"AED 1000","Before":2000,"After":2000},
+             {"Property":"Remaining","Denomination":"AED 100","Before":1849,"After":1849},{"Property":"Dispensed","Denomination":"AED 100","Before":1150,"After":1150}]},
+          {"ID":404796,"ClientID":18,"ComponentID":7,"Time":"2026-10-22T03:09:12Z","TransactionID":18711017,"Details":[
+             {"Property":"Loaded","Denomination":"AED 100","Before":3000,"After":3000},{"Property":"Loaded","Denomination":"AED 500","Before":1800,"After":1800},{"Property":"Loaded","Denomination":"AED 1000","Before":2000,"After":2000}]},
+          {"ID":404791,"ClientID":18,"ComponentID":16,"Time":"2026-10-22T03:09:12Z","TransactionID":18711017,"Details":[]},
+          {"ID":407370,"ClientID":18,"ComponentID":7,"Time":"2026-10-22T13:19:22Z","TransactionID":18739639,"Details":[
+             {"Property":"Loaded","Denomination":"AED 100","Before":3000,"After":0},{"Property":"Loaded","Denomination":"AED 500","Before":1800,"After":0},{"Property":"Loaded","Denomination":"AED 1000","Before":2000,"After":0}]} ]
+        """;
+
+    [Fact]
+    public void Replenishments_tab_shape_gives_loaded_after_per_denomination_and_skips_the_removal()
+    {
+        using var d = System.Text.Json.JsonDocument.Parse(ReplenishmentsScreen);
+        var loads = ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { d.RootElement.Clone() });
+        Assert.Equal(3, loads.Count);
+        Assert.Equal(3000, loads.Single(l => l.Denomination == 100).Notes);
+        Assert.Equal(1800, loads.Single(l => l.Denomination == 500).Notes);
+        Assert.Equal(2000, loads.Single(l => l.Denomination == 1000).Notes);
+        Assert.All(loads, l => Assert.Equal(new DateTime(2026, 10, 22, 3, 9, 12, DateTimeKind.Utc), l.TimeUtc));   // 404796, the newest load; 407370 only removed cash
+    }
+
+    [Fact]
+    public void A_load_per_note_value_is_split_over_the_cassettes_holding_that_value()
+    {
+        var units = new[] { U("1", 100, 1500, "Dispense"), U("2", 100, 500, "Dispense") };
+        var f = CashForecastRules.Build(In(units) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O);
+        Assert.Equal(2250, f.Units.Single(u => u.Unit == "1").Loaded); Assert.Equal(750, f.Units.Single(u => u.Unit == "2").Loaded);
+        Assert.Equal(3000, f.Denominations!.Single().Loaded);
+    }
 }

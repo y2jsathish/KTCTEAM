@@ -136,10 +136,18 @@ public static class CashForecastRules
             //     A record that holds fewer notes than the cassette has now is ignored (stale or a different cassette mapping).
             DateTime? loadedAt = null;
             var ktc = i.KtcLoads?.FirstOrDefault(k => k.Unit != null && k.Unit == KtcJson.NormId(u.Unit) && (k.Denomination == null || k.Denomination == u.Value));
-            if (ktc == null && i.KtcLoads?.Where(k => k.Unit == null && k.Denomination == u.Value).ToList() is { Count: 1 } byValue) ktc = byValue[0];
-            if (ktc != null && ktc.Notes >= u.Count)
+            double ktcShare = 1;
+            if (ktc == null && i.KtcLoads?.Where(k => k.Unit == null && k.Denomination == u.Value).ToList() is { Count: 1 } byValue)
             {
-                loaded = ktc.Notes; loadedSource = LoadedFromKtc + (ktc.TimeUtc is { } kt ? $" {kt:yyyy-MM-dd HH:mm} UTC" : "");
+                // a load per note value is split over the cassettes holding that value, by what each holds now
+                ktc = byValue[0];
+                var same = disp.Where(x => x.Value == u.Value).ToList();
+                ktcShare = same.Count == 1 ? 1.0 : same.Sum(x => x.Count) is var tot and > 0 ? (double)u.Count / tot : 1.0 / same.Count;
+            }
+            var ktcNotes = ktc == null ? 0 : (long)Math.Round(ktc.Notes * ktcShare);
+            if (ktc != null && ktcNotes >= u.Count)
+            {
+                loaded = ktcNotes; loadedSource = LoadedFromKtc + (ktc.TimeUtc is { } kt ? $" {kt:yyyy-MM-dd HH:mm} UTC" : "");
                 loadedAt = ktc.TimeUtc is { } k2 ? k2.Add(i.NowLocal - i.NowUtc) : null;
             }
             // 2b. no counters: the highest daily snapshot since the last replenishment is the best known load
