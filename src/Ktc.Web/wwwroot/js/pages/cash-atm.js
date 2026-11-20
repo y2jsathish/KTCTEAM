@@ -4,7 +4,7 @@
  const num=v=>v==null?'<span class="text-muted">–</span>':Number(v).toLocaleString();
  const kpi=(l,v,c,d)=>`<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d||'&nbsp;'}</div></div>`;
  const CLS={Out:'crit',Critical:'crit',Warning:'warn',OK:'ok',Match:'ok',Differs:'crit'};
- const badge=s=>`<span class="text-nowrap sbadge ${CLS[s]||'unknown'}">${K.esc(s)}</span>`;
+ const badge=(s,why)=>`<span class="text-nowrap sbadge ${CLS[s]||'unknown'}"${why?` title="${K.esc(why)}"`:''}>${K.esc(s)}</span>`;
  const days=d=>d==null?'–':d>=90?'&gt; 90':Number(d).toFixed(1);
  const day=u=>u?new Date(u.endsWith('Z')?u:u+'Z').toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}):'';
  const pct=v=>v==null?'<span class="text-muted">–</span>':Math.min(100,v).toFixed(0)+'%';
@@ -12,11 +12,12 @@
 
  function units(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
-  return `<div class="table-responsive"><table class="table table-sm small mb-1 counter-table"><thead><tr><th>Device</th><th>Unit</th><th>Type</th><th class="text-end">Note</th><th class="text-end" title="Notes the cassette held after the last replenishment (estimate, see the source in the denomination table)">Loaded</th><th class="text-end">Remaining</th><th class="text-end">Left</th><th class="text-end">Amount</th><th class="text-end">Notes / day (est.)</th><th>Usage from</th><th>Confidence</th><th class="text-end">Days left (est.)</th><th>Runs out (est.)</th><th>Status</th></tr></thead>
-  <tbody>${f.units.map(u=>`<tr><td>${K.esc(u.device)}</td><td>${K.esc(u.unit)}</td><td>${K.esc(u.type)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num">${pct(u.loaded?u.notes*100/u.loaded:null)}</td><td class="text-end num">${num(u.amount)}</td>
+  return `<div class="table-responsive"><table class="table table-sm small mb-1 counter-table"><thead><tr><th>Device</th><th>Unit</th><th>Type</th><th class="text-end">Note</th><th class="text-end" title="Notes the cassette held after the last replenishment (estimate, see the source in the denomination table)">Loaded</th><th class="text-end">Remaining</th><th class="text-end">Left</th><th class="text-end" title="This cassette's own low-cash level">Low at</th><th class="text-end">Amount</th><th class="text-end">Notes / day (est.)</th><th>Usage from</th><th>Confidence</th><th class="text-end">Days left (est.)</th><th>Runs out (est.)</th><th>Status</th></tr></thead>
+  <tbody>${f.units.map(u=>`<tr><td>${K.esc(u.device)}</td><td>${K.esc(u.unit)}</td><td>${K.esc(u.type)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num">${pct(u.loaded?u.notes*100/u.loaded:null)}</td><td class="text-end num" title="${K.esc(u.lowRule||'')}">${num(u.lowNotes)}</td><td class="text-end num">${num(u.amount)}</td>
    <td class="text-end num">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td>${K.esc(u.rateSource)}${u.rateDays?` <span class="text-muted">(${u.rateDays} d)</span>`:''}</td><td>${K.esc(u.confidence)}</td>
-   <td class="text-end num">${days(u.daysLeft)}</td><td>${u.status==='Out'?'now':u.runOutUtc&&u.daysLeft<90?day(u.runOutUtc):''}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table></div>`
-  +`<div class="small text-muted">A cassette counts as out at or below ${last.lowPct}% of its capacity (${num(last.lowNotes)} notes). ${f.weekdayPattern?'Run-out dates use the weekday pattern of the stored history.':'No weekday pattern yet (needs 2 weeks of daily history), so usage is spread evenly over the days.'}</div>`;
+   <td class="text-end num">${days(u.daysLeft)}</td><td>${u.status==='Out'?'now':u.runOutUtc&&u.daysLeft<90?day(u.runOutUtc):''}</td><td>${badge(u.status,u.lowRule?'Low at '+u.lowRule:'')}</td></tr>`).join('')}</tbody></table></div>`
+  +f.units.filter(u=>u.check).map(u=>`<div class="small text-warning-emphasis"><i class="bi bi-exclamation-triangle"></i> Cassette ${K.esc(u.unit)} (${num(u.denomination)}): ${K.esc(u.check)}</div>`).join('')
+  +`<div class="small text-muted">Each cassette is low at ${last.lowPct}% of its own loaded count (hover the Low at column for the rule); where the loaded count is unknown, ${last.lowPct}% of the capacity (${num(last.lowNotes)} notes). ${f.weekdayPattern?'Run-out dates use the weekday pattern of the stored history.':'No weekday pattern yet (needs 2 weeks of daily history), so usage is spread evenly over the days.'}</div>`;
  }
  function denoms(f){
   const d=f.denominations||[];

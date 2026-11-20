@@ -3,13 +3,13 @@ namespace Ktc.Application.Models;
 // ---- Cash Forecasting menu. Everything here except the counts themselves is an ESTIMATE. ----
 
 /// <summary>
-/// One dispensing cash unit with its usage estimate. NotesPerDay comes from RateSource ("Daily snapshots", "Notes since last reset",
+/// One dispensing cash unit with its usage estimate. NotesPerDay comes from RateSource ("Daily snapshots", "Dispensed since last replenishment",
 /// "Withdrawal amounts", or none). DaysLeft / RunOutUtc are estimates; Status is Out, Critical (1 day or less), Warning (3 days or less), OK or No usage data.
-/// Loaded = notes the cassette held after the last replenishment (an ESTIMATE, see LoadedSource); Notes is what it holds now. Null when neither source is available.
+/// Loaded = notes the cassette held after the last replenishment (KTC's record, else an estimate, see LoadedSource); Notes is what it holds now. LowNotes / LowRule: the cassette's own low-cash level and why. Dispensed: notes taken out since the replenishment; Check: set when loaded - dispensed does not match what it holds. Null when neither source is available.
 /// </summary>
 public record CashUnitForecast(string Device, string Unit, string Type, decimal? Denomination, long Notes, decimal? Amount,
     double? NotesPerDay, string RateSource, double RateDays, string Confidence, double? DaysLeft, DateTime? RunOutUtc, string Status,
-    long? Loaded = null, string? LoadedSource = null);
+    long? Loaded = null, string? LoadedSource = null, long? LowNotes = null, string? LowRule = null, long? Dispensed = null, string? Check = null);
 
 /// <summary>Suggested load for one cassette: notes expected at the visit, notes to have after it (capped by capacity) and notes to add.</summary>
 public record CashLoadLine(string Unit, decimal? Denomination, long NotesNow, long ExpectedAtVisit, long TargetNotes, long AddNotes, bool UsageKnown);

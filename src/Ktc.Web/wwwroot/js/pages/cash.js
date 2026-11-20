@@ -15,7 +15,7 @@
 
  function unitsTable(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
-  return `<table class="table table-sm small"><thead><tr><th>Unit</th><th class="text-end">Note</th><th class="text-end">Notes</th><th class="text-end">Loaded</th><th class="text-end">Per day (est.)</th><th class="text-end">Days left</th><th>Status</th></tr></thead><tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num" title="${K.esc(u.rateSource)}">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td class="text-end num">${days(u.daysLeft)}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table>`;
+  return `<table class="table table-sm small"><thead><tr><th>Unit</th><th class="text-end">Note</th><th class="text-end">Notes</th><th class="text-end">Loaded</th><th class="text-end" title="Low-cash level of this cassette">Low at</th><th class="text-end">Per day (est.)</th><th class="text-end">Days left</th><th>Status</th></tr></thead><tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num" title="${K.esc(u.lowRule||'')}">${num(u.lowNotes)}</td><td class="text-end num" title="${K.esc(u.rateSource)}">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td class="text-end num">${days(u.daysLeft)}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table>`;
  }
  const loadedAmt=f=>{const d=f.denominations||[];return d.length&&d.every(x=>x.loaded!=null)?d.reduce((t,x)=>t+x.loadedAmount,0):null;};
  const remPct=f=>{const l=loadedAmt(f);return l?Math.min(100,f.cashAmount*100/l):null;};
@@ -31,7 +31,7 @@
   const rows=data.atms.filter(a=>(!fc||a.client===fc)&&(!fs||a.status===fs));
   const by=s=>rows.filter(a=>a.status===s).length, cash=rows.reduce((t,a)=>t+(a.cashAmount||0),0);
   $id('kpis').innerHTML=kpi('Cash in ATMs',Math.round(cash).toLocaleString(),'info',`${rows.length} ATMs · actual`)
-   +kpi('Out of cash now',by('Out'),by('Out')?'crit':'ok',`at or below ${data.lowPct}% of capacity (${num(data.lowNotes)} notes)`)
+   +kpi('Out of cash now',by('Out'),by('Out')?'crit':'ok',`a cassette at or below ${data.lowPct}% of its own loaded count`)
    +kpi('Run out within 1 day',by('Critical'),by('Critical')?'crit':'ok','estimate')
    +kpi('Run out within 3 days',by('Warning'),by('Warning')?'warn':'ok','estimate')
    +kpi('No usage data',by('No usage data'),by('No usage data')?'warn':'ok','no estimate possible')
@@ -60,7 +60,7 @@
  function show(f){
   data=f;
   const seen={};dupNames=new Set();f.atms.forEach(a=>{const n=(a.atmName||'').toLowerCase();if(n&&seen[n])dupNames.add(n);seen[n]=1;});
-  $id('gen').textContent=`Calculated ${K.local(f.generatedUtc)} (${f.trigger}) · low cash at ${f.lowPct}% of capacity = ${Number(f.lowNotes).toLocaleString()} notes`;
+  $id('gen').textContent=`Calculated ${K.local(f.generatedUtc)} (${f.trigger}) · low cash at ${f.lowPct}% of each cassette's own loaded count (of the capacity, ${Number(f.lowNotes).toLocaleString()} notes, when the loaded count is unknown)`;
   $id('lowPct').value=f.lowPct;
   $id('warnings').innerHTML=(f.warnings||[]).length?`<div class="alert alert-warning py-2 small">${f.warnings.map(K.esc).join('<br>')}</div>`:'';
   const cl=[...new Set(f.atms.map(a=>a.client).filter(Boolean))].sort(),sel=$id('fClient'),cur=sel.value;
