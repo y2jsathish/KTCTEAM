@@ -249,4 +249,63 @@ public class CashForecastTests
         Assert.Equal((1, 100m), (d.Withdrawals, d.Withdrawn));
         Assert.False(CounterRules.IsCashTransaction(tx[1]));
     }
+
+    // ---- loaded vs remaining, per denomination ----
+    private static NotesByDenomination N(decimal v, long disp, long acc = 0) => new(v.ToString("0"), v, null, disp, acc);
+
+    [Fact]
+    public void Loaded_is_remaining_plus_notes_dispensed_since_the_reset_and_split_by_denomination()
+    {
+        var units = new[] { U("1", 100, 1500, "Dispense"), U("2", 500, 900, "Dispense") };
+        var f = CashForecastRules.Build(In(units, notes: new[] { N(100, 500), N(500, 100) }, reset: Now.AddDays(-2)), O);
+        var u1 = f.Units.Single(u => u.Unit == "1"); var u2 = f.Units.Single(u => u.Unit == "2");
+        Assert.Equal(2000, u1.Loaded); Assert.Equal(1000, u2.Loaded);
+        Assert.Equal(CashForecastRules.LoadedFromCounters, u1.LoadedSource);
+        var d100 = f.Denominations!.Single(d => d.Denomination == 100); var d500 = f.Denominations!.Single(d => d.Denomination == 500);
+        Assert.Equal(75, d100.RemainingPct); Assert.Equal(200000, d100.LoadedAmount); Assert.Equal(150000, d100.Amount);
+        Assert.Equal(90, d500.RemainingPct);
+        Assert.Equal(250, d100.NotesPerDay);   // 500 notes over 2 days
+    }
+
+    [Fact]
+    public void Recycling_units_net_deposits_out_of_the_loaded_count()
+    {
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 1000) }, notes: new[] { N(100, 600, 200) }, reset: Now.AddDays(-2)), O);
+        Assert.Equal(1400, f.Units[0].Loaded);   // 1000 + (600 - 200)
+    }
+
+    [Fact]
+    public void Loaded_falls_back_to_the_highest_snapshot_since_the_replenishment_and_gives_a_rate()
+    {
+        var input = In(new[] { U("1", 100, 1200, "Dispense") }, new[] { S(-3, "1", 100, 500), S(-2, "1", 100, 2000), S(-1, "1", 100, 1600) }) with { LastReplenishmentUtc = Now.AddDays(-2.5) };
+        var f = CashForecastRules.Build(input, O);
+        var u = f.Units[0];
+        Assert.Equal(2000, u.Loaded); Assert.Equal(CashForecastRules.LoadedFromSnapshots, u.LoadedSource);
+        Assert.Equal(CashForecastRules.SourceLoaded, u.RateSource); Assert.True(u.NotesPerDay > 0);
+    }
+
+    [Fact]
+    public void Loaded_is_unknown_without_a_replenishment_or_counters_and_the_denomination_total_then_has_none()
+    {
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 1200), U("2", 100, 800) }), O);
+        Assert.All(f.Units, u => Assert.Null(u.Loaded));
+        var d = Assert.Single(f.Denominations!);
+        Assert.Equal(2, d.Cassettes); Assert.Equal(2000, d.Notes); Assert.Null(d.Loaded); Assert.Null(d.RemainingPct);
+    }
+
+    [Fact]
+    public void Unknown_usage_repeats_the_last_load_instead_of_filling_to_capacity()
+    {
+        var u = new CashUnitForecast("d", "1", "Dispense", 100, 30, 3000, null, "No usage data", 0, "None", 0, Now, "Out", Loaded: 1200);
+        var s = CashForecastRules.Suggest(new[] { u }, Now, O)!;
+        Assert.Equal(1200, s.Loads[0].TargetNotes);
+    }
+
+    [Fact]
+    public void Rethreshold_recalculates_the_denomination_rows()
+    {
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 1000) }, notes: new[] { N(100, 500) }, reset: Now.AddDays(-2)), O);
+        var f2 = CashForecastRules.Rethreshold(f, O.WithLowNotes(900), Now.AddHours(4));
+        Assert.True(f2.Denominations![0].DaysLeft < f.Denominations![0].DaysLeft);
+    }
 }

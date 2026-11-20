@@ -11,7 +11,8 @@ namespace Ktc.Application.Logic;
 /// </summary>
 public static class CashForecastRules
 {
-    public const string SourceHistory = "Daily snapshots", SourceCounters = "Notes since last reset", SourceAmounts = "Withdrawal amounts", SourceNone = "No usage data";
+    public const string SourceHistory = "Daily snapshots", SourceCounters = "Notes since last reset", SourceAmounts = "Withdrawal amounts", SourceLoaded = "Loaded minus remaining", SourceNone = "No usage data";
+    public const string LoadedFromCounters = "Remaining + notes dispensed since reset", LoadedFromSnapshots = "Highest daily snapshot since replenishment";
     public const string StatusOut = "Out", StatusCritical = "Critical", StatusWarning = "Warning", StatusOk = "OK", StatusUnknown = "No usage data";
     public const string Match = "Match", Differs = "Differs", NotComparable = "Not comparable";
     /// <summary>Run-out estimates are capped here; beyond it the page says "more than N days".</summary>
@@ -109,22 +110,42 @@ public static class CashForecastRules
         foreach (var u in disp)
         {
             double? rate = null; double rateDays = 0; var source = SourceNone; var conf = "None";
+            long? loaded = null; string? loadedSource = null;
             // 1. own daily snapshots
             var (hr, hd) = HistoryRate(i.History.Where(h => h.Unit == u.Unit && h.Denomination == u.Value), o.MinHistoryDays);
             if (hr.HasValue) { rate = hr; rateDays = hd; source = SourceHistory; conf = hd >= 28 ? "Medium" : "Low"; }
-            // 2. notes per denomination since the reset, split over the units holding that note value
-            if (rate == null && i.NotesSinceReset != null)
+            // 2. notes per denomination since the reset, split over the units holding that note value. The same figures give the loaded
+            //    count: what is in the cassette now plus what was taken out since the reset (the replenishment).
+            if (i.NotesSinceReset != null)
             {
                 var nb = i.NotesSinceReset.Where(n => n.Value == u.Value).ToList();
-                if (nb.Count > 0)
+                if (nb.Count > 0 && i.ResetUtc is { } reset && reset <= i.NowUtc)
                 {
                     var same = disp.Where(x => x.Value == u.Value).ToList();
                     var share = same.Count == 1 ? 1.0 : same.Sum(x => x.Count) is var tot and > 0 ? (double)u.Count / tot : 1.0 / same.Count;
-                    var (cr, cd) = CounterRate(nb.Sum(n => n.NotesDispensed), nb.Sum(n => n.NotesAccepted), Recycling.IsMatch(u.Type), i.ResetUtc, i.NowUtc);
-                    if (cr.HasValue) { rate = cr * share; rateDays = cd; source = SourceCounters; conf = "Low"; }
+                    var recycling = Recycling.IsMatch(u.Type);
+                    var (cr, cd) = CounterRate(nb.Sum(n => n.NotesDispensed), nb.Sum(n => n.NotesAccepted), recycling, i.ResetUtc, i.NowUtc);
+                    if (cr.HasValue)
+                    {
+                        if (rate == null) { rate = cr * share; rateDays = cd; source = SourceCounters; conf = "Low"; }
+                        loaded = u.Count + (long)Math.Round(cr.Value * cd * share); loadedSource = LoadedFromCounters;
+                    }
                 }
             }
-            // 3. the ATM's average amount withdrawn per day, split by the cash each unit holds (rough)
+            // 2b. no counters: the highest daily snapshot since the last replenishment is the best known load
+            DateTime? repLocal = i.LastReplenishmentUtc?.Add(i.NowLocal - i.NowUtc);
+            if (loaded == null && repLocal is { } rl)
+            {
+                var since = i.History.Where(h => h.Unit == u.Unit && h.Denomination == u.Value && h.Day >= rl.Date).ToList();
+                if (since.Count > 0) { loaded = Math.Max(u.Count, since.Max(h => h.Notes)); loadedSource = LoadedFromSnapshots; }
+            }
+            // 3. loaded minus remaining, over the days since the replenishment
+            if (rate == null && loadedSource == LoadedFromSnapshots && loaded > u.Count && repLocal is { } r3)
+            {
+                rateDays = Math.Max(0.25, (i.NowLocal - r3).TotalDays);
+                rate = (loaded.Value - u.Count) / rateDays; source = SourceLoaded; conf = "Low";
+            }
+            // 4. the ATM's average amount withdrawn per day, split by the cash each unit holds (rough)
             if (rate == null && i.WithdrawnPerDay is > 0 && u.Value is > 0)
             {
                 var total = disp.Sum(x => x.Amount ?? 0);
@@ -133,7 +154,8 @@ public static class CashForecastRules
             rate = rate is { } rr ? Math.Round(rr, 1) : null;   // the stored rate, so a later Rethreshold gives the same days left
             var left = DaysLeft(u.Count, o.LowNotes, rate, factors, i.NowLocal);
             units.Add(new CashUnitForecast(u.Device, u.Unit, u.Type, u.Value, u.Count, u.Amount, rate, source,
-                Math.Round(rateDays, 1), conf, left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? i.NowUtc.AddDays(l1) : null, StatusFor(u.Count, o.LowNotes, left)));
+                Math.Round(rateDays, 1), conf, left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? i.NowUtc.AddDays(l1) : null, StatusFor(u.Count, o.LowNotes, left),
+                loaded, loadedSource));
         }
         if (units.Count > 0 && units.All(u => u.NotesPerDay == null))
             warnings.Add("No usage known yet (no snapshots, counters or withdrawals), so no run-out date can be estimated.");
@@ -147,7 +169,7 @@ public static class CashForecastRules
         var confidence = rated.Count == 0 ? "None" : rated.OrderByDescending(u => ConfidenceRank(u.Confidence)).First().Confidence;
         return new AtmCashForecast(i.AtmId, i.AtmName, i.Client, i.NowUtc, i.LastReplenishmentUtc,
             disp.Sum(u => u.Amount ?? 0), disp.Sum(u => u.Count), units, first?.RunOutUtc, first?.DaysLeft, status, confidence, factors != null,
-            Suggest(units, i.NowUtc, o), warnings, factors);
+            Suggest(units, i.NowUtc, o), warnings, factors, ByDenomination(units, o, factors, i.NowLocal, i.NowUtc));
     }
 
     /// <summary>
@@ -167,14 +189,15 @@ public static class CashForecastRules
         {
             Units = units, EarliestRunOutUtc = first?.RunOutUtc, DaysLeft = first?.DaysLeft,
             Status = units.Count == 0 ? StatusUnknown : units.OrderBy(u => Rank(u.Status)).First().Status,
-            Suggestion = Suggest(units, f.GeneratedUtc, o)
+            Suggestion = Suggest(units, f.GeneratedUtc, o),
+            Denominations = ByDenomination(units, o, f.WeekdayFactors, generatedLocal, f.GeneratedUtc)
         };
     }
 
     /// <summary>
     /// Suggested replenishment when a cassette runs out within HorizonDays: visit BufferDays before the earliest run-out (not before now),
     /// and load each cassette for CoverDays of use plus SafetyStockPct, rounded up to 100 notes and capped at CassetteCapacity.
-    /// Cassettes without a usage estimate are filled to capacity.
+    /// Cassettes without a usage estimate are loaded as they were last time (the loaded count) or, when that is unknown, filled to capacity.
     /// </summary>
     public static CashReplenishmentSuggestion? Suggest(IReadOnlyList<CashUnitForecast> units, DateTime nowUtc, CashForecastOptions o)
     {
@@ -185,7 +208,7 @@ public static class CashForecastRules
         {
             var known = u.NotesPerDay.HasValue;
             var expected = known ? Math.Max(0, (long)Math.Round(u.Notes - u.NotesPerDay!.Value * visit)) : u.Notes;
-            var need = known ? (long)Math.Ceiling(u.NotesPerDay!.Value * o.CoverDays * (1 + o.SafetyStockPct / 100)) : o.CassetteCapacity;
+            var need = known ? (long)Math.Ceiling(u.NotesPerDay!.Value * o.CoverDays * (1 + o.SafetyStockPct / 100)) : u.Loaded is { } ld ? Math.Min(o.CassetteCapacity, ld) : o.CassetteCapacity;
             var target = Math.Min(o.CassetteCapacity, Math.Max(o.LowNotes * 2, (long)Math.Ceiling(need / 100.0) * 100));
             return new CashLoadLine(u.Unit, u.Denomination, u.Notes, expected, target, Math.Max(0, target - expected), known);
         }).ToList();
@@ -195,6 +218,23 @@ public static class CashForecastRules
         return new CashReplenishmentSuggestion(nowUtc.AddDays(visit), reason, loads,
             loads.Sum(l => l.TargetNotes * (l.Denomination ?? 0)), loads.Sum(l => l.AddNotes * (l.Denomination ?? 0)));
     }
+
+    /// <summary>
+    /// The cassettes of each note value added up: loaded vs remaining, usage per day and the run-out of the note value (its cassettes together
+    /// reach the low-cash level of all of them). Recalculated from the cassette rows, so a new threshold needs no new read.
+    /// </summary>
+    public static IReadOnlyList<CashDenominationForecast> ByDenomination(IReadOnlyList<CashUnitForecast> units, CashForecastOptions o, double[]? factors, DateTime nowLocal, DateTime nowUtc) =>
+        units.Where(u => u.Denomination is > 0).GroupBy(u => u.Denomination!.Value).OrderBy(g => g.Key).Select(g =>
+        {
+            var us = g.ToList(); var notes = us.Sum(u => u.Notes); var low = o.LowNotes * us.Count;
+            long? loaded = us.All(u => u.Loaded.HasValue) ? us.Sum(u => u.Loaded!.Value) : null;
+            double? rate = us.All(u => u.NotesPerDay.HasValue) ? Math.Round(us.Sum(u => u.NotesPerDay!.Value), 1) : null;
+            var left = DaysLeft(notes, low, rate, factors, nowLocal);
+            var src = string.Join(", ", us.Select(u => u.LoadedSource).Where(s => s != null).Distinct());
+            return new CashDenominationForecast(g.Key, us.Count, notes, g.Key * notes, loaded, loaded is { } l ? g.Key * l : null, src.Length > 0 ? src : null,
+                loaded is > 0 ? Math.Round(Math.Min(100.0, notes * 100.0 / loaded.Value), 1) : null, rate,
+                left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? nowUtc.AddDays(l1) : null, StatusFor(notes, low, left));
+        }).ToList();
 
     private static string Den(decimal? d) => d is { } v ? $" ({v:0.##})" : "";
 
