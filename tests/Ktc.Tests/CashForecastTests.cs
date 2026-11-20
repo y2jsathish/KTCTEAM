@@ -495,4 +495,22 @@ public class CashForecastTests
         var est = CashForecastRules.Build(In(new[] { U("1", 100, 2200, "Dispense") }) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O).Units[0];
         Assert.Equal(CashForecastRules.SourceLoaded, est.RateSource); Assert.Equal(200, est.NotesPerDay); Assert.Equal(u.DaysLeft, est.DaysLeft); Assert.Equal(u.Status, est.Status);
     }
+
+    [Fact]
+    public void KtcLoadsAreReadFromIdBasedNestedChildren()
+    {
+        const string json = """
+        [{"Id":1,"Timestamp":"2026-11-01T06:00:00Z","Properties":[
+          {"PropertyID":3,"Denominations":[{"DenominationID":7,"After":1500,"Before":0},{"DenominationID":8,"After":800,"Before":0}]},
+          {"PropertyID":4,"Denominations":[{"DenominationID":7,"After":0,"Before":0}]}]}]
+        """;
+        using var d = System.Text.Json.JsonDocument.Parse(json);
+        string? Resolve(string k, string id) => (k, id) switch { ("propertyid", "3") => "Loaded", ("propertyid", "4") => "Remaining", ("denominationid", "7") => "AED 100", ("denominationid", "8") => "AED 500", _ => null };
+        var loads = ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { d.RootElement.Clone() }, Resolve);
+        Assert.Equal(2, loads.Count);
+        Assert.Equal(1500, loads.Single(l => l.Denomination == 100).Notes);
+        Assert.Equal(800, loads.Single(l => l.Denomination == 500).Notes);
+        Assert.Empty(ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { d.RootElement.Clone() }));
+        Assert.Contains(ReplenishmentLoadRules.Describe(d.RootElement.Clone()), x => x.StartsWith("1 record"));
+    }
 }

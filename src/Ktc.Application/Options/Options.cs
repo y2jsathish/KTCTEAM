@@ -48,6 +48,8 @@ public class KtcOptions
     public string CountersEndpoint { get; set; } = "api/v1/Client/{atmId}/Counters";
     /// <summary>Days of transactions searched for the application counters ("Since reset" goes back at most this far).</summary>
     public int CounterLookbackDays { get; set; } = 7;
+    /// <summary>Days of KTC replenishment records read for the Replenishment tab and the cash forecast's loaded count (independent of CounterLookbackDays; at least 30).</summary>
+    public int ReplenishmentDays { get; set; } = 60;
     /// <summary>
     /// KTC's per-transaction counters (what KTC's UI reads for one transaction), used for "Notes dispensed" and "Notes accepted".
     /// {atmId} and {transactionId} are filled in. Empty turns it off; the totals then come from the dispenser / acceptor counters.

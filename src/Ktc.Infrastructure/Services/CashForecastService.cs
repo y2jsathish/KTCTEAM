@@ -116,7 +116,7 @@ public class CashForecastService : ICashForecastService
             {
                 var daily = useBy.GetValueOrDefault(r.Atm.Id) ?? new();
                 var f = CashForecastRules.Build(new CashForecastInput(r.Atm.Id, r.Atm.Name, r.Atm.Client, nowUtc, nowLocal, r.Units ?? Array.Empty<CashUnitLevel>(),
-                    lastRep.TryGetValue(r.Atm.Id, out var lr) ? lr : null, snapBy.GetValueOrDefault(r.Atm.Id) ?? new(), null, null, WithdrawnPerDay(daily), daily, r.Loads), _o);
+                    LatestOf(lastRep.TryGetValue(r.Atm.Id, out var lr) ? lr : null, r.Loads?.FirstOrDefault()?.TimeUtc), snapBy.GetValueOrDefault(r.Atm.Id) ?? new(), null, null, WithdrawnPerDay(daily), daily, r.Loads), _o);
                 return r.Units == null ? f with { Warnings = r.Warnings.Concat(f.Warnings.Skip(1)).ToList() } : f;
             }).OrderBy(f => f.DaysLeft ?? double.MaxValue).ThenBy(f => f.AtmName).ToList();
 
@@ -170,7 +170,7 @@ public class CashForecastService : ICashForecastService
         else diag.Add($"Daily cash: {daily.Count} stored day(s) since {daily[0].Day:yyyy-MM-dd}.");
 
         var f = CashForecastRules.Build(new CashForecastInput(id, name, client, nowUtc, nowLocal, units, rep?.LastReplenishmentUtc, history,
-            cnt?.NotesByDenomination, cnt?.LastResetUtc, WithdrawnPerDay(daily), daily, rep?.Loads), opt);
+            cnt?.NotesByDenomination, cnt?.ResetSource?.StartsWith("last ", StringComparison.OrdinalIgnoreCase) == true ? cnt.LastResetUtc : null, WithdrawnPerDay(daily), daily, rep?.Loads), opt);
         f = f with { Warnings = warnings.Concat(rep?.Warnings ?? Array.Empty<string>()).Concat(f.Warnings).Distinct().ToList() };
 
         // ---- reconciliation ----
@@ -196,6 +196,8 @@ public class CashForecastService : ICashForecastService
     }
 
     // ---------------- helpers ----------------
+    private static DateTime? LatestOf(DateTime? a, DateTime? b) => a.HasValue && b.HasValue ? (a > b ? a : b) : a ?? b;
+
     private static CashDailyPoint ToPoint(CashDailyUsage u) => new(u.Day, u.Withdrawals, u.AmountWithdrawn, u.Deposits, u.AmountDeposited, u.Partial, u.ChequeDeposits, u.AmountChequeDeposited);
 
     private static List<CashDailyPoint> EstateDaily(IEnumerable<CashDailyUsage> rows, DateTime from) =>
