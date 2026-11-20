@@ -445,12 +445,13 @@ public class CashForecastTests
     }
 
     [Fact]
-    public void Same_unit_numbers_on_two_devices_and_identical_readings_are_flagged()
+    public void Same_unit_numbers_on_two_devices_with_identical_readings_are_counted_once_and_different_ones_flagged()
     {
         CashUnitLevel D(string dev, string unit, long n) => new(dev, unit, "Dispense", "OK", 100, n, Now);
-        var f = CashForecastRules.Build(In(new[] { D("A", "8", 1000), D("B", "8", 1000), D("B", "9", 500) }), O);
-        Assert.Contains(f.Warnings, w => w.Contains("more than one device"));
-        Assert.Contains(f.Warnings, w => w.Contains("same note value and count"));
+        var same = CashForecastRules.Build(In(new[] { D("A", "8", 1000), D("B", "8", 1000), D("B", "9", 500) }), O);
+        Assert.Equal(2, same.Units.Count); Assert.Contains(same.Warnings, w => w.Contains("counted once")); Assert.DoesNotContain(same.Warnings, w => w.Contains("more than one device"));
+        var diff = CashForecastRules.Build(In(new[] { D("A", "8", 1000), D("B", "8", 900) }), O);
+        Assert.Equal(2, diff.Units.Count); Assert.Contains(diff.Warnings, w => w.Contains("more than one device"));
     }
 
     [Fact]
@@ -519,4 +520,26 @@ public class CashForecastTests
     }
 
     private static string est0(AtmCashForecast f) => f.Units[0].Confidence;
+
+    [Fact]
+    public void WhyUnusableNamesTheRejectingTest()
+    {
+        using var d = System.Text.Json.JsonDocument.Parse("""[{"Id":1,"Timestamp":"2026-11-01T06:00:00Z","Rows":[{"Property":"Remaining","Denomination":"AED 100","After":5}]}]""");
+        Assert.Contains("no child has Property \"Loaded\"", ReplenishmentLoadRules.WhyUnusable(d.RootElement.Clone()));
+        using var e = System.Text.Json.JsonDocument.Parse("""[{"Id":1}]""");
+        Assert.Contains("no child objects", ReplenishmentLoadRules.WhyUnusable(e.RootElement.Clone()));
+    }
+
+    [Fact]
+    public void SameCassetteReportedByTwoDevicesIsCountedOnce()
+    {
+        var a = new CashUnitLevel("Cash Acceptor", "8", "Cash Acceptor", "OK", 100, 2435, null);
+        var b = new CashUnitLevel("Cash Dispenser", "8", "Cash Dispenser", "OK", 100, 2435, null);
+        var c = new CashUnitLevel("Cash Acceptor", "9", "Cash Acceptor", "OK", 500, 1000, null);
+        var d2 = new CashUnitLevel("Cash Dispenser", "9", "Cash Dispenser", "OK", 500, 1100, null);
+        var f = CashForecastRules.Build(In(new[] { a, b, c, d2 }), O);
+        Assert.Equal(3, f.Units.Count); Assert.Equal(2435 + 1000 + 1100, f.Units.Sum(u => u.Notes));
+        Assert.DoesNotContain(f.Units, u => u.Unit == "8" && u.Device == "Cash Acceptor");
+        Assert.Contains(f.Warnings, w => w.Contains("counted once")); Assert.Contains(f.Warnings, w => w.Contains("more than one device"));
+    }
 }

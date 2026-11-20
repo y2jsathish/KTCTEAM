@@ -485,7 +485,7 @@ public class KtcDataService : IKtcDataService
             if (t.Result.res.Json != null) foreach (var line in ReplenishmentLoadRules.Describe(t.Result.res.Json)) diag.Add($"{t.Result.r.Title}: {line}");
         diag.Add(loads.Count > 0
             ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): " + string.Join(", ", loads.OrderBy(l => l.Denomination).Select(l => $"{l.Denomination:0.##} x {l.Notes:N0}")) + "."
-            : "No Loaded count could be read from the KTC replenishment records (see the record fields above), so the loaded count comes from the counters.");
+            : "No Loaded count could be read from the KTC replenishment records, so the loaded count comes from the counters. Why: " + string.Join("; ", tRoutes.Take(2).Select(t => $"{t.Result.r.Title}: " + (t.Result.res.Json == null ? $"no answer ({t.Result.res.Error ?? "no response"})" : ReplenishmentLoadRules.WhyUnusable(t.Result.res.Json, resolve)))) + ".");
         if (noTxHistory && loads.Count == 0) w.Add($"Replenishment: no replenishment, add-cash or clear-cash operation in this ATM's transactions of the last {days} days (Ktc:CounterLookbackDays) and no usable KTC replenishment record in the last {Math.Clamp(_opt.ReplenishmentDays, 30, 365)} days.");
         var lastRep = new[] { history.FirstOrDefault()?.StartUtc, loads.FirstOrDefault()?.TimeUtc }.Where(x => x.HasValue).Select(x => x!.Value).DefaultIfEmpty().Max();
         return new AtmReplenishment(id, name, lastRep == default ? null : lastRep, days, units, history, sets, w.ToList(), diag, loads);
