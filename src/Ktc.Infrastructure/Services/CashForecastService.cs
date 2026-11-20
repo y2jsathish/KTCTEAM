@@ -201,6 +201,8 @@ public class CashForecastService : ICashForecastService
 
     private async Task StoreDailyAsync(IReadOnlyList<AtmDto> atms, IReadOnlyList<TransactionDto> tx, DateTime fromDay, DateTime today, DateTime nowUtc, CancellationToken ct)
     {
+        // Local DB writes are short and must finish even if the caller's request is aborted; a cancelled token would drop the history mid-way.
+        ct = CancellationToken.None;
         try
         {
             var byAtm = atms.ToDictionary(a => a.Id);
@@ -229,6 +231,8 @@ public class CashForecastService : ICashForecastService
 
     private async Task StoreSnapshotsAsync(IEnumerable<(string AtmId, string AtmName, IReadOnlyList<CashUnitLevel> Units)> atms, DateTime today, DateTime nowUtc, CancellationToken ct)
     {
+        // Local DB writes are short and must finish even if the caller's request is aborted; a cancelled token would drop the history mid-way.
+        ct = CancellationToken.None;
         try
         {
             var list = atms.ToList(); var ids = list.Select(a => a.AtmId).ToList();
@@ -248,6 +252,8 @@ public class CashForecastService : ICashForecastService
 
     private async Task StoreAsync(EstateCashForecast f, CancellationToken ct)
     {
+        // Local DB writes are short and must finish even if the caller's request is aborted; a cancelled token would drop the history mid-way.
+        ct = CancellationToken.None;
         try
         {
             var key = Key; var repo = _uow.Repo<DashboardCache>();
@@ -262,6 +268,8 @@ public class CashForecastService : ICashForecastService
 
     private async Task CleanupAsync(DateTime today, CancellationToken ct)
     {
+        // Local DB writes are short and must finish even if the caller's request is aborted; a cancelled token would drop the history mid-way.
+        ct = CancellationToken.None;
         try
         {
             var cut = today.AddDays(-Math.Max(30, _o.RetentionDays));
