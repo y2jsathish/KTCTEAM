@@ -186,6 +186,8 @@ public class CashForecastOptions
     public int MaxParallel { get; set; } = 3;
     /// <summary>Daily snapshots older than this are deleted.</summary>
     public int RetentionDays { get; set; } = 400;
+    /// <summary>A usage rate from the counters since the reset, or from loaded minus remaining, needs at least this many days of data (a few hours extrapolated to a day is too unstable).</summary>
+    public double MinUsageDays { get; set; } = 1;
     /// <summary>Days of KTC replenishment records the estate run reads (once per ATM, cached 6 hours) to find what was last loaded.</summary>
     public int LoadLookbackDays { get; set; } = 60;
 

@@ -114,8 +114,8 @@ public class CashForecastTests
         Assert.Equal(900, l1.TargetNotes);                          // 100 x 7 x 1.2 = 840 -> 900
         Assert.Equal(750, l1.AddNotes);
         var l2 = s.Loads.Single(l => l.Unit == "2");
-        Assert.Equal(2500, l2.TargetNotes);                         // 500 x 7 x 1.2 = 4200, capped at capacity
-        Assert.Equal(900 * 100 + 2500 * 1000m, s.TargetAmount);
+        Assert.Equal(3000, l2.TargetNotes);                         // 500 x 7 x 1.2 = 4200, capped at what the cassette held when loaded (2000 + 1000 dispensed), above the configured 2500
+        Assert.Equal(900 * 100 + 3000 * 1000m, s.TargetAmount);
     }
 
     [Fact]
@@ -393,5 +393,70 @@ public class CashForecastTests
         var w = CashForecastRules.DuplicateNameWarning(new[] { ("7", "ADB04098"), ("19", "adb04098"), ("8", "ADB05101") });
         Assert.Contains("ADB04098", w); Assert.Contains("19, 7", w); Assert.DoesNotContain("ADB05101", w);
         Assert.Null(CashForecastRules.DuplicateNameWarning(new[] { ("1", "A"), ("2", "B") }));
+    }
+
+    [Fact]
+    public void An_empty_cassette_that_the_replenishment_record_does_not_list_is_not_loaded_and_not_out()
+    {
+        var units = new[] { U("1", 100, 2000, "Dispense"), U("2", 200, 0, "Dispense"), U("3", 500, 1800, "Dispense") };
+        var loads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-5)), new KtcLoad(null, 500, 2000, Now.AddDays(-5)) };   // no 200 line
+        var f = CashForecastRules.Build(In(units) with { KtcLoads = loads }, O);
+        Assert.Equal(CashForecastRules.StatusNotLoaded, f.Units.Single(u => u.Unit == "2").Status);
+        Assert.NotEqual(CashForecastRules.StatusOut, f.Status);
+        Assert.DoesNotContain(f.Denominations!, d => d.Denomination == 200);
+        Assert.DoesNotContain(f.Suggestion?.Loads ?? Array.Empty<CashLoadLine>(), l => l.Unit == "2");
+        Assert.Contains(f.Warnings, w => w.Contains("not loaded"));
+    }
+
+    [Fact]
+    public void Status_reason_names_the_cassette_behind_the_status()
+    {
+        var f = CashForecastRules.Build(In(new[] { U("1", 100, 3000, "Dispense"), U("3", 500, 300, "Dispense") }) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-3)), new KtcLoad(null, 500, 3000, Now.AddDays(-3)) } }, O.WithLowNotes(500));
+        Assert.Equal(CashForecastRules.StatusOut, f.Status);
+        Assert.Contains("Cassette 3", f.StatusReason); Assert.Contains("300", f.StatusReason); Assert.Contains("500", f.StatusReason);
+        Assert.Null(CashForecastRules.Build(In(new[] { U("1", 100, 3000, "Dispense") }), O).StatusReason);
+    }
+
+    [Fact]
+    public void A_replenishment_record_older_than_the_last_replenishment_is_ignored()
+    {
+        var units = new[] { U("1", 100, 2000, "Dispense") };
+        var input = In(units) with { LastReplenishmentUtc = Now.AddHours(-3), KtcLoads = new[] { new KtcLoad(null, 100, 9000, Now.AddDays(-30)) } };
+        var f = CashForecastRules.Build(input, O);
+        Assert.Null(f.Units[0].Loaded);
+        Assert.Contains(f.Warnings, w => w.Contains("older than the last replenishment"));
+        var fresh = CashForecastRules.Build(input with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddHours(-3)) } }, O);
+        Assert.Equal(3000, fresh.Units[0].Loaded);
+    }
+
+    [Fact]
+    public void Usage_from_a_few_hours_of_counters_or_loaded_minus_remaining_is_not_extrapolated()
+    {
+        var units = new[] { U("1", 100, 2900, "Dispense") };
+        var counters = CashForecastRules.Build(In(units, notes: new[] { N(100, 100) }, reset: Now.AddHours(-5)), O);   // 5 hours: too short
+        Assert.NotEqual(CashForecastRules.SourceCounters, counters.Units[0].RateSource);
+        Assert.Equal(3000, counters.Units[0].Loaded);   // the loaded count itself is still known
+        var rec = CashForecastRules.Build(In(units) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddHours(-5)) } }, O);
+        Assert.NotEqual(CashForecastRules.SourceLoaded, rec.Units[0].RateSource);
+        var day = CashForecastRules.Build(In(units, notes: new[] { N(100, 100) }, reset: Now.AddDays(-1)), O);
+        Assert.Equal(CashForecastRules.SourceCounters, day.Units[0].RateSource);
+    }
+
+    [Fact]
+    public void Same_unit_numbers_on_two_devices_and_identical_readings_are_flagged()
+    {
+        CashUnitLevel D(string dev, string unit, long n) => new(dev, unit, "Dispense", "OK", 100, n, Now);
+        var f = CashForecastRules.Build(In(new[] { D("A", "8", 1000), D("B", "8", 1000), D("B", "9", 500) }), O);
+        Assert.Contains(f.Warnings, w => w.Contains("more than one device"));
+        Assert.Contains(f.Warnings, w => w.Contains("same note value and count"));
+    }
+
+    [Fact]
+    public void A_cassette_loaded_above_the_configured_capacity_is_not_told_to_load_less_than_it_holds()
+    {
+        var u = new CashUnitForecast("d", "1", "Dispense", 100, 400, 40000, 600, "Loaded minus remaining", 4, "Low", 0.5, Now, "Critical", Loaded: 3000, LoadedSource: "x");
+        var s = CashForecastRules.Suggest(new[] { u }, Now, O)!;
+        Assert.True(s.Loads[0].TargetNotes >= 400);
+        Assert.True(s.Loads[0].TargetNotes <= 3000);
     }
 }

@@ -21,7 +21,7 @@ public record CashReplenishmentSuggestion(DateTime VisitByUtc, string Reason, IR
 public record AtmCashForecast(string AtmId, string AtmName, string Client, DateTime GeneratedUtc, DateTime? LastReplenishmentUtc,
     decimal CashAmount, long Notes, IReadOnlyList<CashUnitForecast> Units, DateTime? EarliestRunOutUtc, double? DaysLeft,
     string Status, string Confidence, bool WeekdayPattern, CashReplenishmentSuggestion? Suggestion, IReadOnlyList<string> Warnings,
-    double[]? WeekdayFactors = null, IReadOnlyList<CashDenominationForecast>? Denominations = null);
+    double[]? WeekdayFactors = null, IReadOnlyList<CashDenominationForecast>? Denominations = null, string? StatusReason = null);
 
 /// <summary>
 /// The cassettes holding one note value added up: loaded after the last replenishment vs remaining now, and the run-out estimate of that

@@ -4,7 +4,7 @@
  const num=v=>v==null?'<span class="text-muted">–</span>':Number(v).toLocaleString();
  const kpi=(l,v,c,d)=>`<div class="kpi ${c}"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d||'&nbsp;'}</div></div>`;
  const CLS={Out:'crit',Critical:'crit',Warning:'warn',OK:'ok'};
- const badge=s=>`<span class="text-nowrap sbadge ${CLS[s]||'unknown'}">${K.esc(s)}</span>`;
+ const badge=(s,why)=>`<span class="text-nowrap sbadge ${CLS[s]||'unknown'}"${why?` title="${K.esc(why)}"`:''}>${K.esc(s)}</span>`;
  const days=d=>d==null?'<span class="text-muted">–</span>':d>=90?'&gt; 90':Number(d).toFixed(1);
  const day=u=>u?new Date(u.endsWith('Z')?u:u+'Z').toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}):'';
  const conf=c=>`<span class="small ${c==='Medium'?'':'text-muted'}" title="How much to trust the usage estimate">${K.esc(c)}</span>`;
@@ -22,7 +22,7 @@
  function details(f){
   const s=f.suggestion;
   K.details(f.atmName||f.atmId,`<div class="small text-muted mb-2">${K.esc(f.client)} · cash now ${num(f.cashAmount)} (${num(f.notes)} notes)${f.lastReplenishmentUtc?' · last replenished '+K.local(f.lastReplenishmentUtc):''}</div>${unitsTable(f)}`
-   +(s?`<div class="small"><b>Suggested visit by ${K.local(s.visitByUtc)}</b> (estimate). ${K.esc(s.reason)} Load to add about ${num(s.addAmount)}.</div>`:'<div class="small text-muted">No replenishment needed in the forecast horizon.</div>')
+   +(f.statusReason?`<div class="small mb-2"><b>Why ${K.esc(f.status)}:</b> ${K.esc(f.statusReason)}</div>`:'')+(s?`<div class="small"><b>Suggested visit by ${K.local(s.visitByUtc)}</b> (estimate). ${K.esc(s.reason)} Load to add about ${num(s.addAmount)}.</div>`:'<div class="small text-muted">No replenishment needed in the forecast horizon.</div>')
    +((f.warnings||[]).length?`<div class="alert alert-warning py-1 small mt-2">${f.warnings.map(K.esc).join('<br>')}</div>`:'')
    +`<a class="btn btn-sm btn-primary mt-2" href="${atmUrl(f.atmId)}">Open cash forecast and reconciliation</a>`);
  }
@@ -37,13 +37,13 @@
    +kpi('No usage data',by('No usage data'),by('No usage data')?'warn':'ok','no estimate possible')
    +kpi('History stored',data.historyDays+' day(s)',data.historyDays>=28?'ok':data.historyDays>=7?'info':'warn','daily snapshots');
   const soon=rows.filter(a=>['Out','Critical','Warning'].includes(a.status));
-  $id('soon').innerHTML=soon.length?`<table class="table table-sm mb-0"><thead><tr><th>ATM</th><th>Status</th><th>Runs out (est.)</th><th>Visit by (est.)</th></tr></thead><tbody>${soon.map(a=>`<tr><td>${link(a)}</td><td>${badge(a.status)}</td><td>${a.status==='Out'?'now':day(a.earliestRunOutUtc)}</td><td>${a.suggestion?K.local(a.suggestion.visitByUtc):''}</td></tr>`).join('')}</tbody></table>`:'<div class="text-muted">No ATM is estimated to run out within 3 days.</div>';
+  $id('soon').innerHTML=soon.length?`<table class="table table-sm mb-0"><thead><tr><th>ATM</th><th>Status</th><th>Runs out (est.)</th><th>Visit by (est.)</th></tr></thead><tbody>${soon.map(a=>`<tr><td>${link(a)}</td><td>${badge(a.status,a.statusReason)}</td><td>${a.status==='Out'?'now':day(a.earliestRunOutUtc)}</td><td>${a.suggestion?K.local(a.suggestion.visitByUtc):''}</td></tr>`).join('')}</tbody></table>`:'<div class="text-muted">No ATM is estimated to run out within 3 days.</div>';
   dt=K.table('#tbl',{data:rows,order:[[4,'asc']],columns:[
    {data:'atmName',render:(v,t,f)=>t==='display'?link(f):(v||f.atmId)},{data:'client',render:K.esc},
    {data:'cashAmount',className:'text-end num',render:(v,t)=>t==='display'?num(v):v},
    {data:'earliestRunOutUtc',render:(v,t,f)=>t==='display'?(f.status==='Out'?'now':f.daysLeft==null?'':f.daysLeft>=90?'<span class="text-muted">beyond 90 days</span>':day(v)):(v||'')},
    {data:'daysLeft',className:'text-end num',render:(v,t)=>t==='display'?days(v):(v==null?9999:v)},
-   {data:'status',render:(v,t)=>t==='display'?badge(v):v},
+   {data:'status',render:(v,t,f)=>t==='display'?badge(v,f.statusReason):v},
    {data:'suggestion',render:(v,t)=>v?(t==='display'?K.local(v.visitByUtc):v.visitByUtc):(t==='display'?'<span class="text-muted">not needed</span>':'')},
    {data:'suggestion',className:'text-end num',render:(v,t)=>v?(t==='display'?num(v.addAmount):v.addAmount):(t==='display'?'':0)},
    {data:null,orderable:false,render:(v,t,f)=>src(f)},{data:'confidence',render:(v,t)=>t==='display'?conf(v):v},
