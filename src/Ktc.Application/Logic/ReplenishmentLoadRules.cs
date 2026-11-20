@@ -53,6 +53,23 @@ public static class ReplenishmentLoadRules
         return res;
     }
 
+    /// <summary>Why the records gave no loaded count: for the first record, what its children are called and which test rejected them.</summary>
+    public static string WhyUnusable(JsonElement? root, Func<string, string, string?>? resolve = null)
+    {
+        var recs = KtcJson.Items(root).Where(e => e.ValueKind == JsonValueKind.Object).ToList();
+        if (recs.Count == 0) return "the answer holds no record objects";
+        var rec = recs[0];
+        var kids = Descendants(rec, 0, null, resolve).ToList();
+        if (kids.Count == 0) return "the newest record has no child objects (no Property / Denomination rows), only its own fields";
+        var props = kids.Select(k => k.Prop).Where(p => p != null).Distinct().Take(12).ToList();
+        if (props.Count == 0) return $"none of the {kids.Count} child object(s) names a Property (looked for {string.Join("/", PropertyNames)} or an id {string.Join("/", PropertyIds)} that PropertyList names)";
+        if (!props.Any(p => string.Equals(p, "Loaded", StringComparison.OrdinalIgnoreCase))) return $"no child has Property \"Loaded\" (properties seen: {string.Join(", ", props)})";
+        var loaded = kids.Where(k => string.Equals(k.Prop, "Loaded", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (!loaded.Any(k => Denomination(k.El, resolve) != null)) return $"{loaded.Count} Loaded child(ren) have no readable note value (looked for {string.Join("/", DenomNames)} or an id {string.Join("/", DenomIds)} that Denomination names)";
+        if (!loaded.Any(k => !double.IsNaN(KtcJson.Dbl(k.El, double.NaN, AfterNames)))) return $"{loaded.Count} Loaded child(ren) have no After count (looked for {string.Join("/", AfterNames)})";
+        return "every Loaded After count in the newest record is 0 (cash removed), so the record was skipped";
+    }
+
     private static string Brief(JsonElement e, int depth)
     {
         var sb = new StringBuilder("{");
