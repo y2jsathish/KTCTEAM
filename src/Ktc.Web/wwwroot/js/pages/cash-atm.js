@@ -7,22 +7,34 @@
  const badge=s=>`<span class="text-nowrap sbadge ${CLS[s]||'unknown'}">${K.esc(s)}</span>`;
  const days=d=>d==null?'–':d>=90?'&gt; 90':Number(d).toFixed(1);
  const day=u=>u?new Date(u.endsWith('Z')?u:u+'Z').toLocaleDateString([], {weekday:'short',day:'numeric',month:'short'}):'';
+ const pct=v=>v==null?'<span class="text-muted">–</span>':Math.min(100,v).toFixed(0)+'%';
  const dayOnly=d=>new Date(d).toLocaleDateString([], {day:'numeric',month:'short'});
 
  function units(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
-  return `<div class="table-responsive"><table class="table table-sm small mb-1 counter-table"><thead><tr><th>Unit</th><th>Type</th><th class="text-end">Note</th><th class="text-end">Notes now</th><th class="text-end">Amount</th><th class="text-end">Notes / day (est.)</th><th>Usage from</th><th>Confidence</th><th class="text-end">Days left (est.)</th><th>Runs out (est.)</th><th>Status</th></tr></thead>
-  <tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td>${K.esc(u.type)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num">${num(u.amount)}</td>
+  return `<div class="table-responsive"><table class="table table-sm small mb-1 counter-table"><thead><tr><th>Unit</th><th>Type</th><th class="text-end">Note</th><th class="text-end" title="Notes the cassette held after the last replenishment (estimate, see the source in the denomination table)">Loaded</th><th class="text-end">Remaining</th><th class="text-end">Left</th><th class="text-end">Amount</th><th class="text-end">Notes / day (est.)</th><th>Usage from</th><th>Confidence</th><th class="text-end">Days left (est.)</th><th>Runs out (est.)</th><th>Status</th></tr></thead>
+  <tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td>${K.esc(u.type)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num">${pct(u.loaded?u.notes*100/u.loaded:null)}</td><td class="text-end num">${num(u.amount)}</td>
    <td class="text-end num">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td>${K.esc(u.rateSource)}${u.rateDays?` <span class="text-muted">(${u.rateDays} d)</span>`:''}</td><td>${K.esc(u.confidence)}</td>
    <td class="text-end num">${days(u.daysLeft)}</td><td>${u.status==='Out'?'now':u.runOutUtc&&u.daysLeft<90?day(u.runOutUtc):''}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table></div>`
   +`<div class="small text-muted">A cassette counts as out at or below ${last.lowPct}% of its capacity (${num(last.lowNotes)} notes). ${f.weekdayPattern?'Run-out dates use the weekday pattern of the stored history.':'No weekday pattern yet (needs 2 weeks of daily history), so usage is spread evenly over the days.'}</div>`;
+ }
+ function denoms(f){
+  const d=f.denominations||[];
+  if(!d.length)return '<div class="text-muted small">No cassette with a note value.</div>';
+  const all=d.every(x=>x.loaded!=null),tl=all?d.reduce((t,x)=>t+x.loadedAmount,0):null,tr=d.reduce((t,x)=>t+x.amount,0);
+  const bar=p=>p==null?'':`<div class="progress" style="height:5px;min-width:60px"><div class="progress-bar ${p<=10?'bg-danger':p<=30?'bg-warning':'bg-success'}" style="width:${Math.min(100,p)}%"></div></div>`;
+  return `<div class="table-responsive"><table class="table table-sm small mb-1 counter-table"><thead><tr><th class="text-end">Note</th><th class="text-end">Cassettes</th><th class="text-end">Loaded</th><th class="text-end">Remaining</th><th style="min-width:90px">Remaining of loaded</th><th class="text-end">Loaded amount</th><th class="text-end">Remaining amount</th><th class="text-end">Notes / day (est.)</th><th class="text-end">Days left (est.)</th><th>Runs out (est.)</th><th>Status</th><th>Loaded from</th></tr></thead>
+  <tbody>${d.map(x=>`<tr><td class="text-end num">${num(x.denomination)}</td><td class="text-end num">${x.cassettes}</td><td class="text-end num">${num(x.loaded)}</td><td class="text-end num">${num(x.notes)}</td><td>${x.remainingPct==null?'–':pct(x.remainingPct)+bar(x.remainingPct)}</td><td class="text-end num">${num(x.loadedAmount)}</td><td class="text-end num">${num(x.amount)}</td>
+   <td class="text-end num">${x.notesPerDay==null?'–':num(x.notesPerDay)}</td><td class="text-end num">${days(x.daysLeft)}</td><td>${x.status==='Out'?'now':x.runOutUtc&&x.daysLeft<90?day(x.runOutUtc):''}</td><td>${badge(x.status)}</td><td class="text-muted">${K.esc(x.loadedSource||'unknown')}</td></tr>`).join('')}</tbody>
+  <tfoot><tr><th colspan="5">Total</th><th class="text-end num">${num(tl)}</th><th class="text-end num">${num(tr)}</th><th colspan="5" class="text-muted small">${tl?`${pct(tr*100/tl)} of the loaded cash remains`:'Loaded cash unknown for some note values'}</th></tr></tfoot></table></div>
+  <div class="small text-muted">Remaining is actual. Loaded is an estimate: the cash in the cassette now plus the notes dispensed since the last reset, or, without counters, the highest daily snapshot since the last replenishment. Run-out is for the cassettes of a note value together.</div>`;
  }
  function suggest(f){
   const s=f.suggestion;
   if(!s)return '<div class="text-muted small">No cassette is estimated to run out within the forecast horizon, so no visit is suggested.</div>';
   return `<div class="mb-2"><b>Visit by ${K.local(s.visitByUtc)}</b><div class="small text-muted">${K.esc(s.reason)}</div></div>
   <table class="table table-sm small mb-1"><thead><tr><th>Unit</th><th class="text-end">Note</th><th class="text-end">Expected at visit</th><th class="text-end">Load to</th><th class="text-end">Add</th></tr></thead>
-  <tbody>${s.loads.map(l=>`<tr><td>${K.esc(l.unit)}</td><td class="text-end num">${num(l.denomination)}</td><td class="text-end num">${num(l.expectedAtVisit)}</td><td class="text-end num">${num(l.targetNotes)}${l.usageKnown?'':' <span class="text-muted" title="No usage estimate: filled to capacity">*</span>'}</td><td class="text-end num">${num(l.addNotes)}</td></tr>`).join('')}</tbody>
+  <tbody>${s.loads.map(l=>`<tr><td>${K.esc(l.unit)}</td><td class="text-end num">${num(l.denomination)}</td><td class="text-end num">${num(l.expectedAtVisit)}</td><td class="text-end num">${num(l.targetNotes)}${l.usageKnown?'':' <span class="text-muted" title="No usage estimate: loaded as last time, or to capacity when the last load is unknown">*</span>'}</td><td class="text-end num">${num(l.addNotes)}</td></tr>`).join('')}</tbody>
   <tfoot><tr><th colspan="3">Amount</th><th class="text-end num">${num(s.targetAmount)}</th><th class="text-end num">${num(s.addAmount)}</th></tr></tfoot></table>
   <div class="small text-muted">Load covers the configured days of use plus safety stock, capped at the cassette capacity. Estimate: check against the CIT schedule.</div>`;
  }
@@ -50,9 +62,10 @@
   $id('kpis').innerHTML=kpi('Cash now',num(f.cashAmount),'info',`${num(f.notes)} notes · actual`)
    +kpi('Status',K.esc(f.status),CLS[f.status]||'warn',f.daysLeft!=null?`about ${days(f.daysLeft)} day(s) left (estimate)`:'no usage estimate')
    +kpi('Runs out (est.)',f.status==='Out'?'now':f.earliestRunOutUtc&&f.daysLeft<90?day(f.earliestRunOutUtc):'–',CLS[f.status]||'info','earliest cassette')
+   +kpi('Loaded / remaining',f.denominations&&f.denominations.length&&f.denominations.every(x=>x.loaded!=null)?pct(f.denominations.reduce((t,x)=>t+x.notes*x.denomination,0)*100/f.denominations.reduce((t,x)=>t+x.loadedAmount,0)):'–','info','of the cash loaded (estimate)')
    +kpi('Last replenishment',f.lastReplenishmentUtc?K.local(f.lastReplenishmentUtc):'–','info','from the transactions')
    +kpi('Confidence',K.esc(f.confidence),f.confidence==='Medium'?'ok':'warn','of the usage estimate');
-  $id('units').innerHTML=units(f);$id('suggest').innerHTML=suggest(f);$id('recon').innerHTML=recon(d.reconciliation);
+  $id('denoms').innerHTML=denoms(f);$id('units').innerHTML=units(f);$id('suggest').innerHTML=suggest(f);$id('recon').innerHTML=recon(d.reconciliation);
   $id('diag').innerHTML=d.diagnostics.map(x=>`<li>${K.esc(x)}</li>`).join('');
   charts(d);
  }

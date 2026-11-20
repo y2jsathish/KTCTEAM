@@ -14,8 +14,10 @@
 
  function unitsTable(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
-  return `<table class="table table-sm small"><thead><tr><th>Unit</th><th class="text-end">Note</th><th class="text-end">Notes</th><th class="text-end">Per day (est.)</th><th class="text-end">Days left</th><th>Status</th></tr></thead><tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num" title="${K.esc(u.rateSource)}">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td class="text-end num">${days(u.daysLeft)}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table>`;
+  return `<table class="table table-sm small"><thead><tr><th>Unit</th><th class="text-end">Note</th><th class="text-end">Notes</th><th class="text-end">Loaded</th><th class="text-end">Per day (est.)</th><th class="text-end">Days left</th><th>Status</th></tr></thead><tbody>${f.units.map(u=>`<tr><td>${K.esc(u.unit)}</td><td class="text-end num">${num(u.denomination)}</td><td class="text-end num">${num(u.notes)}</td><td class="text-end num" title="${K.esc(u.loadedSource||'unknown')}">${num(u.loaded)}</td><td class="text-end num" title="${K.esc(u.rateSource)}">${u.notesPerDay==null?'–':num(u.notesPerDay)}</td><td class="text-end num">${days(u.daysLeft)}</td><td>${badge(u.status)}</td></tr>`).join('')}</tbody></table>`;
  }
+ const loadedAmt=f=>{const d=f.denominations||[];return d.length&&d.every(x=>x.loaded!=null)?d.reduce((t,x)=>t+x.loadedAmount,0):null;};
+ const remPct=f=>{const l=loadedAmt(f);return l?Math.min(100,f.cashAmount*100/l):null;};
  function details(f){
   const s=f.suggestion;
   K.details(f.atmName||f.atmId,`<div class="small text-muted mb-2">${K.esc(f.client)} · cash now ${num(f.cashAmount)} (${num(f.notes)} notes)${f.lastReplenishmentUtc?' · last replenished '+K.local(f.lastReplenishmentUtc):''}</div>${unitsTable(f)}`
@@ -43,7 +45,9 @@
    {data:'status',render:(v,t)=>t==='display'?badge(v):v},
    {data:'suggestion',render:(v,t)=>v?(t==='display'?K.local(v.visitByUtc):v.visitByUtc):(t==='display'?'<span class="text-muted">not needed</span>':'')},
    {data:'suggestion',className:'text-end num',render:(v,t)=>v?(t==='display'?num(v.addAmount):v.addAmount):(t==='display'?'':0)},
-   {data:null,orderable:false,render:(v,t,f)=>src(f)},{data:'confidence',render:(v,t)=>t==='display'?conf(v):v}]});
+   {data:null,orderable:false,render:(v,t,f)=>src(f)},{data:'confidence',render:(v,t)=>t==='display'?conf(v):v},
+   {data:null,className:'text-end num',render:(v,t,f)=>{const l=loadedAmt(f);return t==='display'?num(l):(l??-1);}},
+   {data:null,className:'text-end num',render:(v,t,f)=>{const p=remPct(f);return t==='display'?(p==null?'<span class="text-muted">–</span>':p.toFixed(0)+'%'):(p??-1);}}]});
   $('#tbl tbody').off('click').on('click','tr',function(e){if(e.target.closest('a'))return;const f=dt.row(this).data();if(f)details(f);});
  }
  function chart(){

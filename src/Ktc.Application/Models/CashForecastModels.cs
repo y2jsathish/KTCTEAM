@@ -5,9 +5,11 @@ namespace Ktc.Application.Models;
 /// <summary>
 /// One dispensing cash unit with its usage estimate. NotesPerDay comes from RateSource ("Daily snapshots", "Notes since last reset",
 /// "Withdrawal amounts", or none). DaysLeft / RunOutUtc are estimates; Status is Out, Critical (1 day or less), Warning (3 days or less), OK or No usage data.
+/// Loaded = notes the cassette held after the last replenishment (an ESTIMATE, see LoadedSource); Notes is what it holds now. Null when neither source is available.
 /// </summary>
 public record CashUnitForecast(string Device, string Unit, string Type, decimal? Denomination, long Notes, decimal? Amount,
-    double? NotesPerDay, string RateSource, double RateDays, string Confidence, double? DaysLeft, DateTime? RunOutUtc, string Status);
+    double? NotesPerDay, string RateSource, double RateDays, string Confidence, double? DaysLeft, DateTime? RunOutUtc, string Status,
+    long? Loaded = null, string? LoadedSource = null);
 
 /// <summary>Suggested load for one cassette: notes expected at the visit, notes to have after it (capped by capacity) and notes to add.</summary>
 public record CashLoadLine(string Unit, decimal? Denomination, long NotesNow, long ExpectedAtVisit, long TargetNotes, long AddNotes, bool UsageKnown);
@@ -19,7 +21,15 @@ public record CashReplenishmentSuggestion(DateTime VisitByUtc, string Reason, IR
 public record AtmCashForecast(string AtmId, string AtmName, string Client, DateTime GeneratedUtc, DateTime? LastReplenishmentUtc,
     decimal CashAmount, long Notes, IReadOnlyList<CashUnitForecast> Units, DateTime? EarliestRunOutUtc, double? DaysLeft,
     string Status, string Confidence, bool WeekdayPattern, CashReplenishmentSuggestion? Suggestion, IReadOnlyList<string> Warnings,
-    double[]? WeekdayFactors = null);
+    double[]? WeekdayFactors = null, IReadOnlyList<CashDenominationForecast>? Denominations = null);
+
+/// <summary>
+/// The cassettes holding one note value added up: loaded after the last replenishment vs remaining now, and the run-out estimate of that
+/// note value. Loaded / LoadedAmount / RemainingPct are null unless every cassette of the value has a loaded figure; NotesPerDay is null
+/// unless every cassette has a usage estimate. Remaining counts are actual; loaded, usage and run-out are estimates.
+/// </summary>
+public record CashDenominationForecast(decimal Denomination, int Cassettes, long Notes, decimal Amount, long? Loaded, decimal? LoadedAmount, string? LoadedSource,
+    double? RemainingPct, double? NotesPerDay, double? DaysLeft, DateTime? RunOutUtc, string Status);
 
 /// <summary>Cash moved by successful customer transactions on one portal-local day (actual, not an estimate). Partial = the day is not over.</summary>
 /// <remarks>Deposits / Deposited are cash deposits; ChequeDeposits / ChequeDeposited are cheque deposits (no notes move).</remarks>
