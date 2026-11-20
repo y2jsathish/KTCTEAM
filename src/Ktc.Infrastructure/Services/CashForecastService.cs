@@ -159,7 +159,7 @@ public class CashForecastService : ICashForecastService
         else diag.Add($"Daily cash: {daily.Count} stored day(s) since {daily[0].Day:yyyy-MM-dd}.");
 
         var f = CashForecastRules.Build(new CashForecastInput(id, name, client, nowUtc, nowLocal, units, rep?.LastReplenishmentUtc, history,
-            cnt?.NotesByDenomination, cnt?.LastResetUtc, WithdrawnPerDay(daily), daily), opt);
+            cnt?.NotesByDenomination, cnt?.LastResetUtc, WithdrawnPerDay(daily), daily, rep?.Loads), opt);
         f = f with { Warnings = warnings.Concat(rep?.Warnings ?? Array.Empty<string>()).Concat(f.Warnings).Distinct().ToList() };
 
         // ---- reconciliation ----
