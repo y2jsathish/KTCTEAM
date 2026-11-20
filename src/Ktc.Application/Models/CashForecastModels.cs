@@ -9,7 +9,7 @@ namespace Ktc.Application.Models;
 /// </summary>
 public record CashUnitForecast(string Device, string Unit, string Type, decimal? Denomination, long Notes, decimal? Amount,
     double? NotesPerDay, string RateSource, double RateDays, string Confidence, double? DaysLeft, DateTime? RunOutUtc, string Status,
-    long? Loaded = null, string? LoadedSource = null, long? LowNotes = null, string? LowRule = null, long? Dispensed = null, string? Check = null);
+    long? Loaded = null, string? LoadedSource = null, long? LowNotes = null, string? LowRule = null, long? Dispensed = null, string? Check = null, bool CountersUnreliable = false);
 
 /// <summary>Suggested load for one cassette: notes expected at the visit, notes to have after it (capped by capacity) and notes to add.</summary>
 public record CashLoadLine(string Unit, decimal? Denomination, long NotesNow, long ExpectedAtVisit, long TargetNotes, long AddNotes, bool UsageKnown);
@@ -21,7 +21,7 @@ public record CashReplenishmentSuggestion(DateTime VisitByUtc, string Reason, IR
 public record AtmCashForecast(string AtmId, string AtmName, string Client, DateTime GeneratedUtc, DateTime? LastReplenishmentUtc,
     decimal CashAmount, long Notes, IReadOnlyList<CashUnitForecast> Units, DateTime? EarliestRunOutUtc, double? DaysLeft,
     string Status, string Confidence, bool WeekdayPattern, CashReplenishmentSuggestion? Suggestion, IReadOnlyList<string> Warnings,
-    double[]? WeekdayFactors = null, IReadOnlyList<CashDenominationForecast>? Denominations = null, string? StatusReason = null);
+    double[]? WeekdayFactors = null, IReadOnlyList<CashDenominationForecast>? Denominations = null, string? StatusReason = null, string? CountersNote = null);
 
 /// <summary>
 /// The cassettes holding one note value added up: loaded after the last replenishment vs remaining now, and the run-out estimate of that

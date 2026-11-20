@@ -491,6 +491,10 @@ public class CashForecastTests
         // the cassette holds 1900 although loaded - dispensed = 2200: flagged
         var off = CashForecastRules.Build(In(new[] { U("1", 100, 1900, "Dispense") }, notes: new[] { N(100, 800) }, reset: Now.AddDays(-4)) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O);
         Assert.Contains("2,200", off.Units[0].Check); Assert.Contains(off.Warnings, w => w.Contains("does not match"));
+        // stale counters: ignored; usage = loaded - holds over 4 days = 275/day, lowered confidence, flagged
+        var bad = off.Units[0];
+        Assert.True(bad.CountersUnreliable); Assert.Equal(CashForecastRules.SourceLoaded, bad.RateSource); Assert.Equal(275, bad.NotesPerDay); Assert.Equal("Very low", bad.Confidence);
+        Assert.Contains("Counters unreliable", off.CountersNote); Assert.False(u.CountersUnreliable); Assert.Equal("Low", est0(ok));
         // without counters (the estate run) the same usage comes from loaded - remaining over the same time
         var est = CashForecastRules.Build(In(new[] { U("1", 100, 2200, "Dispense") }) with { KtcLoads = new[] { new KtcLoad(null, 100, 3000, Now.AddDays(-4)) } }, O).Units[0];
         Assert.Equal(CashForecastRules.SourceLoaded, est.RateSource); Assert.Equal(200, est.NotesPerDay); Assert.Equal(u.DaysLeft, est.DaysLeft); Assert.Equal(u.Status, est.Status);
@@ -513,4 +517,6 @@ public class CashForecastTests
         Assert.Empty(ReplenishmentLoadRules.Parse(new System.Text.Json.JsonElement?[] { d.RootElement.Clone() }));
         Assert.Contains(ReplenishmentLoadRules.Describe(d.RootElement.Clone()), x => x.StartsWith("1 record"));
     }
+
+    private static string est0(AtmCashForecast f) => f.Units[0].Confidence;
 }

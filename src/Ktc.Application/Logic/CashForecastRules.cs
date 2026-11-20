@@ -190,7 +190,7 @@ public static class CashForecastRules
                 ktcShare = same.Count == 1 ? 1.0 : same.Sum(x => x.Count) is var tot and > 0 ? (double)u.Count / tot : 1.0 / same.Count;
             }
             var ktcNotes = ktc == null ? 0 : (long)Math.Round(ktc.Notes * ktcShare);
-            string? check = null;
+            string? check = null; var countersBad = false;
             if (ktc != null && ktcNotes >= u.Count)
             {
                 loaded = ktcNotes; loadedSource = LoadedFromKtc + (ktc.TimeUtc is { } kt ? $" {kt:yyyy-MM-dd HH:mm} UTC" : "");
@@ -200,7 +200,13 @@ public static class CashForecastRules
                 {
                     var expected = ktcNotes - dsp; var diff = u.Count - expected;
                     if (Math.Abs(diff) > Math.Max(50, ktcNotes / 50))
+                    {
                         check = $"Holds {u.Count:N0}, but loaded {ktcNotes:N0} - dispensed {dsp:N0} = {expected:N0} ({Math.Abs(diff):N0} {(diff > 0 ? "more" : "fewer")}): a refill, rejects or a different cassette mapping.";
+                        // the application counters disagree with the replenishment record and the cassette count (XFS): the counters are the
+                        // likelier culprit (they are sometimes not updated), so the usage comes from the record plus the cassette count instead.
+                        countersBad = true;
+                        if (source == SourceCounters) { rate = null; rateDays = 0; source = SourceNone; conf = "None"; dispensed = null; }
+                    }
                 }
             }
             // 2b. no record and no counters: the highest daily snapshot since the last replenishment is the best known load
@@ -216,7 +222,7 @@ public static class CashForecastRules
             if (rate == null && loadedSource != LoadedFromCounters && loaded > u.Count && loadedAt is { } r3 && (i.NowLocal - r3).TotalDays >= o.MinUsageDays)
             {
                 rateDays = (i.NowLocal - r3).TotalDays;
-                rate = (loaded.Value - u.Count) / rateDays; source = SourceLoaded; conf = "Low";
+                rate = (loaded.Value - u.Count) / rateDays; source = SourceLoaded; conf = countersBad ? "Very low" : "Low";
                 dispensed ??= loaded.Value - u.Count;
             }
             // 4. only without a usable replenishment window: the unit's own daily snapshots
@@ -243,7 +249,13 @@ public static class CashForecastRules
             var left = DaysLeft(u.Count, low, rate, factors, i.NowLocal);
             units.Add(new CashUnitForecast(u.Device, u.Unit, u.Type, u.Value, u.Count, u.Amount, rate, source,
                 Math.Round(rateDays, 1), conf, left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? i.NowUtc.AddDays(l1) : null, StatusFor(u.Count, low, left),
-                loaded, loadedSource, low, LowRule(o, loaded), dispensed, check));
+                loaded, loadedSource, low, LowRule(o, loaded), dispensed, check, countersBad));
+        }
+        string? countersNote = null;
+        if (units.Any(u => u.CountersUnreliable))
+        {
+            countersNote = $"Counters unreliable: the application's dispensed counters do not match the replenishment record and the cassette counts for {string.Join(", ", units.Where(u => u.CountersUnreliable).Select(u => u.Unit + Den(u.Denomination)))}. The counters are ignored; usage is loaded minus what the cassette holds over the time since the replenishment, with lowered confidence.";
+            warnings.Insert(0, countersNote);
         }
         if (units.Any(u => u.Check != null))
             warnings.Add($"Loaded minus dispensed does not match what the cassette holds for: {string.Join(", ", units.Where(u => u.Check != null).Select(u => u.Unit + Den(u.Denomination)))} (see the cassette table).");
@@ -261,7 +273,7 @@ public static class CashForecastRules
         var confidence = rated.Count == 0 ? "None" : rated.OrderByDescending(u => ConfidenceRank(u.Confidence)).First().Confidence;
         return new AtmCashForecast(i.AtmId, i.AtmName, i.Client, i.NowUtc, i.LastReplenishmentUtc,
             disp.Sum(u => u.Amount ?? 0), disp.Sum(u => u.Count), units, first?.RunOutUtc, first?.DaysLeft, status, confidence, factors != null,
-            Suggest(units, i.NowUtc, o), warnings, factors, ByDenomination(units, o, factors, i.NowLocal, i.NowUtc), StatusReason(units, o));
+            Suggest(units, i.NowUtc, o), warnings, factors, ByDenomination(units, o, factors, i.NowLocal, i.NowUtc), StatusReason(units, o), countersNote);
     }
 
     /// <summary>
