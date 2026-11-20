@@ -129,18 +129,28 @@ public static class CashForecastRules
         var warnings = new List<string>();
         var factors = WeekdayFactors(i.Daily, o.MinDaysForWeekdayPattern);
         var disp = i.Units.Where(IsDispensing).ToList();
-        // the same cassette reported by two components (e.g. Cash Dispenser and Cash Acceptor/recycler): same unit number, note value and count
-        // on different devices. Count the cash once, from the Cash Dispenser when it is one of them.
+        // the same cassettes reported by two components (e.g. Component 7 units 4-6 and Component 6 units 8-10 on one ATM): every dispensing
+        // unit of one device has a unit on the other device with the same note value and the same non-zero count (unit numbers may differ).
+        // The cash is counted once, from the Cash Dispenser (else a device that is not an acceptor/recycler, else the first).
         var dropped = new List<CashUnitLevel>();
-        foreach (var g in disp.GroupBy(u => (u.Unit, u.Value, u.Count)).Where(g => g.Select(x => x.Device).Distinct().Count() > 1))
-        {
-            var keep = g.FirstOrDefault(x => Regex.IsMatch(x.Device + " " + x.Type, "dispens", RegexOptions.IgnoreCase)) ?? g.First();
-            dropped.AddRange(g.Where(x => x.Device != keep.Device));
-        }
+        var devices = disp.Select(u => u.Device).Distinct().ToList();
+        var gone = new HashSet<string>();
+        static int Pref(string d) => Regex.IsMatch(d, "dispens", RegexOptions.IgnoreCase) ? 0 : Regex.IsMatch(d, "accept|recycl", RegexOptions.IgnoreCase) ? 2 : 1;
+        foreach (var da in devices.OrderBy(Pref).ThenBy(d => d, StringComparer.Ordinal))
+            foreach (var db in devices.OrderBy(Pref).ThenBy(d => d, StringComparer.Ordinal))
+            {
+                if (da == db || gone.Contains(da) || gone.Contains(db)) continue;
+                var ua = disp.Where(u => u.Device == da).ToList(); var ub = disp.Where(u => u.Device == db).ToList();
+                // db is a mirror of da when each of its units matches a distinct unit of da; da is kept (it sorts first by preference)
+                if (ub.Count > ua.Count || ub.Count == 0 || ub.Any(u => u.Count <= 0)) continue;
+                var pool = ua.ToList(); var ok = true;
+                foreach (var u in ub) { var m = pool.FirstOrDefault(x => x.Value == u.Value && x.Count == u.Count); if (m == null) { ok = false; break; } pool.Remove(m); }
+                if (ok) { gone.Add(db); dropped.AddRange(ub); }
+            }
         if (dropped.Count > 0)
         {
             disp = disp.Where(u => !dropped.Contains(u)).ToList();
-            warnings.Add($"{dropped.Count} cassette reading(s) reported by two devices with the same unit number, note value and count were counted once ({string.Join(", ", dropped.Select(d => $"{d.Unit}{Den(d.Value)} on {d.Device}"))} ignored in favour of the other device).");
+            warnings.Add($"{dropped.Count} cassette reading(s) reported by two devices with the same note value and count were counted once (the same cassettes under another component) ({string.Join(", ", dropped.Select(d => $"{d.Unit}{Den(d.Value)} on {d.Device}"))} ignored in favour of the other device).");
         }
         if (i.Units.Count == 0) warnings.Add("KTC returned no cash units for this ATM, so there is nothing to forecast.");
         else if (disp.Count == 0) warnings.Add("None of the cash units has a note value, so there is nothing to forecast.");

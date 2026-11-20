@@ -531,15 +531,23 @@ public class CashForecastTests
     }
 
     [Fact]
-    public void SameCassetteReportedByTwoDevicesIsCountedOnce()
+    public void SameCassettesReportedByTwoDevicesAreCountedOnceEvenWithDifferentUnitNumbers()
     {
-        var a = new CashUnitLevel("Cash Acceptor", "8", "Cash Acceptor", "OK", 100, 2435, null);
-        var b = new CashUnitLevel("Cash Dispenser", "8", "Cash Dispenser", "OK", 100, 2435, null);
-        var c = new CashUnitLevel("Cash Acceptor", "9", "Cash Acceptor", "OK", 500, 1000, null);
-        var d2 = new CashUnitLevel("Cash Dispenser", "9", "Cash Dispenser", "OK", 500, 1100, null);
-        var f = CashForecastRules.Build(In(new[] { a, b, c, d2 }), O);
-        Assert.Equal(3, f.Units.Count); Assert.Equal(2435 + 1000 + 1100, f.Units.Sum(u => u.Notes));
-        Assert.DoesNotContain(f.Units, u => u.Unit == "8" && u.Device == "Cash Acceptor");
-        Assert.Contains(f.Warnings, w => w.Contains("counted once")); Assert.Contains(f.Warnings, w => w.Contains("more than one device"));
+        CashUnitLevel L(string dev, string unit, decimal v, long n) => new(dev, unit, "Type", "OK", v, n, Now);
+        // ADB07005: Component 7 (units 4-6) and Component 6 (units 8-10) hold the same counts; Component 40 is separate
+        var f = CashForecastRules.Build(In(new[] {
+            L("Component 7", "4", 100, 2435), L("Component 7", "5", 500, 1485), L("Component 7", "6", 1000, 1981),
+            L("Component 6", "8", 100, 2435), L("Component 6", "9", 500, 1485), L("Component 6", "10", 1000, 1981),
+            L("Component 40", "8", 100, 784), L("Component 40", "9", 500, 693), L("Component 40", "10", 1000, 566) }), O);
+        Assert.Equal(6, f.Units.Count);
+        Assert.Equal(2435 * 100m + 1485 * 500m + 1981 * 1000m + 784 * 100m + 693 * 500m + 566 * 1000m, f.CashAmount);
+        Assert.Equal(1, f.Units.Select(u => u.Device).Distinct().Count(d => d is "Component 6" or "Component 7"));
+        Assert.Contains(f.Warnings, w => w.Contains("counted once"));
+        // a dispenser is preferred over an acceptor
+        var g = CashForecastRules.Build(In(new[] { new CashUnitLevel("Cash Acceptor", "8", "Cash Acceptor", "OK", 100, 2435, Now), new CashUnitLevel("Cash Dispenser", "1", "Cash Dispenser", "OK", 100, 2435, Now) }), O);
+        Assert.Single(g.Units); Assert.Equal("Cash Dispenser", g.Units[0].Device);
+        // only some cassettes equal: not the same device, nothing dropped
+        var h = CashForecastRules.Build(In(new[] { L("A", "1", 100, 2435), L("A", "2", 500, 1000), L("B", "1", 100, 2435), L("B", "2", 500, 1100) }), O);
+        Assert.Equal(4, h.Units.Count);
     }
 }
