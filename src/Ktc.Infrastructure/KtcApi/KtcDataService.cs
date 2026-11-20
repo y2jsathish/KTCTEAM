@@ -431,7 +431,7 @@ public class KtcDataService : IKtcDataService
         if (id == null) return null;
         var name = lookup.TryGetValue(id, out var atm) ? atm.Name : id;
         var diag = new List<string>();
-        var now = DateTime.UtcNow; var days = Math.Clamp(_opt.CounterLookbackDays, 1, 31); var from = now.AddDays(-30);
+        var now = DateTime.UtcNow; var days = Math.Clamp(_opt.CounterLookbackDays, 1, 31); var from = now.AddDays(-Math.Clamp(_opt.ReplenishmentDays, 30, 365));
 
         var cw = new Warn();
         var tCash = Fetch($"api/v1/Client/{id}/CurrentCashUnitStatus", cw, ct: ct);
@@ -458,7 +458,7 @@ public class KtcDataService : IKtcDataService
         var tx = tTx.Result.Where(t => t.AtmId == id).ToList();
         var history = ReplenishmentRules.History(tx, now);
         diag.Add($"Transactions (last {days} days): {tx.Count} for this ATM, {history.Count} replenishment session(s) ({string.Join(", ", tx.Where(t => CounterRules.IsResetType(t.Type)).Select(t => t.Type).Distinct())}).");
-        if (history.Count == 0) w.Add($"Replenishment: no replenishment, add-cash or clear-cash operation in this ATM's transactions of the last {days} days (Ktc:CounterLookbackDays).");
+        var noTxHistory = history.Count == 0;
 
         // ---- KTC's own replenishment routes ----
         var sets = new List<KtcRecordSet>();
@@ -479,9 +479,23 @@ public class KtcDataService : IKtcDataService
             if (unnamed.Count > 0) diag.Add($"{r.Title}: no KTC list names these id fields, so they show the id: {string.Join(", ", unnamed)}.");
             diag.Add(j == null ? $"{r.M.Method} {path}: {err ?? "no answer"}{(sent != null ? $" (sent: {sent})" : "")}." : $"{r.M.Method} {path}: {recs.Count} record(s){(recs.Count == 0 ? $" ({CounterRules.Shape(j)})" : "")}{(sent != null ? $" (sent: {sent})" : "")}.");
         }
-        var loads = ReplenishmentLoadRules.Parse(tRoutes.Take(2).Select(t => t.Result.res.Json));
-        diag.Add(loads.Count > 0 ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): {loads.Count} cassette line(s)." : "No loaded count found in the KTC replenishment records (" + (tRoutes.Take(2).SelectMany(t => KtcJson.Items(t.Result.res.Json).Take(1)).FirstOrDefault() is { ValueKind: JsonValueKind.Object } first ? "first record fields: " + string.Join(", ", first.EnumerateObject().Select(x => x.Name)) : "no records") + "), so the loaded count comes from the counters.");
-        return new AtmReplenishment(id, name, history.FirstOrDefault()?.StartUtc, days, units, history, sets, w.ToList(), diag, loads);
+        var resolve = await LoadResolverAsync(ct);
+        var loads = ReplenishmentLoadRules.Parse(tRoutes.Take(2).Select(t => t.Result.res.Json), resolve);
+        foreach (var t in tRoutes.Take(2))
+            if (t.Result.res.Json != null) foreach (var line in ReplenishmentLoadRules.Describe(t.Result.res.Json)) diag.Add($"{t.Result.r.Title}: {line}");
+        diag.Add(loads.Count > 0
+            ? $"Loaded notes read from the newest KTC replenishment record ({loads[0].TimeUtc:yyyy-MM-dd HH:mm} UTC): " + string.Join(", ", loads.OrderBy(l => l.Denomination).Select(l => $"{l.Denomination:0.##} x {l.Notes:N0}")) + "."
+            : "No Loaded count could be read from the KTC replenishment records (see the record fields above), so the loaded count comes from the counters.");
+        if (noTxHistory && loads.Count == 0) w.Add($"Replenishment: no replenishment, add-cash or clear-cash operation in this ATM's transactions of the last {days} days (Ktc:CounterLookbackDays) and no usable KTC replenishment record in the last {Math.Clamp(_opt.ReplenishmentDays, 30, 365)} days.");
+        var lastRep = new[] { history.FirstOrDefault()?.StartUtc, loads.FirstOrDefault()?.TimeUtc }.Where(x => x.HasValue).Select(x => x!.Value).DefaultIfEmpty().Max();
+        return new AtmReplenishment(id, name, lastRep == default ? null : lastRep, days, units, history, sets, w.ToList(), diag, loads);
+    }
+
+    /// <summary>Names the ids a replenishment record may carry: PropertyID (PropertyList) and DenominationID (Denomination / Currency lists).</summary>
+    private async Task<Func<string, string, string?>> LoadResolverAsync(CancellationToken ct)
+    {
+        var props = await NamedListAsync("api/v1/PropertyList", ct); var denoms = await DenominationNamesAsync(ct);
+        return (key, id) => key switch { "propertyid" => props.GetValueOrDefault(KtcJson.NormId(id)), "denominationid" => denoms.GetValueOrDefault(KtcJson.NormId(id)), _ => null };
     }
 
     /// <summary>Loaded notes of the newest KTC replenishment record (POST ReplenishmentsByTimeRange only, no transactions or cash units): cached 6 hours per ATM so the estate run stays light.</summary>
@@ -492,13 +506,13 @@ public class KtcDataService : IKtcDataService
         var id = lookup.ContainsKey(norm) ? norm : lookup.Values.FirstOrDefault(c => Exact(c, atmId.Trim()))?.Id ?? MatchAtms(lookup, atmId).FirstOrDefault()
                  ?? (long.TryParse(norm, out _) ? norm : null);
         if (id == null) return null;
-        days = Math.Clamp(days, 1, 365);
+        days = Math.Clamp(Math.Max(days, _opt.ReplenishmentDays), 30, 365);
         var key = $"repl-loads|{id}|{days}";
         var res = await Cached<IReadOnlyList<KtcLoad>?>(key, TimeSpan.FromHours(6), async () =>
         {
             var now = DateTime.UtcNow;
             var r = await ReplenishmentsByTimeRangeAsync(id, now.AddDays(-days), now, ct);
-            return r.Json == null ? null : ReplenishmentLoadRules.Parse(new JsonElement?[] { r.Json });
+            return r.Json == null ? null : ReplenishmentLoadRules.Parse(new JsonElement?[] { r.Json }, await LoadResolverAsync(ct));
         });
         if (res == null) _cache.Remove($"{Scope}|{key}");   // an unanswered call is retried on the next run, not remembered
         return res;
