@@ -106,6 +106,8 @@ public static class CashForecastRules
         if (i.Units.Count == 0) warnings.Add("KTC returned no cash units for this ATM, so there is nothing to forecast.");
         else if (disp.Count == 0) warnings.Add("None of the cash units has a note value, so there is nothing to forecast.");
 
+        if (disp.Count > 0 && disp.All(u => u.Count == 0))
+            warnings.Add("Every cassette reports 0 notes: the ATM is out of cash, or KTC has not received the cash counts yet.");
         var units = new List<CashUnitForecast>();
         foreach (var u in disp)
         {
@@ -254,6 +256,14 @@ public static class CashForecastRules
                 loaded is > 0 ? Math.Round(Math.Min(100.0, notes * 100.0 / loaded.Value), 1) : null, rate,
                 left is { } l0 ? Math.Round(l0, 1) : null, left is { } l1 ? nowUtc.AddDays(l1) : null, StatusFor(notes, low, left));
         }).ToList();
+
+    /// <summary>One warning when several ATMs share a name (they are separate KTC client records with different ids, so each has its own row).</summary>
+    public static string? DuplicateNameWarning(IEnumerable<(string Id, string Name)> atms)
+    {
+        var dup = atms.Where(a => a.Name.Length > 0).GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).OrderBy(g => g.Key).ToList();
+        return dup.Count == 0 ? null
+            : $"{dup.Count} ATM name(s) appear more than once: {string.Join("; ", dup.Select(g => $"{g.Key} (ids {string.Join(", ", g.Select(a => a.Id).OrderBy(x => x))})"))}. They are separate KTC client records, each with its own row.";
+    }
 
     private static string Den(decimal? d) => d is { } v ? $" ({v:0.##})" : "";
 

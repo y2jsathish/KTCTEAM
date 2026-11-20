@@ -85,11 +85,22 @@ public class CashForecastService : ICashForecastService
             var reads = await Task.WhenAll(atms.Select(async a =>
             {
                 await gate.WaitAsync(ct);
-                try { var (u, w) = await _data.GetCashUnitsAsync(a.Id, ct); return (Atm: a, Units: u, Warnings: w); }
-                catch (Exception ex) { return (Atm: a, Units: (IReadOnlyList<CashUnitLevel>?)null, Warnings: (IReadOnlyList<string>)new[] { ex.Message }); }
+                try
+                {
+                    var (u, w) = await _data.GetCashUnitsAsync(a.Id, ct);
+                    IReadOnlyList<KtcLoad>? loads = null;
+                    // what was last loaded, from KTC's replenishment records (cached, one light call per ATM); a failure only means the estimate is used
+                    if (u != null) try { loads = await _data.GetReplenishmentLoadsAsync(a.Id, _o.LoadLookbackDays, ct); } catch (Exception ex) { _log.LogDebug(ex, "Replenishment records of {Atm} not read", a.Id); }
+                    return (Atm: a, Units: u, Warnings: w, Loads: loads);
+                }
+                catch (Exception ex) { return (Atm: a, Units: (IReadOnlyList<CashUnitLevel>?)null, Warnings: (IReadOnlyList<string>)new[] { ex.Message }, Loads: (IReadOnlyList<KtcLoad>?)null); }
                 finally { gate.Release(); }
             }));
             await StoreSnapshotsAsync(reads.Where(r => r.Units != null).Select(r => (r.Atm.Id, r.Atm.Name, r.Units!)), today, nowUtc, ct);
+            var withLoads = reads.Count(r => r.Loads is { Count: > 0 });
+            if (reads.Length > 0 && withLoads < reads.Count(r => r.Units != null))
+                warnings.Add($"Loaded count: KTC replenishment records gave it for {withLoads} of {reads.Count(r => r.Units != null)} ATM(s); the others use the daily snapshots (loaded stays blank until a snapshot follows a replenishment).");
+            if (CashForecastRules.DuplicateNameWarning(atms.Select(a => (a.Id, a.Name))) is { } dupWarning) warnings.Add(dupWarning);
             var noUnits = reads.Count(r => r.Units == null);
             if (noUnits > 0) warnings.Add($"KTC did not return the cash units of {noUnits} ATM(s); they show no forecast.");
 
@@ -105,7 +116,7 @@ public class CashForecastService : ICashForecastService
             {
                 var daily = useBy.GetValueOrDefault(r.Atm.Id) ?? new();
                 var f = CashForecastRules.Build(new CashForecastInput(r.Atm.Id, r.Atm.Name, r.Atm.Client, nowUtc, nowLocal, r.Units ?? Array.Empty<CashUnitLevel>(),
-                    lastRep.TryGetValue(r.Atm.Id, out var lr) ? lr : null, snapBy.GetValueOrDefault(r.Atm.Id) ?? new(), null, null, WithdrawnPerDay(daily), daily), _o);
+                    lastRep.TryGetValue(r.Atm.Id, out var lr) ? lr : null, snapBy.GetValueOrDefault(r.Atm.Id) ?? new(), null, null, WithdrawnPerDay(daily), daily, r.Loads), _o);
                 return r.Units == null ? f with { Warnings = r.Warnings.Concat(f.Warnings.Skip(1)).ToList() } : f;
             }).OrderBy(f => f.DaysLeft ?? double.MaxValue).ThenBy(f => f.AtmName).ToList();
 

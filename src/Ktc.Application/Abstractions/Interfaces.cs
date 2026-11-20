@@ -74,6 +74,8 @@ public interface IKtcDataService
     Task<AtmReplenishment?> GetReplenishmentAsync(string atmId, CancellationToken ct = default);
     /// <summary>Cash units of one ATM now (KTC CurrentCashUnitStatus); Units is null when KTC did not answer or no ATM matches.</summary>
     Task<(IReadOnlyList<CashUnitLevel>? Units, IReadOnlyList<string> Warnings)> GetCashUnitsAsync(string atmId, CancellationToken ct = default);
+    /// <summary>Notes loaded per note value by the newest KTC replenishment record of the last <paramref name="days"/> days (cached for hours); null when KTC did not answer or no ATM matches, empty when there is no usable record.</summary>
+    Task<IReadOnlyList<KtcLoad>?> GetReplenishmentLoadsAsync(string atmId, int days, CancellationToken ct = default);
     /// <summary>Cash counter reports the ATM printed to its EJ (on restart) in the last <paramref name="days"/> days; null when no ATM matches.</summary>
     Task<AtmEjCounters?> GetEjCountersAsync(string atmId, int days, CancellationToken ct = default);
     /// <summary>Transaction details for the popup: the record, session, STX fields, EJ lines and dispense counters. Null when the transaction is not found.</summary>

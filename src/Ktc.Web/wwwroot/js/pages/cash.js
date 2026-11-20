@@ -10,7 +10,8 @@
  const conf=c=>`<span class="small ${c==='Medium'?'':'text-muted'}" title="How much to trust the usage estimate">${K.esc(c)}</span>`;
  const src=f=>{const s=[...new Set(f.units.filter(u=>u.notesPerDay!=null).map(u=>u.rateSource))];return s.length?s.map(K.esc).join(', '):'<span class="text-muted">none</span>';};
  const atmUrl=id=>`/Cash/Atm/${encodeURIComponent(id)}${K.cashPct.qs()?'?'+K.cashPct.qs():''}`;
- const link=f=>`<a href="${atmUrl(f.atmId)}">${K.esc(f.atmName||f.atmId)}</a>`;
+ let dupNames=new Set();
+ const link=f=>`<a href="${atmUrl(f.atmId)}">${K.esc(f.atmName||f.atmId)}</a>${dupNames.has((f.atmName||'').toLowerCase())?` <span class="text-muted small" title="Another ATM has the same name; this is KTC client id ${K.esc(f.atmId)}">#${K.esc(f.atmId)}</span>`:''}`;
 
  function unitsTable(f){
   if(!f.units.length)return '<div class="text-muted small">No dispensing cassettes.</div>';
@@ -58,6 +59,7 @@
  }
  function show(f){
   data=f;
+  const seen={};dupNames=new Set();f.atms.forEach(a=>{const n=(a.atmName||'').toLowerCase();if(n&&seen[n])dupNames.add(n);seen[n]=1;});
   $id('gen').textContent=`Calculated ${K.local(f.generatedUtc)} (${f.trigger}) · low cash at ${f.lowPct}% of capacity = ${Number(f.lowNotes).toLocaleString()} notes`;
   $id('lowPct').value=f.lowPct;
   $id('warnings').innerHTML=(f.warnings||[]).length?`<div class="alert alert-warning py-2 small">${f.warnings.map(K.esc).join('<br>')}</div>`:'';
